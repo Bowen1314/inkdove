@@ -450,18 +450,13 @@ describe('号码配置导出 / 导入（admin）', () => {
     const t2 = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     try {
       await t2.login();
-      // 发信方式没配时，开了邮件通知的号导入不了（和新建/更新的校验一致），整体 400
-      const noEmail = await importInto(t2, doc);
-      assert.equal(noEmail.status, 400);
-      assert.equal(noEmail.body.code, 'email_not_configured');
-      assert.match(noEmail.body.error, /^第 1 个号（销售一号）：notify\.email\.enabled/);
-      assert.equal(countOf(t2), 0);
-
+      // 先配好发信方式：邮件通知原样保留，也不该有任何 notices（没配时的行为见下一个用例）
       await t2.req('PUT', '/api/settings', { body: { email: EMAIL } });
       const r = await importInto(t2, doc);
       assert.equal(r.status, 200, JSON.stringify(r.body));
       assert.deepEqual(r.body.skipped, []);
       assert.deepEqual(r.body.created.map((c) => c.name), ['销售一号', '官方号']);
+      assert.ok(r.body.created.every((c) => !('notices' in c)));
       const [w2, m2] = r.body.created;
       assert.ok(![wahaAcc.id, metaAcc.id].includes(w2.id) && ![wahaAcc.id, metaAcc.id].includes(m2.id));
       assert.ok(t2.log.lines.some((l) => l.includes(ADMIN_EMAIL) && l.includes('新建 2 个，跳过 0 个')));
@@ -502,6 +497,47 @@ describe('号码配置导出 / 导入（admin）', () => {
     } finally {
       await t2.close();
       await fake.close();
+    }
+  });
+
+  it('发信方式没配时导入：开了邮件通知的号自动关掉邮件通知（收件人保留）并在 notices 里说明，其余照常导入', async () => {
+    const doc = await exportOf(t);
+    assert.equal(doc.accounts[0].notify.email.enabled, true);
+    const t3 = await startApp();
+    try {
+      await t3.login();
+      const r = await importInto(t3, doc);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.deepEqual(r.body.skipped, []);
+      assert.deepEqual(r.body.created.map((c) => c.name), ['销售一号', '官方号']);
+      const [w3, m3] = r.body.created;
+      assert.deepEqual(w3.notices, ['没配发信方式，已关掉邮件通知']);
+      assert.ok(!('notices' in m3), 'Meta 号没开邮件通知，不该有 notices');
+      assert.equal(countOf(t3), 2);
+
+      // 只关了邮件通知：收件人还在，微信/WhatsApp 通知和其他配置不受影响
+      const w = t3.ctx.accounts.get(w3.id);
+      assert.deepEqual(w.notify.email, { enabled: false, to: ['boss@example.com'] });
+      assert.deepEqual(w.notify.whatsapp, { enabled: true, number: '8613800000003' });
+      assert.equal(w.waha.proxy.password, 'px-secret-1');
+      assert.equal(w.autoReply, true);
+      assert.equal(t3.ctx.accounts.get(m3.id).notify.email.enabled, false);
+
+      // 其他校验错误仍然整体 400（即使同一批里有号开了邮件通知），一个都不建
+      const bad = { name: '坏号', channel: 'waha', notify: { email: { enabled: true, to: ['not-an-email'] } } };
+      const e = await importInto(t3, docOf([doc.accounts[0], bad]));
+      assert.equal(e.status, 400);
+      assert.match(e.body.error, /^第 2 个号（坏号）：/);
+      assert.equal(countOf(t3), 2);
+
+      // 配好发信方式后再导入同一个文件：邮件通知照原样开着，没有 notices
+      await t3.req('PUT', '/api/settings', { body: { email: EMAIL } });
+      const r2 = await importInto(t3, doc);
+      assert.equal(r2.status, 200, JSON.stringify(r2.body));
+      assert.ok(r2.body.created.every((c) => !('notices' in c)));
+      assert.deepEqual(t3.ctx.accounts.get(r2.body.created[0].id).notify.email, { enabled: true, to: ['boss@example.com'] });
+    } finally {
+      await t3.close();
     }
   });
 

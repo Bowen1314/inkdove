@@ -38,6 +38,7 @@ services:
     # 不映射宿主端口，只在 compose 内网里给 inkdove 用
     volumes:
       - ./waha-sessions:/app/.sessions
-    mem_limit: 384m
+    # GOWS 引擎空闲时实测就占约 320MB；限到 384m 时起不来，报 "GOWS did not start after 10000 ms"，所以放到 768m
+    mem_limit: 768m
     extra_hosts:
       - "host.docker.internal:host-gateway"

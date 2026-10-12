@@ -373,6 +373,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
         resend: { apiKeySet: false, apiKeyLast4: null },
       },
       branding: { title: '', logoSet: false, logoUrl: null },
+      pricing: [],
       webhookBase: 'https://kb.example.com',
     });
   });

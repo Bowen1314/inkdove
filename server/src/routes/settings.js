@@ -1,4 +1,4 @@
-// 全局设置（仅 admin）：LLM、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）。
+// 全局设置（仅 admin）：LLM、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';

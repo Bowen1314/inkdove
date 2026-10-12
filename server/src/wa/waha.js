@@ -139,6 +139,21 @@ export function createWahaClient(config) {
       const buffer = await readLimited(res, maxBytes);
       return { buffer, mime: String(res.headers.get('content-type') || '').split(';')[0].trim() };
     },
+    /**
+     * 关联后导入已有聊天：GET /api/{session}/chats?limit=N → [{id, name, conversationTimestamp}]（10-12 实测，GOWS 2026.9.2）。
+     * 返回顺序没核实，所以不保证是"最近的 N 个"
+     */
+    async listChats(session, limit) {
+      const data = await request('GET', `/api/${enc(session)}/chats?limit=${limit}`, { timeoutMs: 20_000 });
+      return Array.isArray(data) ? data : [];
+    },
+    /** GET /api/{session}/chats/{chatId}/messages?limit=N&downloadMedia=false → [WAMessage]（不下载媒体，media 为 null） */
+    async listChatMessages(session, chatId, limit) {
+      const data = await request('GET', `/api/${enc(session)}/chats/${enc(chatId)}/messages?limit=${limit}&downloadMedia=false`, {
+        timeoutMs: 15_000,
+      });
+      return Array.isArray(data) ? data : [];
+    },
     /** GET /api/{session}/lids/{lid} → {lid, pn}；返回纯数字手机号或 null */
     async lidToNumber(session, lid) {
       const data = await request('GET', `/api/${enc(session)}/lids/${enc(lid)}`, { timeoutMs: 5000 });

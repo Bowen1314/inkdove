@@ -1,14 +1,11 @@
 // 转人工通知（按号）：邮件走全局发信方式（F10），WhatsApp 通知由这个号自己发给它的通知号码。
 // WhatsApp 通知末尾带 F3 的用法说明，并记下通知消息的 id → 会话，供"引用通知回复"时找回会话（保留 7 天）。
+import { NOTIFY_REASONS } from '../codes.js';
 import { emailConfigured } from '../settings.js';
 import { clip, safeJsonParse, sleep } from '../util.js';
 
-export const NOTIFY_REASONS = {
-  handoff: '机器人没把握，转人工',
-  blocked: '机器人的回复被规则拦截，没有发出',
-  non_text: '非文字消息',
-  rate_limit: '回复次数超限',
-};
+// 通知原因的文案和 F12 的 code 标签放在同一个常量文件里（codes.js），这里转出去，老的引用不用改
+export { NOTIFY_REASONS };
 
 export const F3_USAGE_FOOTER = '直接引用这条消息回复，内容会转发给客户。回复 /d 发送上面的草稿，回复 /resume 恢复机器人。';
 export const NOTICE_TTL_MS = 7 * 24 * 3600 * 1000;

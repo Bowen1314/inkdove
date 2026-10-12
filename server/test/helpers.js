@@ -48,6 +48,10 @@ export async function startApp({ env = {}, options = {} } = {}) {
     humanize: ZERO_HUMANIZE,
     notifyRetryDelayMs: 10,
     wahaPollMs: 20,
+    // 进入 WORKING 后立刻导入已有聊天
+    historyImportDelayMs: 0,
+    // F6：不启动客户线索的定时扫描，要测时手动调 ctx.leads.scan()
+    leadsScanIntervalMs: 0,
     ...options,
   });
   const { app, ctx, close } = created;
@@ -156,9 +160,17 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const wahaSign = (raw, key = WAHA_SECRET) => crypto.createHmac('sha512', key).update(raw).digest('hex');
 
 let msgSeq = 0;
-/** 构造 WAHA message 事件（session 填号的 waha.sessionName） */
-export function wahaMessage({ id, from, body = '', fromMe = false, timestamp, hasMedia = false, media = null, to, session, pushName, replyTo } = {}) {
+/**
+ * 构造 WAHA message 事件（session 填号的 waha.sessionName）。
+ * fromMe（F12 的 message.any）按 GOWS 的形状（session.gows.core.ts 的 toWAMessage）：from 是聊天对象，私聊的 to 是 null，
+ * 原始消息 _data.Info.Chat 是聊天对象（@s.whatsapp.net）。source 是 WAHA 标的来源（api / app），不给就不带。
+ */
+export function wahaMessage({ id, from, body = '', fromMe = false, timestamp, hasMedia = false, media = null, to, session, pushName, replyTo, source } = {}) {
   msgSeq++;
+  const info = {
+    ...(pushName ? { PushName: pushName } : {}),
+    ...(fromMe ? { Chat: String(from || '').replace(/@c\.us$/, '@s.whatsapp.net'), IsFromMe: true } : {}),
+  };
   return {
     id: `evt_${msgSeq}`,
     timestamp: Date.now(),
@@ -166,17 +178,46 @@ export function wahaMessage({ id, from, body = '', fromMe = false, timestamp, ha
     session,
     engine: 'GOWS',
     payload: {
-      id: id || `false_${from}_MSG${msgSeq}${Date.now()}`,
+      id: id || `${fromMe}_${from}_MSG${msgSeq}${Date.now()}`,
       timestamp: timestamp ?? Math.floor(Date.now() / 1000),
       from,
       fromMe,
-      to: to || '19990000000@c.us',
+      to: to !== undefined ? to : fromMe ? null : '19990000000@c.us',
+      ...(source ? { source } : {}),
       body,
       hasMedia,
       media,
       ...(replyTo ? { replyTo } : {}),
-      _data: pushName ? { Info: { PushName: pushName } } : {},
+      _data: Object.keys(info).length ? { Info: info } : {},
     },
+  };
+}
+
+let historySeq = 0;
+/**
+ * WAHA 聊天记录里的一条消息（GET /api/<session>/chats/<chatId>/messages 的元素），形状按 GOWS 2026.9.2 实测：
+ * to 是 null（fromMe 的也是），media 是 null（downloadMedia=false），所以聊天对象只能从 chat id 取。
+ * fromMe 的 from 填机主自己的号，_data 里的 PushName 也是机主的名字。timestamp 是秒。
+ */
+export function wahaHistoryMessage({ chatId, id, timestamp, body = '', fromMe = false, hasMedia = false, pushName = '' } = {}) {
+  historySeq++;
+  return {
+    id: id || `${fromMe}_${chatId}_HIST${historySeq}`,
+    timestamp: timestamp ?? Math.floor(Date.now() / 1000) - 86400,
+    from: fromMe ? '19990000000@c.us' : chatId,
+    fromMe,
+    source: 'app',
+    body,
+    to: null,
+    participant: null,
+    hasMedia,
+    media: null,
+    ack: fromMe ? 3 : 1,
+    ackName: fromMe ? 'READ' : 'SERVER',
+    replyTo: null,
+    location: null,
+    vCards: null,
+    _data: { Info: { PushName: pushName || (fromMe ? 'Shop Owner' : '') } },
   };
 }
 
@@ -205,6 +246,9 @@ export const TINY_PNG = Buffer.from(
  * 只有 logout 能清掉。登录态还在（有 me）的 session，start 回到 WORKING。
  * 以下两点按 GOWS 2026.9.2 实测：start 一个已经在运行的 session 什么也不做，照常返回会话；logout 后 session
  * 自己重启（先 STARTING，几十毫秒后 SCAN_QR_CODE，中间被 stop 了就不再变）。
+ * 关联后导入已有聊天：state.chats 里放 session 名 → [{id, name, messages: [WAMessage]}]（默认没有聊天），
+ * GET /api/<session>/chats、/chats/overview、/chats/<chatId>/messages 的返回形状按 GOWS 2026.9.2 实测；
+ * state.failChatList 为真时聊天列表返回 500，state.failChatMessages 里的 chat id 读消息返回 500，state.chatListDelayMs 让聊天列表晚点返回。
  * @param {{initialStatus?: string, lids?: Record<string,string|null>, maskSecrets?: boolean}} [opts]
  */
 export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, maskSecrets = false } = {}) {
@@ -233,6 +277,15 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     codeRequests: [],
     /** 设成 {status, message} 时 request-code 返回这个错误 */
     codeError: null,
+    /** 已有聊天：session 名 → [{id, name, messages}] */
+    chats: new Map(),
+    failChatList: false,
+    failChatMessages: new Set(),
+    /** 聊天列表晚这么多毫秒再返回（测"同一个号同时只跑一次"） */
+    chatListDelayMs: 0,
+    /** sendText 晚这么多毫秒再返回（F12：测回声比 API 响应先到）；收到请求时记进 sendStarted */
+    sendDelayMs: 0,
+    sendStarted: [],
   };
   const masked = (cfg) => {
     if (!maskSecrets || !cfg) return cfg;
@@ -313,6 +366,35 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
       res.writeHead(200, { 'content-type': 'image/png' });
       return res.end(TINY_PNG);
     }
+    if (req.method === 'GET' && parts[0] === 'api' && parts[2] === 'chats') {
+      const chats = state.chats.get(parts[1]) || [];
+      const limit = Number(u.searchParams.get('limit')) || chats.length;
+      const newestFirst = (c) => [...(c.messages || [])].sort((a, b) => b.timestamp - a.timestamp);
+      const tsOf = (c) => newestFirst(c)[0]?.timestamp ?? null;
+      if (parts.length === 3) {
+        if (state.chatListDelayMs) await sleep(state.chatListDelayMs);
+        if (state.failChatList) return json(500, { message: 'chats failed' });
+        return json(200, chats.slice(0, limit).map((c) => ({ id: c.id, name: c.name ?? null, conversationTimestamp: tsOf(c) })));
+      }
+      if (parts.length === 4 && parts[3] === 'overview') {
+        // 实测：顶层 name 是 null，名字在 _chat.name
+        return json(
+          200,
+          chats.slice(0, limit).map((c) => ({
+            id: c.id,
+            name: null,
+            picture: null,
+            lastMessage: newestFirst(c)[0] || null,
+            _chat: { id: c.id, name: c.name ?? null, conversationTimestamp: tsOf(c) },
+          })),
+        );
+      }
+      if (parts.length === 5 && parts[4] === 'messages') {
+        if (state.failChatMessages.has(parts[3])) return json(500, { message: `messages failed for ${parts[3]}` });
+        const chat = chats.find((c) => c.id === parts[3]);
+        return json(200, chat ? newestFirst(chat).slice(0, limit) : []);
+      }
+    }
     if (req.method === 'GET' && parts[0] === 'api' && parts[2] === 'lids') {
       const lid = parts[3];
       const pn = Object.prototype.hasOwnProperty.call(state.lids, lid) ? state.lids[lid] : null;
@@ -353,6 +435,8 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
       return res.end(f.buffer);
     }
     if (req.method === 'POST' && u.pathname === '/api/sendText') {
+      state.sendStarted.push(body);
+      if (state.sendDelayMs) await sleep(state.sendDelayMs);
       if (state.failSend || state.failChats.has(body.chatId)) return json(500, { message: 'send failed' });
       state.sendCount++;
       const id = `true_${body.chatId}_SENT${state.sendCount}`;

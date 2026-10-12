@@ -7,6 +7,7 @@ import { conversationIdOf, DELETED_ACCOUNT_NAME, metaConfigured } from '../accou
 import { internalFileUrl } from '../files/signed.js';
 import { MAX_FILES_PER_REPLY } from '../files/store.js';
 import { ENTRY_TYPES, normalizeTags } from '../kb/store.js';
+import { llmScope } from '../records.js';
 import { buildReplyContext, decideReply, normalizeFileIds } from '../reply/engine.js';
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse, sleep } from '../util.js';
@@ -39,6 +40,14 @@ const MAX_CAPTION = 1024;
 export const PAIR_CODE_INTERVAL_MS = 20_000;
 const PAIR_WAIT_MS = 15_000;
 const PAIR_POLL_MS = 500;
+/**
+ * 关联后导入已有聊天：最多导入多少个聊天、每个聊天最多取几条（WhatsApp 目前只给新关联设备每个聊天最后 1 条，留余量）。
+ * 进入 WORKING 后等一会儿再导入，给手机同步历史留时间（同步要多久没在真机上核实）。
+ */
+export const HISTORY_CHAT_LIMIT = 100;
+export const HISTORY_MESSAGES_PER_CHAT = 20;
+const HISTORY_IMPORT_DELAY_MS = 10_000;
+const HISTORY_SKIP_REASON = '导入的历史消息，机器人不处理';
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -66,8 +75,8 @@ const CONV_SQL = `SELECT c.*, a.name AS account_name, m.text AS lm_text, m.attac
 export const isNonPrivateChat = (chatId) =>
   /@g\.us$/i.test(chatId) || /@broadcast$/i.test(chatId) || /@newsletter$/i.test(chatId);
 
-/** 本地日期 YYYY-MM-DD（容器可用 TZ 环境变量调整） */
-function localDay(d = new Date()) {
+/** 本地日期 YYYY-MM-DD（容器可用 TZ 环境变量调整）。F6 线索提取也按它数每会话每日模型次数 */
+export function localDay(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
@@ -103,9 +112,22 @@ function wahaQuotedId(p) {
   return typeof sid === 'string' && sid ? sid : null;
 }
 
+/**
+ * 聊天对象的 chat id。别人发来的取 from。自己发的（F12 的 message.any）各引擎不一样：GOWS 的 from 是聊天对象
+ * （原始消息的 Info.Chat），私聊的 to 是 null，群里的 to 是自己；WEBJS 的 from 是自己、to 是聊天对象。
+ * 所以先取 _data.Info.Chat，没有时 from 是群、广播、频道就用 from，否则 to 优先。
+ */
+function wahaChatOf(p) {
+  if (!p.fromMe) return p.from;
+  const infoChat = p._data?.Info?.Chat;
+  if (typeof infoChat === 'string' && infoChat) return infoChat;
+  if (typeof p.from === 'string' && isNonPrivateChat(p.from)) return p.from;
+  return p.to || p.from;
+}
+
 /** WAHA message payload → 统一的入站结构 */
 export function parseWahaMessage(p) {
-  const rawChat = String((p.fromMe ? p.to : p.from) || '');
+  const rawChat = String(wahaChatOf(p) || '');
   const chatId = rawChat.replace(/@s\.whatsapp\.net$/i, '@c.us');
   const body = typeof p.body === 'string' ? p.body.trim() : '';
   let label = null;
@@ -144,6 +166,8 @@ export function parseWahaMessage(p) {
     media,
     contactName,
     replyToId: wahaQuotedId(p),
+    // F12：自己发的消息是从哪发的。WAHA 发出的（经它的 API）是 api，手机等其他设备发的是 app；有的引擎不给
+    source: typeof p.source === 'string' ? p.source : null,
   };
 }
 
@@ -232,10 +256,13 @@ export const parseDraft = (raw) => {
  *   humanize?: Partial<typeof DEFAULT_HUMANIZE>,
  *   notifyRetryDelayMs?: number,
  *   onDecision?: (row:any) => void,
+ *   onDeclined?: (p:{accountId:string, conversationId:string, ts:string}) => void,
  *   wahaInlineMaxBytes?: number,
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
+ *   historyImportDelayMs?: number,
  * }} [opts]
+ *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（F11 外联接上之前的钩子，测试用）
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -260,6 +287,11 @@ export function createWaService(ctx, opts = {}) {
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
   const pairWaitMs = opts.wahaPairWaitMs ?? PAIR_WAIT_MS;
   const wahaPollMs = opts.wahaPollMs ?? PAIR_POLL_MS;
+  const historyDelayMs = opts.historyImportDelayMs ?? HISTORY_IMPORT_DELAY_MS;
+  /** @type {Map<string, NodeJS.Timeout>} 号 id → 等着导入已有聊天的定时器 */
+  const historyTimers = new Map();
+  /** @type {Set<string>} 正在导入已有聊天的号 */
+  const historyRunning = new Set();
   const startedAt = Date.now();
   let closed = false;
 
@@ -274,35 +306,60 @@ export function createWaService(ctx, opts = {}) {
     return s;
   }
 
-  // ---------------- 处理记录（F12 的 decisions 表由下一段接上） ----------------
+  // ---------------- 处理记录（F12 的 decisions 表） ----------------
+  /** 每处理一轮写一行（合并的几条消息算一轮）；skipped 不调这里 */
   function recordDecision(accountId, conversationId, r) {
+    const row = {
+      ts: nowIso(),
+      accountId,
+      conversationId,
+      decision: r.decision,
+      code: r.code,
+      reason: r.reason,
+      usedEntryIds: r.usedEntryIds || [],
+      // F15：这一轮实际发出去的文件（F12 的 topFiles 用）
+      sentFileIds: r.sentFileIds || [],
+      latencyMs: r.latencyMs ?? 0,
+    };
+    ctx.records.decision(row);
     if (!opts.onDecision) return;
     try {
-      opts.onDecision({
-        ts: nowIso(),
-        accountId,
-        conversationId,
-        decision: r.decision,
-        code: r.code,
-        reason: r.reason,
-        usedEntryIds: r.usedEntryIds || [],
-        // F15：这一轮实际发出去的文件（F12 的 topFiles 用）
-        sentFileIds: r.sentFileIds || [],
-        latencyMs: r.latencyMs ?? 0,
-      });
+      opts.onDecision(row);
     } catch (err) {
       log.warn(`[wa] 记录处理结果失败：${err?.message || err}`);
     }
   }
 
   // ---------------- 发送 ----------------
+  /**
+   * 记下本服务经 API 发出去的消息（bot 回复、后台人工、F3 转发和回执、通知、文件；以后的外联也走 sendRaw），
+   * 用来从 message.any 的 fromMe 消息里剔除回声（F12）。发请求之前就记，id 等 API 返回后再补：回声可能比 API 响应先到。
+   */
   function rememberSent(accountId, chatId, text) {
     const now = Date.now();
     const list = (recentSent.get(accountId) || []).filter((e) => now - e.at < ECHO_ID_KEEP_MS);
-    const entry = { id: null, short: null, chatId, text, at: now };
+    const entry = { id: null, short: null, chatId, text: String(text ?? '').trim(), at: now };
     list.push(entry);
     recentSent.set(accountId, list);
     return entry;
+  }
+
+  /**
+   * F12：这条 fromMe 消息是不是本服务经 API 发出去的回声。WAHA 标了 source=api 的调用方已经直接判掉；这里先按
+   * message id 判断（完整 id 或最后一段），再用"同一 chat + 相同文本 + 30 秒内"兜底（回声比 API 响应先到时还没有 id）。
+   * WAHA 标了 source=app（手机等其他设备发的）时不用文本兜底，免得机主刚好发了同样的文字、或者在机器人发文件后
+   * 30 秒内发了不带说明的图片（文本都是空）被误删；id 对得上的照样剔除。
+   */
+  function isOwnEcho(accountId, chatId, externalId, text, byText = true) {
+    const now = Date.now();
+    const list = recentSent.get(accountId) || [];
+    const short = externalId ? shortMessageId(externalId) : null;
+    const body = String(text ?? '').trim();
+    return list.some(
+      (e) =>
+        (externalId && (e.id === externalId || (short && e.short === short))) ||
+        (byText && e.chatId === chatId && e.text === body && now - e.at <= ECHO_TEXT_WINDOW_MS),
+    );
   }
 
   /** 发文本（不落库）。号被删了、未配置时抛错 */
@@ -568,11 +625,12 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 标 needsHuman（同时记下待处理原因）。needsHuman 从 false 变 true 时才发通知（4.2）；notify=false 时由调用方稍后自己发
-   * （F2a：先生成草稿再通知）。返回这次是不是从 false 变成了 true。
+   * （F2a：先生成草稿再通知）。从 false 变 true 时还新建一条转人工记录（F12 handoffs，code 是这次的 F12 code）。
+   * 返回这次是不是从 false 变成了 true。
    * @param {'handoff'|'blocked'|'non_text'|'rate_limit'} reason
-   * @param {{pause:boolean, pendingReason?:string, notify?:boolean}} o pendingReason 默认用 detail
+   * @param {{pause:boolean, code:string, pendingReason?:string, notify?:boolean}} o pendingReason 默认用 detail
    */
-  function flagNeedsHuman(acc, convId, reason, detail, { pause, pendingReason, notify = true }) {
+  function flagNeedsHuman(acc, convId, reason, detail, { pause, code, pendingReason, notify = true }) {
     const before = getConvRow(convId);
     if (!before) return false;
     const why = clip(String(pendingReason ?? detail ?? '').trim(), 500) || null;
@@ -583,6 +641,7 @@ export function createWaService(ctx, opts = {}) {
       skipPending(convId, '会话已暂停（等人工处理）');
     }
     const fresh = !before.needs_human;
+    if (fresh) ctx.records.handoffStart({ conversationId: convId, accountId: before.account_id, code });
     if (fresh && acc && notify) sendNotice(acc, convId, reason, detail);
     return fresh;
   }
@@ -595,20 +654,40 @@ export function createWaService(ctx, opts = {}) {
     skipPending(convId, '人工已接管');
   }
 
+  /**
+   * F12：发出去的人工消息填转人工记录的首次回复。后台发的记 admin_ui（带发送人），F3 在 WhatsApp 里转发的记 whatsapp_relay。
+   * 发送失败的不算（客户没收到）。
+   */
+  function noteOperatorResponse(convId, msg, { via, sentBy }) {
+    if (msg.status !== 'sent') return;
+    ctx.records.handoffResponse({
+      conversationId: convId,
+      kind: via === 'whatsapp' ? 'whatsapp_relay' : 'admin_ui',
+      userId: via === 'whatsapp' ? null : sentBy?.id ?? null,
+      at: msg.ts,
+    });
+  }
+
   /** 人工发送（后台或 F3 转发）：立即发，不做拟真等待；会话进入 botPaused，草稿清空 */
   async function operatorDeliver(acc, convId, text, { via, sentBy }) {
     operatorTakeover(convId);
-    return sendAndRecord(acc, getConvRow(convId), clip(text, MAX_OPERATOR_TEXT), { author: 'operator', via, sentBy });
+    const msg = await sendAndRecord(acc, getConvRow(convId), clip(text, MAX_OPERATOR_TEXT), { author: 'operator', via, sentBy });
+    noteOperatorResponse(convId, msg, { via, sentBy });
+    return msg;
   }
 
   /** 人工发文件（后台或 F3 的 /d）：和人工发消息一样，会话进入 botPaused */
   async function operatorDeliverFile(acc, convId, file, { via, sentBy, caption = '' }) {
     operatorTakeover(convId);
-    return sendFileAndRecord(acc, getConvRow(convId), file, { author: 'operator', via, sentBy, caption: clip(caption, MAX_CAPTION) });
+    const msg = await sendFileAndRecord(acc, getConvRow(convId), file, { author: 'operator', via, sentBy, caption: clip(caption, MAX_CAPTION) });
+    noteOperatorResponse(convId, msg, { via, sentBy });
+    return msg;
   }
 
+  /** 恢复机器人：清掉暂停、待处理和草稿；还开着的转人工记录填上 resumedAt（F12） */
   function resumeBot(convId) {
     db.prepare('UPDATE conversations SET bot_paused = 0, needs_human = 0, pending_reason = NULL, draft = NULL WHERE id = ?').run(convId);
+    ctx.records.handoffResume({ conversationId: convId });
   }
 
   // ---------------- 入站 ----------------
@@ -638,6 +717,9 @@ export function createWaService(ctx, opts = {}) {
     return null;
   }
 
+  /** 是不是这个号的通知号码。它发来的消息只当 F3 指令或按黑名单处理，不进会话（入站和导入已有聊天共用） */
+  const isNotifyNumber = (acc, number) => !!(number && acc.notify.whatsapp.number && number === acc.notify.whatsapp.number);
+
   /** 4.1 黑白名单（按号） */
   function inScope(acc, number, chatId) {
     if (number && acc.blocklist.includes(number)) return false;
@@ -660,16 +742,21 @@ export function createWaService(ctx, opts = {}) {
   async function handleInbound(acc, m) {
     if (closed) return 'closed';
     if (!acc) return 'ignored_account';
-    if (m.fromMe) return 'ignored_from_me';
+    // F12：只有扫码号（WAHA message.any）会推自己发的消息；Meta 没有这一项
+    if (m.fromMe && acc.channel !== 'waha') return 'ignored_from_me';
     const chatId = m.chatId;
     if (!chatId || isNonPrivateChat(chatId)) return 'ignored_non_private';
+    // F12：本服务经 API 发出去的消息（机器人、人工、F3 转发和回执、通知）推回来的回声，剔除
+    if (m.fromMe && (m.source === 'api' || isOwnEcho(acc.id, chatId, m.externalId, m.text, m.source !== 'app'))) return 'ignored_echo';
     const convId = conversationIdOf(acc.id, chatId);
     const key = m.externalId ? `${acc.id}|${m.externalId}` : null;
     if (
       key &&
       (inflight.has(key) ||
         seenCommands.has(key) ||
-        db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, m.externalId))
+        (m.fromMe
+          ? hasMessageId(convId, m.externalId)
+          : db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, m.externalId)))
     ) {
       return 'ignored_duplicate';
     }
@@ -677,10 +764,14 @@ export function createWaService(ctx, opts = {}) {
     if (key) inflight.add(key);
     try {
       const number = await resolveNumber(acc, m);
-      const n = acc.notify.whatsapp;
-      if (number && n.number && number === n.number) {
+      if (m.fromMe) {
+        // 机主在手机上发的：发给通知号码的、回复范围外的不存
+        if (isNotifyNumber(acc, number) || !inScope(acc, number, chatId)) return 'out_of_scope';
+        return archiveOwner(acc, m, number);
+      }
+      if (isNotifyNumber(acc, number)) {
         // 通知号码：开了 WhatsApp 通知时按 F3 处理，否则按黑名单处理（4.2）
-        if (!n.enabled) return 'out_of_scope';
+        if (!acc.notify.whatsapp.enabled) return 'out_of_scope';
         if (key) {
           const now = Date.now();
           for (const [k, t] of seenCommands) if (now - t > 3600_000) seenCommands.delete(k);
@@ -693,6 +784,59 @@ export function createWaService(ctx, opts = {}) {
     } finally {
       if (key) inflight.delete(key);
     }
+  }
+
+  /**
+   * 会话里有没有这个 id 的消息：完整 id 相同，或者最后一段（短 id）相同。WAHA 不同地方给的 id 前缀可能不同
+   * （true_<chat>_<id> 和 <id>，@c.us 和 @s.whatsapp.net），和导入已有聊天的去重规则一样。
+   */
+  function hasMessageId(convId, externalId) {
+    const short = shortMessageId(externalId);
+    return !!db
+      .prepare(
+        `SELECT 1 FROM messages WHERE conversation_id = ? AND external_id IS NOT NULL
+           AND (external_id = ? OR external_id = ? OR substr(external_id, -length(?) - 1) = '_' || ?) LIMIT 1`,
+      )
+      .get(convId, externalId, short, short, short);
+  }
+
+  /**
+   * F12：机主在手机上直接发的消息（fromMe、不是回声），存成 author=owner、via=phone 的消息，只用于统计和展示：
+   * 不暂停机器人、不取消防抖和拟真发送、不标待处理、不通知，只拿来填转人工记录的 phone 首次回复（时间按收到的时间）。
+   * 会话不存在就新建；联系人名字不从这条消息取（fromMe 消息里的 pushName 是机主自己），号码只补空的。
+   */
+  function archiveOwner(acc, m, number) {
+    const now = nowIso();
+    const convId = conversationIdOf(acc.id, m.chatId);
+    const isText = !!m.text;
+    let inserted = 0;
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO conversations(id, account_id, chat_id, channel, contact_name, contact_number, created_at, updated_at)
+         VALUES(?, ?, ?, ?, '', ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           updated_at = excluded.updated_at,
+           contact_number = CASE WHEN conversations.contact_number = '' THEN excluded.contact_number ELSE conversations.contact_number END`,
+      ).run(convId, acc.id, m.chatId, acc.channel, number || '', now, now);
+      inserted = db
+        .prepare(
+          `INSERT OR IGNORE INTO messages(id, conversation_id, external_id, direction, author, kind, text, ts, status, handled, via, media)
+           VALUES(?, ?, ?, 'out', 'owner', ?, ?, ?, 'sent', 1, 'phone', ?)`,
+        )
+        .run(
+          newId(),
+          convId,
+          m.externalId || null,
+          isText ? 'text' : 'media',
+          // 媒体不下载，只存标签（有说明文字时存文字），和导入的手机回复一样
+          isText ? clip(m.text, MAX_STORED_TEXT) : m.mediaLabel || '[非文字消息]',
+          new Date(m.timestampMs).toISOString(),
+          m.media ? JSON.stringify({ type: m.media.type, mime: m.media.mime || null }) : null,
+        ).changes;
+    })();
+    if (!inserted) return 'ignored_duplicate';
+    ctx.records.handoffResponse({ conversationId: convId, kind: 'phone', at: now });
+    return 'archived_owner';
   }
 
   function archive(acc, m, number) {
@@ -763,7 +907,8 @@ export function createWaService(ctx, opts = {}) {
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
     abortSending(convId, 'new_message');
     if (!isText) {
-      flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, pendingReason: skipReason });
+      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）
+      flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
       return 'archived_media';
     }
     if (willProcess) {
@@ -776,7 +921,8 @@ export function createWaService(ctx, opts = {}) {
   // ---------------- F4：语音、图片转文字 ----------------
   function startConversion(acc, convId, msgId, m) {
     converting.set(convId, (converting.get(convId) || 0) + 1);
-    convertMedia(acc, convId, msgId, m)
+    // F12：识别用的模型调用记到这个号和会话上
+    llmScope({ accountId: acc.id, conversationId: convId }, () => convertMedia(acc, convId, msgId, m))
       .catch((err) => log.error(`[wa] 识别会话 ${convId} 的${m.media.type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
       .finally(() => {
         const n = (converting.get(convId) || 1) - 1;
@@ -815,7 +961,7 @@ export function createWaService(ctx, opts = {}) {
         msgId,
       );
       recordDecision(acc.id, convId, { decision: 'handoff', code, reason, latencyMs: Date.now() - started });
-      flagNeedsHuman(accounts.get(acc.id), convId, 'non_text', `${what}：${why}`, { pause: false, pendingReason: reason });
+      flagNeedsHuman(accounts.get(acc.id), convId, 'non_text', `${what}：${why}`, { pause: false, code, pendingReason: reason });
     };
     const today = localDay();
     const conv = getConvRow(convId);
@@ -893,7 +1039,9 @@ export function createWaService(ctx, opts = {}) {
     const me = { rerun: false };
     processing.set(convId, me);
     try {
-      await processPending(convId);
+      // F12：这一轮的模型调用（生成、重写、审核、草稿）都记到这个号和会话上
+      const accountId = getConvRow(convId)?.account_id ?? null;
+      await llmScope({ accountId, conversationId: convId }, () => processPending(convId));
     } finally {
       processing.delete(convId);
       if (me.rerun && !closed) scheduleFlush(convId);
@@ -943,7 +1091,7 @@ export function createWaService(ctx, opts = {}) {
       const reason = `回复次数超限：${detail}`;
       settle('handoff', reason, 'rate_limit');
       recordDecision(acc.id, convId, { decision: 'handoff', code: 'rate_limit', reason });
-      flagNeedsHuman(acc, convId, 'rate_limit', detail, { pause: true, pendingReason: reason });
+      flagNeedsHuman(acc, convId, 'rate_limit', detail, { pause: true, code: 'rate_limit', pendingReason: reason });
       return;
     }
     // 第 4 层：每会话每天 LLM 调用上限（一轮至少 2 次：生成 + 审核；命中套话时再加 1 次重写）
@@ -1002,6 +1150,17 @@ export function createWaService(ctx, opts = {}) {
         st.replies.push(Date.now());
         await deliverReply(accNow, convId, pending, lastSeq, result);
         return;
+      case 'declined': {
+        // F11：客户明确拒绝。不回复、不通知、不标待处理（needsHuman 保持 false）；会话暂停，之后不再自动发出任何消息，
+        // 管理员可以手动恢复。这期间又来的消息不再处理
+        settle('declined', result.reason, result.code);
+        recordDecision(acc.id, convId, result);
+        db.prepare('UPDATE conversations SET bot_paused = 1 WHERE id = ?').run(convId);
+        cancelTimer(convId);
+        skipPending(convId, '客户已拒绝，机器人已停止');
+        customerDeclined(acc.id, convId);
+        return;
+      }
       case 'offtopic': {
         settle('offtopic', result.reason, result.code);
         recordDecision(acc.id, convId, result);
@@ -1029,10 +1188,23 @@ export function createWaService(ctx, opts = {}) {
             log.warn(`[wa] 写缺口清单失败：${err?.message || err}`);
           }
         }
-        const fresh = flagNeedsHuman(accNow, convId, result.decision, result.reason, { pause: true, notify: false });
+        const fresh = flagNeedsHuman(accNow, convId, result.decision, result.reason, { pause: true, code: result.code, notify: false });
         await prepareDraft(accNow, convId, { message, history, reason: result.reason, usedToday: used });
         if (fresh && !closed) sendNotice(accounts.get(acc.id) || accNow, convId, result.decision, result.reason);
       }
+    }
+  }
+
+  /**
+   * F11 钩子：会话被判 declined 时调。外联做完后在这里给这个会话对应的外联对象（Recipient）记 declinedAt，
+   * 后续任务按 already_contacted 跳过他。外联的表还没建，现在只转给 opts.onDeclined（测试用）。
+   */
+  function customerDeclined(accountId, convId) {
+    if (!opts.onDeclined) return;
+    try {
+      opts.onDeclined({ accountId, conversationId: convId, ts: nowIso() });
+    } catch (err) {
+      log.warn(`[wa] 处理客户拒绝的钩子出错：${err?.message || err}`);
     }
   }
 
@@ -1247,11 +1419,164 @@ export function createWaService(ctx, opts = {}) {
     return 'command_failed';
   }
 
+  // ---------------- 关联后导入已有聊天 ----------------
+  // 关联时手机同步过来的旧聊天 WAHA 存着但不推 webhook，所以号进入 WORKING 后主动拉一次，存成"静默"的历史消息：
+  // 不回复、不调模型、不记缺口、不通知、不标待处理、不占每日额度。只收早于 cutoffMs 的消息（正是 webhook 当成旧消息
+  // 忽略的那部分），之后的照常交给 webhook，两边不会抢同一条，客户刚发来的消息不会被当成历史吞掉。
+
+  /** 号进入 WORKING 时调用：historyDelayMs 后在后台导入。已经在等或正在跑的不重复安排（同一个号同时只跑一次） */
+  function scheduleHistoryImport(accountId) {
+    if (closed || historyTimers.has(accountId) || historyRunning.has(accountId)) return;
+    const t = setTimeout(() => {
+      historyTimers.delete(accountId);
+      importWahaHistory(accountId).catch((err) => log.error(`[waha] 号 ${accountId} 导入已有聊天出错：${err?.stack || err}`));
+    }, historyDelayMs);
+    t.unref?.();
+    historyTimers.set(accountId, t);
+  }
+
+  function cancelHistoryImport(accountId) {
+    const t = historyTimers.get(accountId);
+    if (t) clearTimeout(t);
+    historyTimers.delete(accountId);
+  }
+
+  /**
+   * 拉 WAHA 里已有的聊天（最多 HISTORY_CHAT_LIMIT 个，每个最多 HISTORY_MESSAGES_PER_CHAT 条，不下载媒体）导入会话。
+   * 哪些聊天收沿用 webhook 入站的规则：群、广播、频道不收，通知号码不收，黑白名单按号判断。按 external id 去重，可以重复跑。
+   * 日志只记一行汇总，不记号码和内容。
+   */
+  async function importWahaHistory(accountId) {
+    let acc = accounts.get(accountId);
+    if (closed || !acc || acc.channel !== 'waha' || historyRunning.has(accountId)) return;
+    if (state(accountId).lastWahaStatus !== 'WORKING') return;
+    historyRunning.add(accountId);
+    try {
+      const cutoff = cutoffMs(acc);
+      let chats;
+      try {
+        chats = await waha.listChats(acc.sessionName, HISTORY_CHAT_LIMIT);
+      } catch (err) {
+        log.warn(`[waha] 号 ${accountId} 导入已有聊天失败：读聊天列表出错（${err?.message || err}）`);
+        return;
+      }
+      const n = { chats: 0, messages: 0, skipped: 0, outOfScope: 0, failed: 0 };
+      for (const chat of chats.slice(0, HISTORY_CHAT_LIMIT)) {
+        acc = accounts.get(accountId);
+        if (closed || !acc) return;
+        // 聊天对象只看 chat id（历史消息的 to 是 null），和入站一样把 @s.whatsapp.net 记成 @c.us
+        const rawId = typeof chat?.id === 'string' ? chat.id : chat?.id?._serialized || '';
+        const chatId = rawId.replace(/@s\.whatsapp\.net$/i, '@c.us');
+        if (!chatId || isNonPrivateChat(chatId)) {
+          n.outOfScope++;
+          continue;
+        }
+        const number = await resolveNumber(acc, { channel: 'waha', chatId });
+        if (isNotifyNumber(acc, number) || !inScope(acc, number, chatId)) {
+          n.outOfScope++;
+          continue;
+        }
+        let list;
+        try {
+          list = await waha.listChatMessages(acc.sessionName, rawId, HISTORY_MESSAGES_PER_CHAT);
+        } catch {
+          // 报错里可能带着 chat id（号码），只计数
+          n.failed++;
+          continue;
+        }
+        if (closed) return;
+        // /chats 的 name 是字符串；/chats/overview 的顶层 name 是 null，名字在 _chat.name
+        const name = String(chat.name || chat._chat?.name || '').trim();
+        const r = saveHistory(acc, chatId, number, name, list.slice(0, HISTORY_MESSAGES_PER_CHAT), cutoff);
+        if (r.inserted) n.chats++;
+        n.messages += r.inserted;
+        n.skipped += r.skipped;
+      }
+      log.info(
+        `[waha] 号 ${accountId} 导入已有聊天：${n.chats} 个聊天、${n.messages} 条消息，跳过 ${n.skipped} 条（已有、太新或缺 id/时间）；` +
+          `范围外的聊天 ${n.outOfScope} 个${n.failed ? `，读取失败 ${n.failed} 个` : ''}`,
+      );
+    } finally {
+      historyRunning.delete(accountId);
+    }
+  }
+
+  /**
+   * 一个聊天的历史消息写进会话（一个事务，会话不存在就新建，已存在就并进去）。只收早于 cutoff、带 id 和时间的消息；
+   * 已有的按 external id 跳过，短 id 也比一次（WAHA 两处给的 id 前缀可能不同，免得把机器人发过的消息又导成手机回复）。
+   * fromMe 的是机主在手机上发的（author=owner，F12 的表示），其余是客户消息（handled=1，记 skipped）；都标 via=import，
+   * ts 用原始时间。新会话的 created_at 取最早一条；updated_at 只往后推到最新一条导入消息的时间，不用"现在"。
+   * 名字和号码只补空的，不覆盖 webhook 写进去的。
+   * @returns {{inserted:number, skipped:number}}
+   */
+  function saveHistory(acc, chatId, number, name, list, cutoff) {
+    const convId = conversationIdOf(acc.id, chatId);
+    const known = new Set();
+    for (const r of db.prepare('SELECT external_id FROM messages WHERE conversation_id = ? AND external_id IS NOT NULL').all(convId)) {
+      known.add(r.external_id);
+      known.add(shortMessageId(r.external_id));
+    }
+    const items = [];
+    let skipped = 0;
+    for (const p of list) {
+      const m = parseWahaMessage(p || {});
+      const short = m.externalId ? shortMessageId(m.externalId) : null;
+      // parseWahaMessage 在没有时间时退回"现在"，历史消息不能这样，直接跳过
+      if (!m.externalId || !(Number(p?.timestamp) > 0) || m.timestampMs >= cutoff || known.has(m.externalId) || known.has(short)) {
+        skipped++;
+        continue;
+      }
+      known.add(m.externalId);
+      known.add(short);
+      items.push(m);
+    }
+    if (!items.length) return { inserted: 0, skipped };
+    items.sort((a, b) => a.timestampMs - b.timestampMs);
+    const iso = (m) => new Date(m.timestampMs).toISOString();
+    let inserted = 0;
+    db.transaction(() => {
+      db.prepare(
+        `INSERT INTO conversations(id, account_id, chat_id, channel, contact_name, contact_number, created_at, updated_at)
+         VALUES(?, ?, ?, 'waha', ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           updated_at = CASE WHEN excluded.updated_at > conversations.updated_at THEN excluded.updated_at ELSE conversations.updated_at END,
+           contact_name = CASE WHEN conversations.contact_name = '' THEN excluded.contact_name ELSE conversations.contact_name END,
+           contact_number = CASE WHEN conversations.contact_number = '' THEN excluded.contact_number ELSE conversations.contact_number END`,
+      ).run(convId, acc.id, chatId, clip(name, 100), number || '', iso(items[0]), iso(items[items.length - 1]));
+      const insert = db.prepare(
+        `INSERT OR IGNORE INTO messages(id, conversation_id, external_id, direction, author, kind, text, ts, bot_decision, decision_reason,
+                                        status, handled, via, media)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'import', ?)`,
+      );
+      for (const m of items) {
+        const isText = !!m.text;
+        inserted += insert.run(
+          newId(),
+          convId,
+          m.externalId,
+          m.fromMe ? 'out' : 'in',
+          m.fromMe ? 'owner' : 'customer',
+          isText ? 'text' : 'media',
+          // 媒体不下载：和没开识别时的入站一样，只存标签（有说明文字时存文字）
+          isText ? clip(m.text, MAX_STORED_TEXT) : m.mediaLabel || '[非文字消息]',
+          iso(m),
+          m.fromMe ? null : 'skipped',
+          m.fromMe ? null : HISTORY_SKIP_REASON,
+          m.fromMe ? 'sent' : 'received',
+          m.media ? JSON.stringify({ type: m.media.type, mime: m.media.mime || null }) : null,
+        ).changes;
+      }
+    })();
+    return { inserted, skipped: skipped + items.length - inserted };
+  }
+
   // ---------------- 状态 ----------------
   function observeWahaStatus(accountId, status) {
     if (!status) return;
     const st = state(accountId);
     if (status === 'WORKING' && st.lastWahaStatus && st.lastWahaStatus !== 'WORKING') st.connectedAt = Date.now();
+    // 进入 WORKING（包括服务启动后第一次看到它是 WORKING）时导入已有聊天
+    if (status === 'WORKING' && st.lastWahaStatus !== 'WORKING') scheduleHistoryImport(accountId);
     st.lastWahaStatus = status;
   }
 
@@ -1307,13 +1632,17 @@ export function createWaService(ctx, opts = {}) {
     return out;
   }
 
-  /** inkdove 管理的那部分 session 配置：webhook 和代理 */
+  /**
+   * inkdove 管理的那部分 session 配置：webhook 和代理。
+   * F12：订阅 message.any（收到的和自己发的消息都推，自己发的带 fromMe），用来记下机主在手机上发的消息。
+   * 改了这里指纹就变，已有的号在服务启动时（init）或下次 start 时会把新配置 PUT 过去。
+   */
   function wahaManagedConfig(acc) {
     const cfg = {
       webhooks: [
         {
           url: config.wahaWebhookUrl,
-          events: ['message', 'session.status'],
+          events: ['message.any', 'session.status'],
           hmac: { key: config.wahaWebhookSecret },
           retries: { policy: 'constant', delaySeconds: 2, attempts: 3 },
         },
@@ -1555,6 +1884,7 @@ export function createWaService(ctx, opts = {}) {
       await waha.deleteSession(acc.sessionName).catch(warn);
     }
     await relays.stop(acc.id);
+    cancelHistoryImport(acc.id);
     for (const r of db.prepare('SELECT id FROM conversations WHERE account_id = ?').all(acc.id)) {
       cancelTimer(r.id);
       abortSending(r.id, 'account_deleted');
@@ -1576,7 +1906,8 @@ export function createWaService(ctx, opts = {}) {
       observeWahaStatus(acc.id, body.payload?.status);
       return 'status';
     }
-    if (body.event !== 'message') return 'ignored_event';
+    // message.any 是现在订阅的；message 是老配置还没更新时推的（只有收到的消息），两种都按同一条路处理，按 id 去重
+    if (body.event !== 'message.any' && body.event !== 'message') return 'ignored_event';
     return handleInbound(acc, parseWahaMessage(body.payload || {}));
   }
 
@@ -1626,20 +1957,21 @@ export function createWaService(ctx, opts = {}) {
         const r = await relays.ensure(acc);
         if (r === 'failed') log.error(`[relay] 号 ${acc.id} 的代理中继没能拉起：${relays.error(acc.id)}`);
       }
-    },
-
-    /**
-     * F12 下一段用：这条 fromMe 消息是不是本服务经 API 发出去的回声。按 message id 判断，再用"同一 chat + 相同文本 + 30 秒内"兜底。
-     */
-    isOwnEcho(accountId, chatId, externalId, text) {
-      const now = Date.now();
-      const list = recentSent.get(accountId) || [];
-      const short = externalId ? shortMessageId(externalId) : null;
-      return list.some(
-        (e) =>
-          (externalId && (e.id === externalId || (short && e.short === short))) ||
-          (e.chatId === chatId && e.text === text && now - e.at <= ECHO_TEXT_WINDOW_MS),
-      );
+      // 启动时已经连着的扫码号：查一次状态，第一次看到 WORKING 就会导入已有聊天。不等结果，WAHA 连不上也不耽误启动
+      for (const acc of accounts.list()) {
+        if (acc.channel === 'waha') getStatus(acc).catch(() => {});
+      }
+      // inkdove 管理的 session 配置变了（比如 F12 把 webhook 事件改成 message.any）：已有的号把新配置 PUT 过去，
+      // 运行中的 session 由 WAHA 自动重启一次，登录态保留。指纹没变的、从没推过配置的（还没建 session，start 时按新配置建）
+      // 不动；WAHA 连不上时只记日志，下次 start 时再同步
+      for (const acc of accounts.list()) {
+        if (acc.channel !== 'waha' || !acc.wahaConfigHash || acc.wahaConfigHash === configHash(wahaManagedConfig(acc))) continue;
+        applyWahaConfig(acc)
+          .then((r) => {
+            if (r === 'updated') log.info(`[waha] 号 ${acc.id} 的 session 配置已更新（webhook 事件或代理有变化）`);
+          })
+          .catch((err) => log.warn(`[waha] 号 ${acc.id} 同步 session 配置失败，下次连接时再试：${err?.message || err}`));
+      }
     },
 
     /** @param {{accountIds?: string[]|null, accountId?: string|null}} f accountIds=null 表示不限（admin） */
@@ -1728,7 +2060,9 @@ export function createWaService(ctx, opts = {}) {
       }
       let out;
       try {
-        out = await ctx.ai.kbDraft({ question: clip(asked.join('\n'), 2000), answer: clip(answer, 4000) });
+        out = await llmScope({ accountId: conv.account_id ?? null, conversationId: convId }, () =>
+          ctx.ai.kbDraft({ question: clip(asked.join('\n'), 2000), answer: clip(answer, 4000) }),
+        );
       } catch (err) {
         throw new HttpError(502, 'llm_error', `改写失败：${err?.message || err}`);
       }
@@ -1764,6 +2098,8 @@ export function createWaService(ctx, opts = {}) {
       closed = true;
       for (const t of timers.values()) clearTimeout(t);
       timers.clear();
+      for (const t of historyTimers.values()) clearTimeout(t);
+      historyTimers.clear();
       for (const ac of sending.values()) ac.abort(new Error('closing'));
       await relays.closeAll();
     },

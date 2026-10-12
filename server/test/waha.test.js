@@ -64,7 +64,7 @@ describe('WAHA 号', () => {
     assert.equal(create.body.name, acc.waha.sessionName);
     const [hook] = create.body.config.webhooks;
     assert.equal(hook.url, 'http://127.0.0.1:8794/webhooks/waha');
-    assert.deepEqual(hook.events, ['message', 'session.status']);
+    assert.deepEqual(hook.events, ['message.any', 'session.status']);
     assert.deepEqual(hook.hmac, { key: WAHA_SECRET });
     assert.equal(create.body.config.proxy, undefined, '未启用代理时不带 proxy');
     const got = await t.req('GET', `/api/accounts/${acc.id}`);
@@ -97,15 +97,14 @@ describe('WAHA 号', () => {
     assert.ok((await t.req('GET', `/api/accounts/${acc.id}`)).body.status.lastWebhookAt);
   });
 
-  it('忽略：自己发的、群聊、广播、频道、重复 id、过旧消息；非 message 事件不处理', async () => {
+  it('忽略：群聊、广播、频道、重复 id、过旧消息；message 和 message.any 以外的事件不处理（自己发的见 f12.test.js）', async () => {
     const chat = newChat();
     const before = fake.state.sent.length;
-    await send(chat, '你好', { fromMe: true });
     await send('120363000000000000@g.us', '你好');
     await send('status@broadcast', '你好');
     await send('120363000000000001@newsletter', '你好');
     await send(chat, '你好', { timestamp: Math.floor(Date.now() / 1000) - 3600 });
-    await postWaha(t, { ...wahaMessage({ from: chat, body: '你好', session: acc.waha.sessionName }), event: 'message.any' });
+    await postWaha(t, { ...wahaMessage({ from: chat, body: '你好', session: acc.waha.sessionName }), event: 'message.ack' });
     await sleep(300);
     const convs = (await t.req('GET', '/api/wa/conversations')).body;
     assert.ok(!convs.some((c) => [chat, '120363000000000000@g.us', 'status@broadcast', '120363000000000001@newsletter'].map(cid).includes(c.id)));

@@ -214,6 +214,88 @@ CREATE TABLE IF NOT EXISTS file_meta_media (
   PRIMARY KEY (file_id, phone_number_id)
 );
 `);
+
+  // ---- 第三批：F12 看板要额外记录的数据（写入见 records.js） ----
+  // decisions：引擎每处理一轮写一行（合并的几条消息算一轮），skipped 不写；code 是 codes.js 里的枚举
+  // llm_calls：每次调用模型写一行，token 取不到时为 NULL
+  // handoffs：needsHuman 从 false 变成 true 时新建一行，之后第一条人工消息填 first_response_*，机器人恢复时填 resumed_at
+  db.exec(`
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  account_id TEXT,
+  conversation_id TEXT,
+  decision TEXT NOT NULL,
+  code TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  used_entry_ids TEXT NOT NULL DEFAULT '[]',
+  sent_file_ids TEXT NOT NULL DEFAULT '[]',
+  latency_ms INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS decisions_ts ON decisions(ts);
+CREATE INDEX IF NOT EXISTS decisions_account ON decisions(account_id, ts);
+CREATE TABLE IF NOT EXISTS llm_calls (
+  id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  format TEXT,
+  model TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  ok INTEGER NOT NULL,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  account_id TEXT,
+  conversation_id TEXT
+);
+CREATE INDEX IF NOT EXISTS llm_calls_ts ON llm_calls(ts);
+CREATE TABLE IF NOT EXISTS handoffs (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  account_id TEXT,
+  code TEXT,
+  started_at TEXT NOT NULL,
+  first_response_at TEXT,
+  first_responder_user_id TEXT,
+  first_responder_kind TEXT,
+  resumed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS handoffs_conv ON handoffs(conversation_id, started_at);
+CREATE INDEX IF NOT EXISTS handoffs_started ON handoffs(started_at);
+`);
+
+  // ---- 第三批：F6 客户线索（读写见 leads/store.js） ----
+  // leads：每个会话一条，再次提取时覆盖更新；manual_fields 是人工改过的字段名（JSON 数组），重新提取时不覆盖。
+  //   lastContactAt、号名、联系人名字和号码读的时候从会话和号表取，不存
+  // lead_stage_history：stage 每变一次写一行（首次提取也写），F12 看板的漏斗用
+  // conversations.lead_seq：上次提取（或删除线索）时会话里最新一条消息的 seq，之后有新的客户消息才再提取。
+  //   放在会话上而不是线索上，删掉的线索不会被同样的旧消息再提取出来
+  ensureColumn(db, 'conversations', 'lead_seq', 'INTEGER');
+  db.exec(`
+CREATE TABLE IF NOT EXISTS leads (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL UNIQUE,
+  account_id TEXT,
+  name TEXT NOT NULL DEFAULT '',
+  company TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  email TEXT NOT NULL DEFAULT '',
+  interest TEXT NOT NULL DEFAULT '',
+  quantity TEXT NOT NULL DEFAULT '',
+  stage TEXT NOT NULL DEFAULT 'inquiry',
+  summary TEXT NOT NULL DEFAULT '',
+  manual_fields TEXT NOT NULL DEFAULT '[]',
+  extracted_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS leads_account ON leads(account_id);
+CREATE TABLE IF NOT EXISTS lead_stage_history (
+  lead_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lead_stage_history_lead ON lead_stage_history(lead_id, ts);
+`);
 }
 
 /**

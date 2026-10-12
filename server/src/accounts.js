@@ -281,9 +281,11 @@ export function exportAccount(acc) {
 /**
  * 校验导入文件。全部合法才返回要新建的号；有一个不合法就抛 400（说明第几个号、哪个字段），一个都不建。
  * 每个号的校验和新建、更新共用（applyAccountPatch），缺的字段按新建号的默认值。
+ * 唯一的例外是邮件通知：号里开了邮件通知、但这里还没配发信方式时不报错，
+ * 而是把它关掉（收件人 to 保留），并在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON
  * @param {{emailReady:boolean}} o
- * @returns {{name:string, channel:'waha'|'meta', config:any}[]}
+ * @returns {{name:string, channel:'waha'|'meta', config:any, notices?:string[]}[]}
  */
 export function parseAccountsExport(doc, { emailReady }) {
   if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
@@ -305,15 +307,20 @@ export function parseAccountsExport(doc, { emailReady }) {
       if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，Meta 号应为 null');
       if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，扫码号应为 null');
       const draft = { name, channel: item.channel, ...defaultConfig(item.channel) };
-      const { name: n, channel, ...config } = applyAccountPatch(draft, item, { isAdmin: true, emailReady });
-      return { name: n, channel, config };
+      // 没配发信方式时，开着的邮件通知先关掉再校验（拷一份，不改解析出来的原文件内容）；
+      // notify 不是对象之类的格式问题仍交给 applyAccountPatch 报错
+      /** @type {string[]} */
+      const notices = [];
+      let patch = item;
+      if (!emailReady && isPlainObject(item.notify) && isPlainObject(item.notify.email) && item.notify.email.enabled === true) {
+        patch = { ...item, notify: { ...item.notify, email: { ...item.notify.email, enabled: false } } };
+        notices.push('没配发信方式，已关掉邮件通知');
+      }
+      const { name: n, channel, ...config } = applyAccountPatch(draft, patch, { isAdmin: true, emailReady });
+      return { name: n, channel, config, ...(notices.length ? { notices } : {}) };
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
-      const msg =
-        err.code === 'email_not_configured'
-          ? 'notify.email.enabled 为 true，但这里还没有配置发信方式。请先在「设置」里配置发信方式，或把它改成 false 再导入'
-          : err.message;
-      throw new HttpError(err.status, err.code, `${label}：${msg}`);
+      throw new HttpError(err.status, err.code, `${label}：${err.message}`);
     }
   });
 }
@@ -367,7 +374,8 @@ export function createAccountStore(db, config) {
     /**
      * 导入：在一个事务里逐个新建（新 id、新 session 名，不启动 WAHA）。名称可以重复；
      * Meta 号的 phoneNumberId 和已有的号、或文件里前面的号重复时跳过（空的不算重复）。
-     * @param {{name:string, channel:'waha'|'meta', config:any}[]} items 已经过 parseAccountsExport 校验
+     * @param {{name:string, channel:'waha'|'meta', config:any, notices?:string[]}[]} items 已经过 parseAccountsExport 校验；
+     *   notices 是导入时自动调整过什么的说明，原样带到返回的 created 项里
      */
     importMany(items) {
       return db.transaction(() => {
@@ -392,7 +400,7 @@ export function createAccountStore(db, config) {
           }
           const acc = store.create(it);
           if (pnid) pnids.set(pnid, { name: acc.name, inFile: true });
-          created.push({ id: acc.id, name: acc.name });
+          created.push({ id: acc.id, name: acc.name, ...(it.notices?.length ? { notices: it.notices } : {}) });
         }
         return { created, skipped };
       })();

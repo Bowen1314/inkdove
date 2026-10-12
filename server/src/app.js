@@ -13,10 +13,13 @@ import { createDistillRunner } from './distill/runner.js';
 import { verifyFileToken } from './files/signed.js';
 import { createFileStore } from './files/store.js';
 import { createKbStore } from './kb/store.js';
+import { createLeadStore, LEADS_SCAN_INTERVAL_MS } from './leads/store.js';
+import { createRecords, withLlmCallLog } from './records.js';
 import { accountsRouter } from './routes/accounts.js';
 import { distillRouter } from './routes/distill.js';
 import { filesRouter, sendStoredFile } from './routes/files.js';
 import { kbRouter } from './routes/kb.js';
+import { leadsRouter } from './routes/leads.js';
 import { sendBrandLogo, settingsRouter } from './routes/settings.js';
 import { sourcesRouter } from './routes/sources.js';
 import { usersRouter } from './routes/users.js';
@@ -45,9 +48,12 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   notifyRetryDelayMs?: number,
  *   humanize?: {preMs?: Function, typingMs?: Function, betweenMs?: Function, fileGapMs?: Function},
  *   onDecision?: (row:any) => void,
+ *   onDeclined?: (p:{accountId:string, conversationId:string, ts:string}) => void,
  *   wahaInlineMaxBytes?: number,
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
+ *   historyImportDelayMs?: number,
+ *   leadsScanIntervalMs?: number,
  *   relayBindHost?: string,
  *   canary?: string,
  *   proxyTestUrl?: string,
@@ -82,6 +88,8 @@ export function createApp(config, options = {}) {
     },
     kb: createKbStore(db),
     accounts,
+    // F12：处理记录、模型调用、转人工记录
+    records: createRecords(db, log),
     mailer: null,
     // F13：中继只在 compose 内网监听（容器里绑 0.0.0.0，不映射到宿主机端口）
     relays: createRelayManager({ bindHost: options.relayBindHost || '0.0.0.0', log }),
@@ -89,6 +97,7 @@ export function createApp(config, options = {}) {
     distill: null,
     wa: null,
     files: null,
+    leads: null,
   };
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
@@ -97,7 +106,8 @@ export function createApp(config, options = {}) {
     resendRetryDelayMs: options.resendRetryDelayMs,
   });
   const baseAi = config.llmMock ? createMockAi({ delayMs: options.mockDelayMs }) : createRealAi(ctx.getSettings, options.realAiOptions);
-  ctx.ai = { ...baseAi, ...(options.aiOverrides || {}) };
+  // F12：每次模型调用写一行 llm_calls。包在测试钩子外面，钩子替换的方法也照样记
+  ctx.ai = withLlmCallLog({ ...baseAi, ...(options.aiOverrides || {}) }, { mock: config.llmMock, record: (row) => ctx.records.llmCall(row) });
   ctx.distill = createDistillRunner(ctx);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
@@ -105,10 +115,15 @@ export function createApp(config, options = {}) {
     humanize: options.humanize,
     notifyRetryDelayMs: options.notifyRetryDelayMs,
     onDecision: options.onDecision,
+    onDeclined: options.onDeclined,
     wahaInlineMaxBytes: options.wahaInlineMaxBytes,
     wahaPairWaitMs: options.wahaPairWaitMs,
     wahaPollMs: options.wahaPollMs,
+    historyImportDelayMs: options.historyImportDelayMs,
   });
+  // F6：每 2 分钟扫一遍会话提取客户线索。leadsScanIntervalMs 为 0 时不启动定时器（测试里手动调 ctx.leads.scan()）
+  ctx.leads = createLeadStore(ctx);
+  ctx.leads.start(options.leadsScanIntervalMs ?? LEADS_SCAN_INTERVAL_MS);
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
   const ready = ctx.wa.init().catch((err) => log.error(`[relay] 拉起代理中继出错：${err?.stack || err}`));
@@ -181,6 +196,7 @@ export function createApp(config, options = {}) {
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));
+  api.use('/leads', leadsRouter(ctx));
   api.use(() => {
     throw new HttpError(404, 'not_found', '接口不存在');
   });
@@ -224,6 +240,7 @@ export function createApp(config, options = {}) {
     /** 代理中继都拉起来之后 resolve（测试用） */
     ready,
     async close() {
+      ctx.leads.stop();
       ctx.files.close();
       await ctx.wa.close();
       ctx.distill.abortAll();

@@ -146,6 +146,40 @@ export function parseLlmResponse(format, data) {
   return content;
 }
 
+/** 用量字段：非负数取整，其余（缺失、null、负数、字符串）为 null */
+const usageNum = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null);
+/** 几个用量字段相加：都没有时为 null，有一个就把缺的当 0 */
+const usageSum = (...vals) => {
+  const nums = vals.map(usageNum);
+  return nums.every((n) => n === null) ? null : nums.reduce((a, n) => a + (n ?? 0), 0);
+};
+
+/**
+ * F12：从响应体里取 token 用量，取不到的记 null。
+ * - openai：usage.prompt_tokens、usage.completion_tokens（completion 已含推理 token）；
+ * - anthropic：输入 = usage.input_tokens + cache_creation_input_tokens + cache_read_input_tokens（input_tokens 不含缓存的部分），
+ *   输出 = usage.output_tokens；
+ * - gemini：输入 = usageMetadata.promptTokenCount，输出 = candidatesTokenCount + thoughtsTokenCount（思考 token 单独计）。
+ * @param {string} format
+ * @param {any} data
+ * @returns {{inputTokens:number|null, outputTokens:number|null}}
+ */
+export function parseLlmUsage(format, data) {
+  if (format === 'anthropic') {
+    const u = data?.usage;
+    return {
+      inputTokens: usageSum(u?.input_tokens, u?.cache_creation_input_tokens, u?.cache_read_input_tokens),
+      outputTokens: usageNum(u?.output_tokens),
+    };
+  }
+  if (format === 'gemini') {
+    const u = data?.usageMetadata;
+    return { inputTokens: usageNum(u?.promptTokenCount), outputTokens: usageSum(u?.candidatesTokenCount, u?.thoughtsTokenCount) };
+  }
+  const u = data?.usage;
+  return { inputTokens: usageNum(u?.prompt_tokens), outputTokens: usageNum(u?.completion_tokens) };
+}
+
 /** 把 key 从任意文本里抹掉 */
 function scrub(text, apiKey) {
   let s = String(text ?? '');
@@ -215,7 +249,8 @@ async function requestJson(o) {
  *   messages:{role:'user'|'assistant', text:string, attachments?:{mime:string, data:string}[]}[],
  *   maxTokens?:number, temperature?:number, json?:boolean,
  *   timeoutMs:number, signal?:AbortSignal, retryBaseMs?:number}} opts
- * @returns {Promise<{text:string, model:string}>}
+ * @returns {Promise<{text:string, model:string, usage:{inputTokens:number|null, outputTokens:number|null}}>}
+ *   usage 是 F12 的 token 用量（见 parseLlmUsage）
  */
 export async function chat(opts) {
   const format = opts.format || 'openai';
@@ -223,7 +258,11 @@ export async function chat(opts) {
   if (!opts.baseUrl || !opts.model) throw new LlmError('LLM 未配置');
   const { url, headers, body } = buildLlmRequest(opts);
   const data = await requestJson({ ...opts, url, headers, body: JSON.stringify(body) });
-  return { text: parseLlmResponse(format, data), model: data?.model || data?.modelVersion || opts.model };
+  return {
+    text: parseLlmResponse(format, data),
+    model: data?.model || data?.modelVersion || opts.model,
+    usage: parseLlmUsage(format, data),
+  };
 }
 
 /** OpenAI 转写接口地址：{baseUrl}/audio/transcriptions */

@@ -147,8 +147,9 @@ export function createMockAi(opts = {}) {
     },
 
     /**
-     * 规则（见 SPEC 4 节末尾）：含"写代码""code""翻译""ignore previous" → offtopic；
-     * 含"人工""human" → handoff；关键词命中条目 → business（拼接条目）；
+     * 规则（见 SPEC 4 节末尾）：含"不需要""not interested""no thanks" → declined（F11，最先判）；
+     * 含"写代码""code""翻译" → offtopic（offtopic_type=task），含"ignore previous" → offtopic（injection）；
+     * 含"人工""human" → handoff；含"折扣""便宜""discount""太贵""too expensive" → handoff（price）；关键词命中条目 → business（拼接条目）；
      * 简单问候 → smalltalk；其余 → handoff（insufficient_info，question_zh 取客户原话）。
      * F15：整库索取 → handoff；含"目录""catalog""价目表""price list""规格书""spec"且有文件的 name 或 description 含同一个词 → 发那个文件。
      * styleHint（F14 套话重写）：把上一版里命中的套话词去掉后原样返回。
@@ -190,6 +191,20 @@ export function createMockAi(opts = {}) {
       return { type: 'faq', title: clip(String(question || answer).replace(/\s+/g, ' ').trim(), 40), content, tags: ['会话'] };
     },
 
+    /** 一键翻译 mock：按客户消息里的字符判断语言（见 mockLanguage）；和原文同一种语言时原样返回，否则返回"[译成 X] 原文" */
+    async translate({ text, customerMessages = [] }) {
+      await wait();
+      const language = mockLanguage(customerMessages.join('\n'));
+      const translation = mockLanguage(text) === language ? text : `[译成 ${language}] ${text}`;
+      return { language, translation };
+    },
+
+    /** F6 mock 线索提取：规则见 mockExtractLead */
+    async extractLead({ messages = [] }) {
+      await wait();
+      return mockExtractLead(messages);
+    },
+
     /** F4 mock 识图：图片字节本身是可读文字时（测试用）照抄，否则给通用描述 */
     async describeImage({ mime, data }) {
       await wait();
@@ -210,6 +225,21 @@ export function createMockAi(opts = {}) {
       return `${name}（${filename}）${head ? `：${head}` : image ? '：产品图片' : ''}`;
     },
   };
+}
+
+/** 翻译 mock 的语言判断：按特有字符或常见词，依次看日文假名、韩文、汉字、阿拉伯字母、西里尔字母、西班牙语、葡萄牙语，其余算英语 */
+const MOCK_LANGUAGE_RULES = [
+  ['日语', /[\u3040-\u30ff]/],
+  ['韩语', /[\uac00-\ud7af]/],
+  ['中文', /[\u4e00-\u9fff]/],
+  ['阿拉伯语', /[\u0600-\u06ff]/],
+  ['俄语', /[\u0400-\u04ff]/],
+  ['西班牙语', /[ñ¿¡]|cuánto|\b(hola|gracias|precio|quiero)\b/i],
+  ['葡萄牙语', /[ãõ]|olá|preço|\bobrigad[oa]\b/i],
+];
+function mockLanguage(text) {
+  const s = String(text || '');
+  return MOCK_LANGUAGE_RULES.find(([, re]) => re.test(s))?.[0] || '英语';
 }
 
 /** 能当文字读的字节（UTF-8 合法且没有控制字符）→ 文本；否则 '' */
@@ -239,14 +269,18 @@ function mockGenerate(message, entries, files = []) {
     usedEntryIds,
     sendFileIds: extra.sendFileIds || [],
     handoffType: extra.handoffType || '',
+    offtopicType: extra.offtopicType || '',
     questionZh: extra.questionZh || '',
     reason,
   });
   const handoff = (type, reason, questionZh = '') => out('handoff', reason, '', [], { handoffType: type, questionZh });
-  if (/写代码|code|翻译|ignore previous/i.test(message)) return out('offtopic', '要求做与本企业业务无关的事');
+  if (/不需要|not interested|no thanks/i.test(message)) return out('declined', '客户说不需要');
+  if (/ignore previous/i.test(message)) return out('offtopic', '让机器人忽略规则', '', [], { offtopicType: 'injection' });
+  if (/写代码|code|翻译/i.test(message)) return out('offtopic', '要求做与本企业业务无关的事', '', [], { offtopicType: 'task' });
   if (/所有的?文件|全部的?文件|all (of )?(your )?files/i.test(message)) return handoff('other', '客户要整库的文件');
   if (/人工|human/i.test(message)) return handoff('human_request', '客户要求人工');
   if (/折扣|便宜|discount/i.test(message)) return handoff('price', '客户要求打折');
+  if (/太贵|too expensive/i.test(message)) return handoff('price', '客户嫌贵');
   if (/下单|付款/.test(message)) return handoff('purchase', '客户想下单');
   if (/是不是机器人|are you a bot/i.test(message)) return handoff('identity', '客户问是不是机器人');
   const fileIds = matchFiles(message, files);
@@ -263,4 +297,33 @@ function mockGenerate(message, entries, files = []) {
     return out('smalltalk', '寒暄', '您好，想了解哪款产品？');
   }
   return handoff('insufficient_info', '资料里找不到答案', clip(message.replace(/\s+/g, ' ').trim(), 100));
+}
+
+/**
+ * F6 mock 线索提取，只看客户说的话：
+ * - stage 取最靠后的阶段：含"下单""order""PI" → order_intent；含"价格""价钱""price""discount" → negotiation；
+ *   含"样品""sample" → sample；否则 inquiry；
+ * - name 取"我叫 X""my name is X"；company 取"公司是 X""公司：X""company: X""company is X"；email 取第一个邮箱；
+ *   quantity 取"数字 + 单位"（个、件、台、套、箱、pcs、pieces、units、sets）；country、interest 留空；
+ * - summary 是"mock 提取：客户说了 N 句，最近一句是「…」"。
+ */
+function mockExtractLead(messages) {
+  const said = messages.filter((m) => m.author === 'customer').map((m) => String(m.text || ''));
+  const all = said.join('\n');
+  const pick = (re) => (all.match(re)?.[1] || '').trim();
+  let stage = 'inquiry';
+  if (/下单|\border|\bPI\b/i.test(all)) stage = 'order_intent';
+  else if (/价格|价钱|price|discount/i.test(all)) stage = 'negotiation';
+  else if (/样品|sample/i.test(all)) stage = 'sample';
+  const last = clip((said[said.length - 1] || '').replace(/\s+/g, ' ').trim(), 40);
+  return {
+    name: pick(/(?:我叫|my name is)\s*([^\s，,。.!！?？]{1,30})/i),
+    company: pick(/(?:公司是|公司[:：]|company is|company[:：])\s*([^\n，,。!！?？]{1,60})/i),
+    country: '',
+    email: pick(/([^\s@<>，,；;：:]+@[^\s@<>，,；;]+\.[a-z]{2,})/i),
+    interest: '',
+    quantity: pick(/(\d+\s*(?:个|件|台|套|箱|pcs|pieces|units|sets))/i),
+    stage,
+    summary: said.length ? `mock 提取：客户说了 ${said.length} 句，最近一句是「${last}」` : 'mock 提取：客户还没说话',
+  };
 }

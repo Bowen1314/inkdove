@@ -2,6 +2,7 @@
 import express from 'express';
 import { canAccessAccount, forbidden } from '../auth.js';
 import { notFound } from '../util.js';
+import { translateForConversation } from '../wa/translate.js';
 
 /** @param {any} ctx */
 export function waRouter(ctx) {
@@ -35,6 +36,11 @@ export function waRouter(ctx) {
   router.post('/conversations/:id/send-file', async (req, res) => {
     const c = loadConv(req);
     res.json(await wa.operatorSendFile(c.id, req.body, req.user));
+  });
+  // 输入框一键翻译成客户的语言，权限同手动回复；不改会话状态，不计入会话每日模型次数
+  router.post('/conversations/:id/translate', async (req, res) => {
+    const c = loadConv(req);
+    res.json(await translateForConversation(ctx, c, req.body?.text));
   });
   // F2b：人工回复改写成知识条目（不落库），只有 admin
   router.post('/conversations/:id/messages/:messageId/kb-draft', async (req, res) => {

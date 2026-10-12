@@ -1,4 +1,4 @@
-// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding。号级设置（自动回复开关、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing。号级设置（自动回复开关、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
 import { badRequest, isPlainObject } from './util.js';
 
@@ -34,7 +34,38 @@ function defaults(config) {
     },
     // 网站名称和 Logo。logo 是 {filename, mime, updatedAt} 或 null，文件在 {dataDir}/branding/ 下，只由上传接口改
     branding: { title: '', logo: null },
+    // F12：模型单价 [{model, inputPerMillion, outputPerMillion}]，美元 / 百万 token，看板估算费用用。没填的模型只统计 token 数
+    pricing: [],
   };
+}
+
+export const MAX_PRICING_ROWS = 200;
+const MAX_PRICE_PER_MILLION = 100_000;
+
+/**
+ * 校验模型单价表：数组，每项 {model: 非空字符串, inputPerMillion, outputPerMillion: 0–100000 的数}，model 去掉首尾空白后不能重复。
+ * 错误信息以 pricing 开头，前端靠它把错误放到表格下面。
+ */
+export function checkPricing(v) {
+  if (!Array.isArray(v)) throw badRequest('pricing 必须是数组');
+  if (v.length > MAX_PRICING_ROWS) throw badRequest(`pricing 最多 ${MAX_PRICING_ROWS} 行`);
+  const seen = new Set();
+  return v.map((row, i) => {
+    const at = `pricing 第 ${i + 1} 行`;
+    if (!isPlainObject(row)) throw badRequest(`${at}必须是对象`);
+    const model = str(row.model, `${at}的 model`, 200).trim();
+    if (!model) throw badRequest(`${at}的 model 不能为空`);
+    if (seen.has(model)) throw badRequest(`${at}的 model 重复了：${model}`);
+    seen.add(model);
+    const price = (field) => {
+      const n = row[field];
+      if (typeof n !== 'number' || !Number.isFinite(n) || n < 0 || n > MAX_PRICE_PER_MILLION) {
+        throw badRequest(`${at}的 ${field} 必须是 0–${MAX_PRICE_PER_MILLION} 之间的数字（美元 / 百万 token）`);
+      }
+      return n;
+    };
+    return { model, inputPerMillion: price('inputPerMillion'), outputPerMillion: price('outputPerMillion') };
+  });
 }
 
 /** 按 defaults 的形状取值：未知字段丢掉，缺的字段补默认值 */
@@ -96,6 +127,12 @@ export function loadSettings(db, config) {
   // shapeLike 不管 null 默认值下面的形状，这里单独把坏掉的 logo 元数据当成没有
   if (typeof s.branding.title !== 'string') s.branding.title = '';
   if (!validLogoMeta(s.branding.logo)) s.branding.logo = null;
+  // 数组也不管形状：存坏了的单价表当成空表
+  try {
+    s.pricing = checkPricing(s.pricing);
+  } catch {
+    s.pricing = [];
+  }
   return s;
 }
 
@@ -167,6 +204,7 @@ export function publicSettings(s, config) {
       resend: { apiKeySet: !!s.email.resend.apiKey, apiKeyLast4: last4(s.email.resend.apiKey) },
     },
     branding: { title: s.branding.title, logoSet: !!logoMeta(s), logoUrl: logoUrl(s) },
+    pricing: s.pricing.map((p) => ({ ...p })),
     webhookBase: config.publicBaseUrl,
   };
 }
@@ -296,6 +334,9 @@ export function applySettingsPatch(current, patch) {
     if (!isPlainObject(p)) throw badRequest('branding 必须是对象');
     if (p.title !== undefined) s.branding.title = brandTitle(p.title);
   }
+
+  // F12：模型单价表整体替换
+  if (patch.pricing !== undefined) s.pricing = checkPricing(patch.pricing);
   return s;
 }
 

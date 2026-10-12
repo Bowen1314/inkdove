@@ -2,11 +2,13 @@
 // 第 1 层（system prompt）在 prompts.js；这里做第 2 层（程序硬规则，含 4.4 红线和 F14 元话语，词表在 redlines.js）、
 // F14 的套话重写，以及第 3 层（审核调用）。第 4 层（会话级闸门）在 wa/service.js，因为 /api/kb/ask 不计会话次数。
 //
-// 返回值里的 code 是 SPEC-phase2 F12 那张枚举表的值（decisions 表按 code 分组）。模型判 handoff 时 code 取模型给的
-// handoff_type（F2c，六个值和 F12 的 handoff code 一一对应），没给或不认识的记 other。离题的 offtopic_type 由下一段接上。
+// 返回值里的 code 是 SPEC-phase2 F12 那张枚举表的值（decisions 表按 code 分组，中文标签在 codes.js）。模型判 handoff 时
+// code 取模型给的 handoff_type（F2c，六个值和 F12 的 handoff code 一一对应），判 offtopic 时取 offtopic_type
+// （task|chitchat|injection|other），没给或不认识的都记 other。F11：模型判客户明确拒绝时 category 为 declined，code 也是 declined。
 // F15：模型可以带 send_file_ids 发产品资料库里的文件；文件规则（bad_file、file_limit、"条目或文件至少一样"）也在第 2 层。
 import { selectContextFiles, MAX_FILES_PER_REPLY } from '../files/store.js';
 import { selectContextEntries } from '../kb/search.js';
+import { OFFTOPIC_TYPES } from '../codes.js';
 import { clip } from '../util.js';
 import { HANDOFF_TYPES } from './prompts.js';
 import { checkRedLines, CLICHE_TERMS, findTerms, stripClicheSentences } from './redlines.js';
@@ -14,10 +16,12 @@ import { checkRedLines, CLICHE_TERMS, findTerms, stripClicheSentences } from './
 export const MAX_CUSTOMER_MESSAGE = 2000;
 export const MAX_BUSINESS_REPLY = 1000;
 export const MAX_SMALLTALK_REPLY = 150;
-export const CATEGORIES = ['business', 'smalltalk', 'offtopic', 'handoff'];
+export const CATEGORIES = ['business', 'smalltalk', 'offtopic', 'handoff', 'declined'];
 
 /** F2c handoff_type → F12 的 handoff code：六个值同名对应，其余记 other */
 export const handoffCodeOf = (type) => (HANDOFF_TYPES.includes(type) ? type : 'other');
+/** F12 offtopic_type → offtopic 的 code：四个值同名对应，其余记 other */
+export const offtopicCodeOf = (type) => (OFFTOPIC_TYPES.includes(type) ? type : 'other');
 
 /** 模型给的文件 id：去掉 "file:" 前缀和方括号，去重 */
 export function normalizeFileIds(ids) {
@@ -52,8 +56,9 @@ export function buildReplyContext(ctx, { message, history = [] }) {
  * @param {{message: string, history?: {role:'customer'|'bot', text:string}[], persona?: string, allowRewrite?: boolean, fileQuota?: number}} input
  *   persona：号的 persona（为空时由调用方传全局 persona）；allowRewrite：今天的 LLM 次数还够不够做一次套话重写；
  *   fileQuota：这个会话今天还能自动发几个文件（F15，每天 5 个；/api/kb/ask 不限）
- * @returns {Promise<{decision:'replied'|'offtopic'|'handoff'|'blocked', code:string, reply:string, usedEntryIds:string[],
- *   sendFileIds:string[], handoffType:string|null, questionZh:string, reason:string, latencyMs:number, llmCalls:number, rewritten:boolean}>}
+ * @returns {Promise<{decision:'replied'|'offtopic'|'handoff'|'blocked'|'declined', code:string, reply:string, usedEntryIds:string[],
+ *   sendFileIds:string[], handoffType:string|null, offtopicType:string|null, questionZh:string, reason:string, latencyMs:number,
+ *   llmCalls:number, rewritten:boolean}>}
  */
 export async function decideReply(ctx, { message, history = [], persona, allowRewrite = true, fileQuota = Infinity }) {
   const started = Date.now();
@@ -66,6 +71,7 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
     usedEntryIds: decision === 'replied' ? extra.usedEntryIds || [] : [],
     sendFileIds: decision === 'replied' ? extra.sendFileIds || [] : [],
     handoffType: extra.handoffType ?? null,
+    offtopicType: extra.offtopicType ?? null,
     questionZh: extra.questionZh ?? '',
     reason,
     latencyMs: Date.now() - started,
@@ -100,7 +106,12 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
   if (!gen || !CATEGORIES.includes(gen.category)) return done('handoff', 'other', '模型输出无法解析，按转人工处理');
 
   const genReason = clip(String(gen.reason ?? '').trim(), 200);
-  if (gen.category === 'offtopic') return done('offtopic', 'other', `离题：${genReason || '模型判断与本企业业务无关'}`);
+  // F11：客户明确表示不需要、没兴趣或不想再被联系。不回复、不通知，由服务暂停会话
+  if (gen.category === 'declined') return done('declined', 'declined', genReason || '客户表示不需要、没兴趣或不想再被联系');
+  if (gen.category === 'offtopic') {
+    const offtopicType = offtopicCodeOf(gen.offtopicType);
+    return done('offtopic', offtopicType, `离题：${genReason || '模型判断与本企业业务无关'}`, { offtopicType });
+  }
   if (gen.category === 'handoff') {
     const handoffType = HANDOFF_TYPES.includes(gen.handoffType) ? gen.handoffType : 'other';
     return done('handoff', handoffCodeOf(handoffType), genReason || '没把握或客户要求人工（模型判断）', {

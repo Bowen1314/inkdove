@@ -1,5 +1,6 @@
 import { chat, extractJson, LlmError, transcribe } from './llm.js';
 import { formatEntryForContext } from '../kb/search.js';
+import { reportLlmCall } from '../records.js';
 import {
   buildDraftSystemPrompt,
   buildDraftUserPrompt,
@@ -15,6 +16,8 @@ import {
   profileText,
   VOICE_TRANSCRIBE_PROMPT,
 } from '../reply/prompts.js';
+import { buildTranslateUserPrompt, TRANSLATE_SYSTEM_PROMPT } from '../reply/translate.js';
+import { buildLeadUserPrompt, LEAD_SYSTEM_PROMPT } from '../leads/prompts.js';
 
 const REPLY_TIMEOUT = 60_000;
 const DISTILL_TIMEOUT = 180_000;
@@ -25,7 +28,8 @@ const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose（F12 的 llm_calls 用）：reply、review、draft、kb_draft、media、file_describe、distill、test。
+ * purpose：reply、review、draft、kb_draft、translate、leads、media、file_describe、distill、test。F12 的 llm_calls 由 records.js 的
+ * withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
  * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number}} [opts]
  */
@@ -38,12 +42,14 @@ export function createRealAi(getSettings, opts = {}) {
     review: opts.reviewTimeoutMs ?? REPLY_TIMEOUT,
     draft: replyTimeout,
     kb_draft: replyTimeout,
+    translate: replyTimeout,
+    leads: replyTimeout,
     test: replyTimeout,
     distill: distillTimeout,
     file_describe: distillTimeout,
     media: mediaTimeout,
   };
-  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, kb_draft: 2048, media: 1024, file_describe: 1024, test: 64 };
+  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, kb_draft: 2048, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
   const modelFor = (purpose, s, withAttachments) => {
     if (purpose === 'media' || (purpose === 'file_describe' && withAttachments)) return s.media.mediaModel || s.llm.model;
@@ -59,11 +65,14 @@ export function createRealAi(getSettings, opts = {}) {
   const call = async (purpose, system, user, o = {}) => {
     const all = getSettings();
     const s = all.llm;
-    return chat({
+    const model = modelFor(purpose, all, !!o.attachments?.length);
+    // 先报格式和模型（调用失败也要记一行），成功后再报 token 数
+    reportLlmCall({ format: s.format, model });
+    const r = await chat({
       format: s.format,
       baseUrl: s.baseUrl,
       apiKey: s.apiKey,
-      model: modelFor(purpose, all, !!o.attachments?.length),
+      model,
       system,
       messages: [{ role: 'user', text: user, attachments: o.attachments }],
       // Gemini 2.5 起思考 token 也算在 maxOutputTokens 里，给小了会只思考不出字
@@ -73,6 +82,8 @@ export function createRealAi(getSettings, opts = {}) {
       signal: o.signal,
       timeoutMs: timeouts[purpose] ?? replyTimeout,
     });
+    reportLlmCall(r.usage);
+    return r;
   };
 
   const callJson = async (purpose, system, user, signal) => {
@@ -147,7 +158,7 @@ export function createRealAi(getSettings, opts = {}) {
     },
 
     /**
-     * 生成回复。返回 {category, reply, usedEntryIds, sendFileIds, handoffType, questionZh, reason}；输出解析不了时返回 null。
+     * 生成回复。返回 {category, reply, usedEntryIds, sendFileIds, handoffType, offtopicType, questionZh, reason}；输出解析不了时返回 null。
      */
     async generate({ message, history, entries, files = [], filesTruncated = false, profile, persona, canary, styleHint = null }) {
       const { text } = await call(
@@ -163,6 +174,7 @@ export function createRealAi(getSettings, opts = {}) {
         usedEntryIds: strList(data.used_entry_ids),
         sendFileIds: strList(data.send_file_ids),
         handoffType: str(data.handoff_type, 40).toLowerCase(),
+        offtopicType: str(data.offtopic_type, 40).toLowerCase(),
         questionZh: str(data.question_zh, 300),
         reason: str(data.reason, 300),
       };
@@ -201,6 +213,20 @@ export function createRealAi(getSettings, opts = {}) {
       return data;
     },
 
+    /** 会话输入框的一键翻译（用回复模型）：按客户最近的文字消息判断语言，直译业务员写的话。返回 {language, translation} */
+    async translate({ text, customerMessages }) {
+      const data = await callJson('translate', TRANSLATE_SYSTEM_PROMPT, buildTranslateUserPrompt({ text, customerMessages }));
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('翻译结果无法解析');
+      return { language: str(data.language, 20), translation: typeof data.translation === 'string' ? data.translation : '' };
+    },
+
+    /** F6：从会话最近的消息里提取客户线索（用回复模型）。返回模型给的对象，字段由 leads/store.js 规范化；不是对象时抛错 */
+    async extractLead({ contactName = '', messages }) {
+      const data = await callJson('leads', LEAD_SYSTEM_PROMPT, buildLeadUserPrompt({ contactName, messages }));
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('线索提取结果无法解析');
+      return data;
+    },
+
     /** F4：描述客户发来的图片，返回描述文本 */
     async describeImage({ mime, data }) {
       const { text } = await call('media', '', IMAGE_DESCRIBE_PROMPT, { json: false, attachments: [{ mime, data }] });
@@ -212,6 +238,8 @@ export function createRealAi(getSettings, opts = {}) {
       const all = getSettings();
       const s = all.llm;
       if (s.format === 'openai') {
+        // 转写接口不按 token 计用量，token 记 null
+        reportLlmCall({ format: 'openai', model: all.media.transcribeModel });
         const { text } = await transcribe({
           baseUrl: s.baseUrl,
           apiKey: s.apiKey,

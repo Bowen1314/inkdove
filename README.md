@@ -20,11 +20,14 @@ Dockerfile、docker-compose.yml、.env.example
   - 一个部署可以接多个号，共用一个知识库和一套 LLM 配置。每个号有自己的接入方式、自动回复开关、人设、回复范围（全部 / 白名单 / 黑名单）、通知设置和代理；
   - 两种接入方式：扫码（WAHA，GOWS 引擎）和 Meta 官方 Cloud API；
   - 回复像真人：等一会儿、标已读、显示"正在输入"、按字数等待再发；长回复按段落拆成最多 3 条；说话不带客服模板腔，不说只有机器才会说的话；
-  - 会话里能看到每条客户消息的处理结果和原因（已回复 / 转人工 · 客户要求打折 / 离题……）。
+  - 会话里能看到每条客户消息的处理结果和原因（已回复 / 转人工 · 客户要求打折 / 离题……）；
+  - 扫码号关联成功后，自动把手机里已有的聊天导进「会话」，可以当联系人名单用。导入的消息只用来看，机器人不回复、不通知、不算待处理。**WhatsApp 只给新关联的设备每个聊天最后 1 条消息**，所以每个聊天通常只导进 1 条，更早的记录看不到。
 - **转人工**：机器人拿不准、客户要人工、要折扣、想下单、问是不是机器人时，不回复客户，暂停这个会话并通知你：
   - 通知渠道：WhatsApp（由这个号发给你指定的号码）和邮件（SMTP 或 Resend API，全局配置一次）；
   - 转人工时先替你起草一条回复（可能带建议发送的文件），附在通知里，**不会自动发给客户**；
   - 在 WhatsApp 里**引用通知直接回复**，内容就会转发给客户；`/d` 发送草稿（文字和文件），`/resume` 恢复机器人。
+  - 会话页输入框旁的「翻译」按钮把你写的话直译成这位客户的语言（按客户最近的文字消息判断），译文替换输入框内容、不自动发送；草稿里建议的文件可以一键按顺序发出。
+- **客户线索**：后台每 2 分钟看一遍会话，机器人或人工处理过、客户停下来 10 分钟以上的会话，由 LLM 读最近 50 条消息整理成一条客户线索（名字、公司、国家、邮箱、意向产品、数量、阶段、摘要），客户又说话后自动更新。人工改过的字段不会被重新提取覆盖；可以立即重新提取、按阶段和号筛选搜索、导出成 Excel 能直接打开的 CSV。设置里可以关掉自动提取。
 - **多人账号**：管理员邀请业务员（邮件链接），给每人分配能看的号。业务员只看得到、只操作得了分给自己的号和会话；后台人工发的每条消息都记下是谁发的。
 - **IP 代理**：每个号可以单独走 http、https、socks4、socks5 代理。
 - **号码配置导出 / 导入**（管理员）：「号码」页右上角的更多菜单里，可以把所有号的配置（名称、接入方式、人设、自动回复、回复范围和名单、通知、代理、Meta 凭证）导出成一个 JSON 文件，再导入到别的部署或同一个部署里，用来迁移或备份。**文件里有 Meta token、app secret、代理密码等密钥的明文**，请当密码一样保管，用完删掉。导入时会新建号（新 id），扫码号要重新扫码或用配对码连接；Meta 号的回调地址会变，要到 Meta 开发者后台改成新地址；phoneNumberId 和已有号重复的 Meta 号会跳过。会话、消息和成员分配不在文件里。
@@ -247,6 +250,25 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 
   F4 用的 `media_unsupported`、`media_failed` 本来就在 F12 的枚举里。F15 新增了两个 code：blocked 的 `bad_file` 和 handoff 的 `file_limit`。
 
+## 客户线索（F6）
+
+- **表**：`leads` 每个会话一条（`conversation_id` 唯一），字段按规格的 Lead；`manual_fields` 是人工改过的字段名。`lead_stage_history(lead_id, stage, ts)`：stage 每变一次写一行，首次提取也写，人工改 stage 也写，没变不写。号名、联系人名字和号码、`lastContactAt` 读的时候从会话和号表取，不存。
+- **提取水位**：`conversations.lead_seq` 记上次提取时会话里最新一条消息的 seq，"上次提取之后有新的客户消息"就是有 seq 更大的客户消息。水位放在会话上而不是线索上，见偏离规格第 43 条。
+- **后台扫描**（`server/src/leads/store.js`，`createApp` 里启动，进程关闭时停）：每 2 分钟一次，`leads.enabled=false` 或模型没配置时什么也不做。三个条件同时满足才提取：
+  1. 水位之后有新的客户消息，**导入的历史消息（`via: "import"`）不算**；
+  2. 会话里最新一条消息（任何一方，按时间）已经过去 10 分钟；
+  3. 至少一条客户消息的 botDecision 是 replied、handoff、blocked，或者有人工消息：后台发的和 WhatsApp 转发的 operator 消息，以及**实时**收到的手机回复（owner、`via: "phone"`）。导入的手机回复不算。全是离题、skipped 的不提取。
+- **怎么提取**：读最近 50 条消息（按时间，带作者），客户的话和 WhatsApp 昵称包在 `<customer_message>` 里、尖括号转全角，当不可信数据；我方的话标成"客服（机器人/人工/手机）"。用回复模型，输出规格的 JSON。每个字段取字符串（数字转成字符串）、去首尾空白、截断（名字 100、公司 200、国家 100、邮箱 200、意向产品 500、数量 200、摘要 2000 字），没有的留空字符串；stage 不在六个取值里的按 `other`。`manualFields` 里的字段不覆盖。
+- **模型次数**：提取调用 `ctx.ai.extractLead`，在 `records.js` 的 `AI_METHOD_PURPOSE` 登记为 `leads`，自动写 `llm_calls`（带号和会话）。计入每会话每日模型上限（60 次）：调用前先记上；已到上限的后台跳过、下次扫描再试，手动重新提取返回 429。
+- **mock 规则**（`INKDOVE_LLM_MOCK=1`，只看客户的话）：含"下单""order""PI"→ order_intent；否则含"价格""价钱""price""discount"→ negotiation；否则含"样品""sample"→ sample；其余 inquiry。名字取"我叫 X""my name is X"，公司取"公司是 X""公司：X""company: X""company is X"，邮箱取第一个，数量取"数字 + 个/件/台/套/箱/pcs/pieces/units/sets"，国家和意向产品留空，摘要是"mock 提取：客户说了 N 句，最近一句是「…」"。
+- **接口**（都要登录；agent 只能看、改、重新提取、导出分配给自己的号的线索，越权 403 `forbidden`，列表和导出自动过滤，`accountId` 指定别人的号也 403）：
+  - `GET /api/leads?q=&stage=&accountId=` → `Lead[]`（直接是数组），按 `lastContactAt` 倒序。`q` 不区分大小写，匹配名字、公司、国家、邮箱、意向产品、WhatsApp 昵称和号码；`q` 是号码时可以带 `+`、空格、`-`、括号。`stage` 不是六个取值之一返回 400；
+  - `GET /api/leads/:id`，不存在 404；
+  - `PUT /api/leads/:id`：只认 `name company country email interest quantity stage summary`，别的字段忽略；值必须是字符串，stage 必须在枚举里，邮箱非空时要像邮箱，超长 400；一个能认的字段都没有也 400。传了的字段都并进 `manualFields`，返回完整的 Lead；
+  - `DELETE /api/leads/:id`：只有 admin（agent 一律 403），同时删掉它的阶段历史，返回 `{ok: true}`；
+  - `POST /api/leads/:id/refresh`：同步提取并返回最新的 Lead，不看三个触发条件。模型没配置（不是 mock）400 `llm_not_configured`；超每日上限 429 `llm_daily_limit`；模型出错或输出解析不了 502 `llm_error`；
+  - `GET /api/leads/export.csv?q=&stage=&accountId=`：筛选和权限同列表。UTF-8 带 BOM，CRLF 换行，附件名 `inkdove-leads-YYYYMMDD.csv`（服务器本地日期），`cache-control: no-store`。表头：名字、公司、国家、邮箱、WhatsApp 号码、WhatsApp 昵称、所属号、意向产品、数量、阶段、摘要、最近联系、提取时间、更新时间；阶段导出中文（`server/src/codes.js` 的 `LEAD_STAGES`，看板以后也用它），时间是服务器本地时间 `YYYY-MM-DD HH:mm`（容器可用 TZ 环境变量调整）。含逗号、双引号、换行的单元格按 RFC 4180 加引号转义；以 `=` `+` `-` `@`（以及制表符、回车）开头的单元格前面加单引号，防公式注入。
+
 ## 偏离规格
 
 1. **Meta Graph API 默认版本是 `v26.0`**。规格示例写的是 v23.0，这里按 Meta 的版本变更日志用了核实时最新的版本，号详情里可以改。
@@ -254,16 +276,16 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 3. **https 上游的中继没有自动化测试**。测试用自签名证书时 TLS 校验会失败；socks4、socks5 两条路径有完整测试（假上游 + 假目标服务）。中继的随机凭证明文存在 SQLite 里。
 4. **只用于测试的覆盖项**：
    - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
-   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）只能通过 `createApp` 的选项覆盖。
+   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）、进入 WORKING 后等多久再导入已有聊天（`historyImportDelayMs`）、客户线索的扫描间隔（`leadsScanIntervalMs`，0 表示不启动定时扫描，测试里手动调 `ctx.leads.scan()`）只能通过 `createApp` 的选项覆盖。
 5. **LLM 参数**：
    - openai 格式不发 `max_tokens`，因为 OpenAI 的新模型只认 `max_completion_tokens`，而很多兼容接口只认 `max_tokens`；
-   - anthropic 格式的 `max_tokens` 是：回复 2048、审核 512、蒸馏 8192；
+   - anthropic 格式的 `max_tokens` 是：回复 2048、审核 512、蒸馏 8192、客户线索提取 1024；
    - gemini 格式的 `maxOutputTokens` 至少 8192，因为 Gemini 2.5 起思考 token 也算在里面；
    - 三种格式都只靠宽容解析拿 JSON，只有 gemini 加了 `responseMimeType: "application/json"`；
    - anthropic 和 gemini 的 thinking/thought 块都会跳过。
 6. **规格没定的错误码**：
    - 400 `invalid_input`（参数校验失败）、`channel_immutable`、`wrong_channel`（Meta 号调扫码或代理接口）、`proxy_disabled`、`account_deleted`（从已删除号的会话发消息）；
-   - 404 `not_found`；409 `gap_closed`（缺口已经不是 open）、`not_scan_qr`；
+   - 404 `not_found`；409 `gap_closed`（缺口已经不是 open）、`not_scan_qr`；429 `llm_daily_limit`（F6 手动重新提取线索时这个会话当天的模型次数已用完）；
    - 502 `waha_error`（WAHA 返回错误）、`relay_failed`（中继起不来，比如端口被占用）；
    - 401 `bad_signature`（webhook 签名不对）；403 `meta_not_configured`（这个号没配 app secret 时收到 Meta webhook）；403 `forbidden`（Meta 校验 token 不对，或没有权限）。
    - agent 访问别人的号时，先判权限再判存在：不存在的号也返回 403，探不出别人的号是否存在。
@@ -286,8 +308,8 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 19. **会话"连上时间"的判定**：服务在 webhook 或状态查询里看到 session 从非 WORKING 变成 WORKING 时，才记为连上时间。早于"进程启动时间和连上时间中较晚的那个"减 60 秒的消息会被忽略。
 20. **网址抓取的 SSRF 防护**：每一跳重定向都会重新解析并校验 IP。DNS 解析和实际连接之间仍有极短的 rebinding 窗口；要彻底消除需要自定义 DNS lookup，这里没做。
 21. **非文字消息**：F4 的识别关着、号没开自动回复、会话已暂停或模型没配置时，仍按第一期处理：不下载，只存"[图片]""[语音]"之类的标记，记 skipped，标 needsHuman 并通知。其他情况见 F4。
-22. **F12 的处理记录还没落库**（C 段做）：回复引擎给出 F12 枚举的 `code`，服务里留了 `onDecision` 钩子，每轮处理调一次；`/api/kb/ask` 也返回 `code`。模型判的 handoff 按 `handoff_type` 映射成 code（见上文的表）；模型判的 offtopic 仍记 `other`，审核判的离题记 `review_offtopic`。
-23. **F12 枚举外新增的 code**：blocked 的 `bad_file` 和 handoff 的 `file_limit`（F15 的规格里定了，但 F12 的表里没列）。看板的 code 枚举和中文标签要把这两个加上。
+22. **F12 的处理记录**：每轮处理（合并的几条消息算一轮）在 `decisions` 表写一行，skipped 不写；`onDecision` 钩子保留，同一行再传一份。后台测试对话（`/api/kb/ask`）不写处理记录（和第 25 条的缺口清单一样，免得测试混进统计），但它调的模型照样记进 `llm_calls`（号和会话为空）。模型判的 handoff 按 `handoff_type` 映射成 code（见上文的表）；模型判的 offtopic 按新增的输出字段 `offtopic_type`（`task`、`chitchat`、`injection`、`other`）原样作为 code，没给或不认识的记 `other`；审核判的离题记 `review_offtopic`。
+23. **F12 枚举外新增的 code**：blocked 的 `bad_file` 和 handoff 的 `file_limit`（F15 的规格里定了，但 F12 的表里没列），以及 F11 的 `declined`（decision 和 code 都是 `declined`）。所有 code、模型调用用途、首次回复方式的中文标签放在 `server/src/codes.js`，看板和通知共用；通知里原来的原因文案（`NOTIFY_REASONS`）也挪到了这里，文案没变。
 24. **草稿只在回复引擎判 handoff 或 blocked 时生成**。以下几种情况不生成，照常通知：
     - 每小时回复超限（`rate_limit`）：本来就是在限流；
     - 语音图片识别失败或超限：模型看不到内容；
@@ -337,16 +359,77 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
     - 日志里的手机号只留后 4 位。
 35. **号码配置导出 / 导入（规格外新增，只有 admin，agent 403）**：
     - 导出：`GET /api/accounts/export`，附件 `inkdove-accounts-YYYYMMDD.json`（按导出时间的 UTC 日期），`cache-control: no-store`。内容是 `{format: "inkdove-accounts", version: 1, exportedAt, accounts: [...]}`，每个号是 `{name, channel, autoReply, persona, scope, allowlist, blocklist, waha: {proxy: {enabled, protocol, host, port, username, password}} | null, meta: {phoneNumberId, apiVersion, verifyToken, accessToken, appSecret} | null, notify}`，结构和号详情接口一致，只是**密钥是明文**，不是 `passwordSet` 这类标记。不导出 id、WAHA session 名、状态、时间、会话和消息、成员分配。日志只记谁导出了几个号，不记内容；
-    - 导入：`POST /api/accounts/import`，multipart，字段 `file`（和其他上传接口一样），最大 2MB，可以带 UTF-8 BOM。返回 `{created: [{id, name}], skipped: [{name, reason}]}`；
+    - 导入：`POST /api/accounts/import`，multipart，字段 `file`（和其他上传接口一样），最大 2MB，可以带 UTF-8 BOM。返回 `{created: [{id, name, notices?}], skipped: [{name, reason}]}`，`notices` 是字符串数组，只有这个号导入时被自动调整过才有；
     - 校验：先整份校验再建号，有一个号不合法就整体 400，一个都不建。不是 JSON、`format` 不对、`accounts` 不是数组返回 `bad_format`，`version` 不是 1 返回 `unsupported_version`。每个号的校验和新建、更新共用，错误信息形如「第 2 个号（销售一号）：proxy.port 必须是 1–65535 的整数或 null」，错误码沿用原来的；缺的字段按新建号的默认值；
-    - 开了邮件通知的号，在还没配置发信方式的部署里导入会 400 `email_not_configured`（和更新号时一样严），要先在设置里配置发信方式，或者把文件里的 `notify.email.enabled` 改成 false；
+    - 开了邮件通知的号，在还没配置发信方式的部署里导入时不会让整批失败：这个号的邮件通知自动关掉（收件人 `to` 保留），`created` 里对应那一项带 `notices: ["没配发信方式，已关掉邮件通知"]`，导入后在设置里配好发信方式再把它打开就行（新建、更新号时仍然严格 400 `email_not_configured`）；其余校验错误照旧整体 400；
     - 新建：在一个事务里逐个建，新 id、新 session 名，WAHA session 不自动建也不启动。名称可以重复。Meta 号的 phoneNumberId 和已有的号、或文件里前面的号重复时跳过并写明原因，空的不算重复。
+36. **关联后导入已有聊天（规格外新增，只有扫码号）**：关联时手机同步过来的旧聊天，WAHA 存着但不推 webhook（历史消息不触发 `message` 事件），所以刚关联的号「会话」是空的。现在号进入已连接后，服务自己去 WAHA 拉一次：
+    - 触发：服务看到号从非 WORKING 变成 WORKING 时（webhook 的 `session.status` 或状态查询），包括服务启动后第一次看到它是 WORKING。服务启动时会顺手查一次所有扫码号的状态（不等结果），所以已经连着的号重启服务就会导入，不用重新关联。看到 WORKING 后等 10 秒再拉，给手机同步历史留时间（同步要多久没在真机上核实）。在后台跑，不耽误 webhook 响应；同一个号同时只跑一次，正在等或正在跑时再次连上不会叠着再跑。Meta 号没有历史接口，不导入；
+    - 范围：先拉聊天列表（最多 100 个，WAHA 返回的顺序没核实，聊天更多时不保证是最近的 100 个），每个聊天最多取 20 条（WhatsApp 现在只给 1 条，留余量），不下载媒体。哪些聊天收和 webhook 入站完全一样：群、广播（含 `status@broadcast`）、频道不收，通知号码不收，号的黑白名单照常判断（lid 先换算成手机号）。聊天对象取 chat id（历史消息的 `to` 是 null），`@s.whatsapp.net` 记成 `@c.us`；
+    - 只收早于"连上时间"减 60 秒（见第 19 条）的消息，正好是 webhook 会当旧消息忽略的那部分；更新的交给 webhook 照常处理和自动回复，两边不会抢同一条。代价是连上前 60 秒内、又没被 webhook 推过来的消息两边都不收。掉线重连、重启服务时会再导入一次，这时补进来的是断线期间漏掉的消息，同样只存不回；
+    - 静默：不自动回复、不调模型、不识别语音图片、不记缺口、不发通知、不标待处理、不暂停、不占每日模型次数、不调处理记录钩子。消息标 `via: "import"`、已处理，时间用 WhatsApp 的原始时间；客户消息记 `skipped`，原因"导入的历史消息，机器人不处理"；本人在手机上发的（fromMe）存成 F12 的 `author: "owner"`，会话里显示"手机回复"。媒体只存"[媒体消息]"之类的标记，和没开识别的入站媒体一样；
+    - 会话：没有就新建，已有（比如新消息先到）就并进去。新会话的创建时间取最早一条导入消息的时间，更新时间取最新一条，不用"现在"，免得会话列表排序乱、按天的统计虚高；已有会话的更新时间只会往后推，不会被旧消息拨回去。名字取聊天列表里的名字，号码按 chat id 换算，都只补空的，不覆盖 webhook 写进去的；
+    - 去重：按消息 id（同一会话内），id 前缀不同但最后一段相同的也算同一条（和引用匹配一样，见第 14 条）。重复导入不会重复；导入过的消息 webhook 再推也按 id 去重；
+    - 已知限制：消息按入库顺序显示，所以导入之前几秒里客户刚好发了新消息时，旧消息会排在新消息后面，会话预览也会暂时显示这条旧消息。同一个联系人在 WAHA 聊天列表里和 webhook 里用的 chat id 不一样时（比如一边 `@lid` 一边 `@c.us`），会分成两个会话；
+    - 日志：每次导入一行汇总（导进几个聊天、几条消息，跳过几条，范围外和读取失败的聊天各几个），不记号码和内容；读单个聊天失败只计数。
+37. **F12 手机上发的消息（只有扫码号，Meta 没有这一项，收到 fromMe 的一律忽略）**：
+    - 事件：webhook 订阅从 `message` 改成 `message.any`（别人发的和自己发的都推，payload 一样），仍兼容 `message`。已有的号：服务启动时发现 inkdove 管理的那部分配置指纹（第 2 条）变了，就在后台 PUT 一次新配置。按 WAHA 文档，运行中的 session 会被自动 stop 再 start（不登出），所以升级后第一次启动，每个已连接的号会短暂断开重连，重连后按第 36 条再导入一次（按 id 去重，不会重复）。从没推过配置的号（还没建 session）不动；WAHA 连不上只记日志，下次「开始扫码连接」时再推；
+    - 聊天对象：GOWS 自己发的消息 `from` 是聊天对象、私聊的 `to` 是 null，WEBJS 是 `from` 自己、`to` 聊天对象（见「已核实的外部接口」）。代码先取原始消息的 `_data.Info.Chat`，没有时 `from` 是群、广播、频道就用 `from`，否则 `to` 优先；
+    - 回声剔除，命中一条就丢掉：① WAHA 标了 `source: "api"`（经 WAHA 的 API 发出）；② message id 对得上本服务最近 10 分钟经 API 发出的消息（完整 id 或最后一段，和第 14 条一样）；③ 同一个 chat、去掉首尾空白后文字相同、30 秒内。③ 是给回声比 API 响应先到的情况用的：发请求之前就记下文字，id 等 API 返回再补。WAHA 标了 `source: "app"`（手机等其他设备发的）时不用 ③。经 API 发的包括机器人回复、后台人工、F3 转发和回执、通知、文件（文件按说明文字比，没说明时是空）。这份记录在内存里，重启后清空，重启前发的消息的回声由数据库里的 id 去重兜住（通知不进会话，发给通知号码的本来就不存）；
+    - 已知误判：引擎不给 `source` 时，机主 30 秒内在同一个会话里手动发了和机器人一字不差的文字，或者机器人发了不带说明的文件后 30 秒内机主发了不带说明的媒体，会被当成回声丢掉；
+    - 存：只存回复范围内的私聊（黑白名单照常判断，通知号码不存），`author: "owner"`、`via: "phone"`、方向 out、已发送、已处理，时间用 WhatsApp 的时间，媒体只存标签。会话没有就新建，名字留空（fromMe 消息里的 pushName 是机主自己），号码只补空的。和导入（第 36 条）用同一套 id 去重：同一会话内完整 id 或最后一段相同就算同一条，导入过的 webhook 再推不重复，反过来也一样；
+    - 不影响机器人：不暂停、不取消防抖和拟真发送、不标待处理、不通知、不调模型、不写处理记录，只用来填转人工记录的 `phone` 首次回复。不过机器人之后生成回复时，它会以"[客服]"出现在历史里，和导入的手机回复一样。
+38. **F12 转人工记录（`handoffs`）**：
+    - needsHuman 从 false 变 true 时新建一行，code 用这次转人工的 code（非文字消息 `media_unsupported`，限流 `rate_limit`，其他取回复引擎或识别的结果）。还在待处理时再次转人工不新建；
+    - 首次回复：开着的那一行（还没有首次回复、也没恢复）由第一条人工消息填。后台发的（文字或文件，只算发送成功的）记 `admin_ui` 和发送人；通知号码引用转发的记 `whatsapp_relay`，发送人为空；手机上发的记 `phone`，时间取服务收到的时间，因为 WhatsApp 的时间只到秒，还可能和服务器时钟有偏差，会早于开始时间。导入的手机回复不算；
+    - 恢复机器人（后台按钮、`/resume`）时，开着的行都填 `resumedAt`；
+    - F11 判 declined 不算转人工，不建行。
+39. **F12 模型调用（`llm_calls`）**：
+    - 每次逻辑调用一行（`ctx.ai` 的每个方法一次），接口内部的重试（429、5xx）不另算。purpose 有：
+      - 规格里的：`reply`（生成回复）、`review`（审核）、`draft`（起草）、`kb_draft`（存知识库）、`distill`（整理资料和题目）、`media`（语音图片识别）、`test`（测试连接）；
+      - `leads`：F6 客户线索提取（`ctx.ai.extractLead`），计入会话每日模型次数；`redteam` 先留着，调用方用 `llmScope({purpose})` 覆盖；
+      - 规格外新增：`file_describe`（F15 产品资料描述）和 `translate`（会话输入框的一键翻译，另做，不计入会话每日模型次数）。新加调模型的方法要在 `server/src/records.js` 的 `AI_METHOD_PURPOSE` 里登记，否则不记；
+    - model 记设置里的模型名，不是接口返回的带日期版本，按它和 `pricing` 对单价；
+    - token：
+      - openai 取 `usage.prompt_tokens` 和 `completion_tokens`；
+      - anthropic 的输入是 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`，输出是 `output_tokens`。缓存读写的单价和普通输入不一样，这里都按普通输入算，所以成本是估算；
+      - gemini 的输入是 `promptTokenCount`，输出是 `candidatesTokenCount + thoughtsTokenCount`；
+      - 没有用量字段记 null，只缺一部分时缺的按 0 加。OpenAI 语音转写接口不返回 token，记 null；
+    - ok：方法正常返回记 1，抛错记 0。模型回了但 JSON 解析不了、按原有逻辑不抛错的，记 1。真实模式下在发请求之前就出错的（比如 anthropic 格式不支持语音）没调模型，不写；
+    - mock 模式也写，format 和 model 记 `mock`，token 为 null；
+    - 号和会话：处理会话时的调用（回复、审核、起草、识别、存知识库）带上；整理资料、文件描述、测试连接和后台测试对话为空。
+40. **F11 回复引擎判拒绝（declined）**：
+    - 回复引擎新增 category `declined`，表示客户明确说不需要、没兴趣、别再联系。"再考虑一下"这类犹豫、"太贵了"这类嫌贵不算；嫌贵按价格规则转人工，prompt 里写明了；
+    - 判 declined 时：不回复、不通知、不起草、不记缺口；会话暂停机器人（botPaused=true），needsHuman 保持 false；客户消息 botDecision=declined，前端显示"客户拒绝·已停止"；处理记录 decision 和 code 都是 declined。这一轮之后还没处理的消息记 skipped。管理员恢复机器人后照常回复；
+    - F11 外联：服务里留了 `customerDeclined()`，`createApp` 的选项 `onDeclined` 会收到 `{accountId, conversationId, ts}`。外联做了以后，在这里给 Recipient 记 declinedAt；
+    - mock 规则：含"不需要""not interested""no thanks"的判 declined；含"太贵""too expensive"的按价格转人工，原因是"客户嫌贵"。
+41. **模型单价 `pricing`**（全局设置，只有 admin）：`[{model, inputPerMillion, outputPerMillion}]`，单位是美元每百万 token，PUT 时整体替换。
+    - 校验：必须是数组，最多 200 行，每行是对象；model 去掉首尾空白后 1–200 字，不能重复（区分大小写）；两个单价是 0–100000 的数字。多余字段丢掉；
+    - 不合法返回 400 `invalid_input`，错误信息以 `pricing` 开头；数据库里存坏了的读出来当空表。
+42. **这次没做的 F12 部分**：看板接口 `/api/dashboard`。`lead_stage_history` 已随 F6 建好（见「客户线索（F6）」）。
+43. **F6 客户线索里规格没定、按自己理解做的**：
+    - **删除后不会被旧消息再提取出来**：提取水位存在 `conversations.lead_seq` 上，删线索时把水位推到会话当前最新的消息。之后客户又发了新消息、满足三个条件时，会再提取出一条新线索（新 id）；
+    - **`lastContactAt`** 是会话里最新一条消息（任何一方，含导入的）的时间，读的时候算，不存；列表按它倒序；
+    - **`leads.enabled=false` 只停后台扫描**，手动「重新提取」照样能用（也计入每日模型次数）；
+    - **超每日上限的错误码**：规格没定，手动重新提取返回 429 `llm_daily_limit`；后台扫描跳过、下次再试；
+    - **后台提取失败**（模型报错、输出解析不了）的会话 30 分钟内不再试（记在内存里，重启清空），免得反复调模型把这个会话当天的回复次数用光；一次扫描最多提取 20 个会话，其余的下次接着来；同一个会话同时只提取一次，后台正在提取时点「重新提取」等那次的结果；
+    - **PUT 里"改过的字段"按请求体里出现的字段算**（前端只发改动的字段），值和原来一样也记进 `manualFields`；不认识的字段忽略，而不是 400；
+    - **agent 删除**：F8 权限表里 agent 没有删除线索，所以 agent 删自己号的线索也是 403；
+    - **CSV 里的号码**写成 `+` 加数字，按防公式注入的规则前面会多一个单引号（`'+8613900000000`），这样 Excel 不会把号码显示成科学计数法；
+    - **country** 让模型写中文国名、聊天里明确提到才填；看板的国家分布（F12）按规格从号码解析，不用这个字段。
 
 ## 已核实的外部接口
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
   - webhook 的 events 和 HMAC（`X-Webhook-Hmac`，sha512，对原始 body 计算），见 [events](https://waha.devlike.pro/docs/how-to/events/)；
+  - `message.any`：别人发的和自己发的都推，payload 和 `message` 一样；`source` 字段经 WAHA API 发出的是 `api`，否则是 `app`。见 [events](https://waha.devlike.pro/docs/how-to/events/)；
+  - GOWS 的消息结构，按 core 分支源码 [session.gows.core.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/core/engines/gows/session.gows.core.ts) 的 `toWAMessage`（这是最新源码，没对到 2026.9.2 这个版本）：
+    - `from` 是原始消息的 `Info.Chat`（自己发的也是），`to` 私聊是 null、群里是发送人；`_data` 是原始消息；
+    - id 是 `<IsFromMe>_<chat>_<ID>`，群里再接 `_<participant>`，所以按最后一段匹配 id 的做法成立；
+    - `source`：发送设备和 WAHA 自己的设备是同一个时是 `api`，否则 `app`（枚举见 [responses.dto.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/structures/responses.dto.ts)）；
+    - `message` 只推别人发的，`message.any` 推全部；
+    - 注意：下面「读已有聊天」实测 fromMe 的 `from` 是机主自己的号，和这份源码不一致。代码先取 `_data.Info.Chat`，两种都兼容；
   - sendText、标已读 `POST /api/sendSeen {session, chatId, messageIds}`（GOWS 支持 messageIds），见 [send-messages](https://waha.devlike.pro/docs/how-to/send-messages/)；
   - 正在输入 `POST /api/{session}/presence {chatId, presence: "typing" | "paused"}`，WAHA 不会自动发，见 [presence](https://waha.devlike.pro/docs/how-to/presence/)；
   - 入站消息的 `replyTo`（`id` 不带前缀），见 [message.dto.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/structures/message.dto.ts)；
@@ -360,6 +443,12 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
   - `POST /api/sessions/{name}/logout`（10-12 实测，GOWS 2026.9.2）：返回 201，会话自己重启，1 秒内进入 `SCAN_QR_CODE` 并一直停在那里等关联，不用再 start。这里登出后照样补一次 start：会话已经到 SCAN_QR_CODE 时按上一条是无害的；还在 STARTING 时 start 的结果没实测，代码容忍 422；
   - 发文件和图片：`POST /api/sendFile`、`POST /api/sendImage`，体是 `{session, chatId, file: {mimetype, filename, data} | {mimetype, filename, url}, caption?}`。data 是不带 `data:` 前缀的 base64，返回体顶层有 `id`。见 [send-messages](https://waha.devlike.pro/docs/how-to/send-messages/) 和 [files.dto.ts](https://github.com/devlikeapro/waha/blob/core/src/structures/files.dto.ts)；
   - GOWS 支持 sendImage 和 sendFile，见 [engines](https://waha.devlike.pro/docs/how-to/engines/) 和 [session.gows.core.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/core/engines/gows/session.gows.core.ts)。按 [changelog](https://waha.devlike.pro/docs/overview/changelog/) 和 [waha-plus](https://waha.devlike.pro/docs/how-to/waha-plus/)，从 2026.6.1 起原来 Plus 的功能并入了 Core；
+  - 读已有聊天（2026-10-12 实测，GOWS 2026.9.2，Core）：
+    - `GET /api/{session}/chats?limit=N` 返回 `[{id, name, conversationTimestamp}]`；
+    - `GET /api/{session}/chats/overview?limit=N` 返回 `[{id, name, picture, lastMessage, _chat: {id, name, conversationTimestamp}}]`，顶层 `name` 实测是 null，名字在 `_chat.name`。导入用的是上一个接口；
+    - `GET /api/{session}/chats/{chatId}/messages?limit=N&downloadMedia=false` 返回消息数组，字段 `id, timestamp(秒), from, fromMe, source, body, to, participant, hasMedia, media, ack, ackName, replyTo, location, vCards, _data`。`to` 实测是 null（fromMe 的也是），`media` 是 null，所以聊天对象只能从 chat id 取；
+    - chat id 实测是 `<号码>@c.us`（私聊）和 `<id>@g.us`（群），NOWEB 引擎还见过 `@s.whatsapp.net` 和 `@lid`；
+    - 新关联的设备，WhatsApp 每个聊天只同步最后 1 条消息（实测 26 个聊天，每个 1 条，最早的是 2022 年的，不少是本人发的）。这些历史消息不会触发 webhook 的 `message` 事件；
   - 收媒体：入站消息带 `hasMedia` 和 `media: {url, mimetype, filename, error}`。url 指向 WAHA 的 `/api/files/...`，主机名按 `WAHA_BASE_URL` 拼，下载要带 `X-Api-Key`。`WAHA_EVENTS_DOWNLOAD_MEDIA` 默认是 true，文件默认保留 180 秒（`WHATSAPP_FILES_LIFETIME`）。见 [receive-messages](https://waha.devlike.pro/docs/how-to/receive-messages/) 和 [config](https://waha.devlike.pro/docs/how-to/config/)。
 - **Meta**：
   - webhook 校验和签名，见 [getting started](https://developers.facebook.com/docs/graph-api/webhooks/getting-started)；
@@ -379,6 +468,10 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
   - Anthropic，见 [Messages](https://platform.claude.com/docs/en/api/messages)、[versioning](https://platform.claude.com/docs/en/api/versioning)、[errors](https://platform.claude.com/docs/en/api/errors)；
   - Gemini，见 [generateContent](https://ai.google.dev/api/generate-content)、[thinking](https://ai.google.dev/gemini-api/docs/generate-content/thinking)、[API versions](https://ai.google.dev/gemini-api/docs/api-versions)；
   - OpenAI，见 [chat completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)；
+  - token 用量（F12）：
+    - OpenAI 是 `usage.prompt_tokens`、`usage.completion_tokens`，见 [chat completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)；
+    - Anthropic 是 `usage.input_tokens`、`cache_creation_input_tokens`、`cache_read_input_tokens`、`output_tokens`，其中 `input_tokens` 不含缓存部分，见 [Messages](https://platform.claude.com/docs/en/api/messages) 和 [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)；
+    - Gemini 是 `usageMetadata.promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount`，见 [generateContent](https://ai.google.dev/api/generate-content)；
   - 识图和语音：
     - OpenAI：图片用 `image_url` 传 data URL，见 [images-vision](https://developers.openai.com/api/docs/guides/images-vision)。语音用 `POST /audio/transcriptions`，multipart 带 `file` 和 `model`，返回 `{text}`，上限 25MB，见 [speech-to-text](https://developers.openai.com/api/docs/guides/speech-to-text) 和 [transcriptions](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。ogg 的支持两份官方文档说法不一致：指南页没列 ogg，[Python reference](https://developers.openai.com/api/reference/python/resources/audio/subresources/transcriptions/methods/create) 列了。WhatsApp 的 ogg/opus 语音要用真样本试一次；
     - Anthropic：图片用 `{type: "image", source: {type: "base64", media_type, data}}`，每张不超过 10MB，不支持音频，见 [vision](https://platform.claude.com/docs/en/build-with-claude/vision)；
