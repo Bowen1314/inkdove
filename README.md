@@ -43,6 +43,16 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+也可以不在本地编译，直接拉发布好的镜像（推 `v*` 标签时由 GitHub Actions 自动构建，支持 amd64 和 arm64）：
+
+```bash
+# 仓库是私有的：先用带 read:packages 权限的 GitHub token 登录一次
+echo <token> | docker login ghcr.io -u <GitHub 用户名> --password-stdin
+docker compose pull && docker compose up -d
+```
+
+发新版：把 `server/package.json` 和 `web/package.json` 的 version 改成新版本号并提交，然后 `git tag v0.2.0 && git push origin v0.2.0`。
+
 然后打开 `http://127.0.0.1:8794`，用 `.env` 里的管理员邮箱和密码登录：
 
 1. **设置 → 模型**：填 LLM 的接口格式（openai / anthropic / gemini）、地址、key 和模型，点"测试连接"。

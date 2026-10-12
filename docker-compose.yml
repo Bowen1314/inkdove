@@ -1,7 +1,8 @@
 services:
   kbwa:
+    # 用发布好的镜像：docker compose pull && docker compose up -d；本地改了代码用 --build 现编
     build: .
-    image: kbwa:latest
+    image: ghcr.io/bowen1314/whatsapp-agent:latest
     # 固定主机名：WAHA 经 kbwa:<端口> 连到 kbwa 起的代理中继（F13）
     hostname: kbwa
     restart: unless-stopped

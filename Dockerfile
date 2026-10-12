@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# 1) 构建前端
-FROM node:22-slim AS web
+# 1) 构建前端（产物和平台无关，只在构建机的架构上跑一次）
+FROM --platform=$BUILDPLATFORM node:22-slim AS web
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
