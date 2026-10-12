@@ -143,7 +143,7 @@ export async function safeFetch(url) {
     const res = await fetch(u, {
       redirect: 'manual',
       signal: AbortSignal.timeout(PAGE_TIMEOUT_MS),
-      headers: { 'user-agent': 'KBWA/0.1 (+knowledge-base importer)', accept: 'text/html,text/plain,*/*;q=0.5' },
+      headers: { 'user-agent': 'Inkdove/0.1 (+knowledge-base importer)', accept: 'text/html,text/plain,*/*;q=0.5' },
     });
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       await res.body?.cancel().catch(() => {});

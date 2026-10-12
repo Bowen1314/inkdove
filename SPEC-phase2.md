@@ -1,4 +1,4 @@
-# KBWA 第二期规格（在 SPEC.md 基础上增改）
+# 墨鸽 第二期规格（在 SPEC.md 基础上增改）
 
 阅读顺序：先读 SPEC.md，再读本文件。**两者冲突时以本文件为准。** 本文件没提到的部分，仍按 SPEC.md 执行。
 
@@ -27,7 +27,7 @@
 ## P0 开源准备
 
 - 根目录加：
-  - `LICENSE`：MIT，版权行写 `Copyright (c) 2026 KBWA contributors`；
+  - `LICENSE`：MIT，版权行写 `Copyright (c) 2026 Inkdove contributors`；
   - `.gitignore`：node_modules、data/、.env、web/dist、*.log。
 - 代码和默认配置里不许出现任何具体的私人域名、IP、key 或邮箱，示例统一用 example.com。
 - `README.md` 用中文写，章节如下：
@@ -50,7 +50,7 @@ User：
 ```
 - `pending=true` 表示已邀请、还没设置密码。
 - `accountIds` 只对 agent 有意义，是分配给这个人的 WhatsApp 号。admin 默认能看到所有号。
-- 第一次启动、库里还没有用户时，用 `KBWA_ADMIN_EMAIL` 和 `KBWA_ADMIN_PASSWORD` 建第一个 admin。这两个变量缺任何一个都拒绝启动；密码少于 12 个字符也拒绝启动。之后再改这两个环境变量不会影响已有的账号。
+- 第一次启动、库里还没有用户时，用 `INKDOVE_ADMIN_EMAIL` 和 `INKDOVE_ADMIN_PASSWORD` 建第一个 admin。这两个变量缺任何一个都拒绝启动；密码少于 12 个字符也拒绝启动。之后再改这两个环境变量不会影响已有的账号。
 - 密码用 Node 自带的 `crypto.scrypt` 加盐哈希，不引入原生依赖。新设的密码至少 10 个字符。
 
 ### 权限
@@ -79,7 +79,7 @@ User：
   - `POST /api/invites/:token/accept` `{name?, password}`：设置密码并直接登录。token 一次性有效，有效期 7 天。
 - 成员管理（仅 admin）：
   - `GET /api/users`
-  - `POST /api/users` `{email, name, role, accountIds}` → `{user, inviteUrl}`。inviteUrl 的格式是 `KBWA_PUBLIC_BASE_URL/invite/<token>`，由管理员自己复制发给对方，系统不发邮件。
+  - `POST /api/users` `{email, name, role, accountIds}` → `{user, inviteUrl}`。inviteUrl 的格式是 `INKDOVE_PUBLIC_BASE_URL/invite/<token>`，由管理员自己复制发给对方，系统不发邮件。
   - `PUT /api/users/:id` `{name?, role?, accountIds?, disabled?}`：停用后，这个人的所有会话立即失效。
   - `DELETE /api/users/:id`
   - `POST /api/users/:id/reset-link` → `{resetUrl}`
@@ -100,14 +100,14 @@ User：
 
 - 全局 `email`（只有 admin 能改）：
   - `provider`：`null | "smtp" | "resend"`。
-  - `from`：发件人，例如 `KBWA <notify@example.com>`。
+  - `from`：发件人，例如 `墨鸽 <notify@example.com>`。
   - `smtp`：同 SPEC.md 原来的 SMTP 字段。密码通过写入专用字段 `email.smtp.password` 设置。
   - `resend`：API key 通过写入专用字段 `email.resend.apiKey` 设置，只显示是否已设置和后四位。
 - Resend：`POST https://api.resend.com/emails`，`Authorization: Bearer <key>`，JSON body 带 from、to（数组）、subject、text，可选 html。成功时从返回里取 id。
   - 422 和 4xx 的错误信息要可读，比如 from 的域名没在 Resend 验证过；
   - 429 重试 1 次；
   - 实现前先查 resend.com 官方文档核实；
-  - 地址可以用仅测试用的 `KBWA_RESEND_API_URL` 覆盖，写进 README「偏离规格」。
+  - 地址可以用仅测试用的 `INKDOVE_RESEND_API_URL` 覆盖，写进 README「偏离规格」。
 - 两种发信方式实现同一个 `sendEmail({to, subject, text, html?})` 接口。通知、测试邮件都只调这个接口。
 - `POST /api/settings/email/test` `{to}`（admin）：发一封测试邮件，返回 `{ok:true}` 或 `{ok:false, error}`，HTTP 状态都是 200。
 - SPEC.md 第一期里全局的 `notify.email` 和 `/api/settings/notify/test` 由这一节加上 F7 的号级 `notify` 取代。
@@ -294,19 +294,19 @@ Recipient：
 ## F13 代理协议转换中继 + 红线词表减少误伤
 
 ### 代理中继
-- 第一期核实的结果：WAHA 的 GOWS 引擎只支持 HTTP 代理，因为它把代理地址写死成 `http://host:port`。但需求是四种协议都要能用，所以由 kbwa 做协议转换：
+- 第一期核实的结果：WAHA 的 GOWS 引擎只支持 HTTP 代理，因为它把代理地址写死成 `http://host:port`。但需求是四种协议都要能用，所以由 inkdove 做协议转换：
   - 上游是 `http`：直接把它交给 WAHA，和第一期一样。
-  - 上游是 `https`、`socks4` 或 `socks5`：kbwa 为这个号启动一个**本地 HTTP CONNECT 中继**。WAHA session 的代理指向这个中继，即 `server: "kbwa:<port>"`，再加上随机生成的账号和密码。中继收到 CONNECT 后，按上游协议连过去：
+  - 上游是 `https`、`socks4` 或 `socks5`：inkdove 为这个号启动一个**本地 HTTP CONNECT 中继**。WAHA session 的代理指向这个中继，即 `server: "inkdove:<port>"`，再加上随机生成的账号和密码。中继收到 CONNECT 后，按上游协议连过去：
     - https：先用 TLS 连上代理本身，再发 CONNECT；
     - socks4 和 socks5：用 `socks` 这个成熟的 npm 包建立连接。
 - 中继的约束：
-  - 只监听 compose 内网，不映射到宿主机端口；端口从 `KBWA_PROXY_RELAY_PORT_BASE`（默认 18000）开始，每个号分一个。
+  - 只监听 compose 内网，不映射到宿主机端口；端口从 `INKDOVE_PROXY_RELAY_PORT_BASE`（默认 18000）开始，每个号分一个。
   - 必须校验 Proxy-Authorization，凭证每个号各自随机生成，存进数据库。
   - 只放行 CONNECT 方法，其他方法一律返回 405。
-  - 号的代理配置一改，中继就重启，同时更新 WAHA session，规则同 SPEC.md 4.5。kbwa 进程重启时，按配置重新拉起所有中继。
-- compose 里 kbwa 服务的主机名要固定为 `kbwa`，WAHA 才能连到中继。
+  - 号的代理配置一改，中继就重启，同时更新 WAHA session，规则同 SPEC.md 4.5。inkdove 进程重启时，按配置重新拉起所有中继。
+- compose 里 inkdove 服务的主机名要固定为 `inkdove`，WAHA 才能连到中继。
 - 撤销第一期加的 `proxy_protocol_unsupported` 限制，四种协议都允许保存；把 `protocol` 默认值改回 `socks5`。
-- 代理测试 `/proxy/test` 仍然从 kbwa 直连上游代理去测，不经过中继。
+- 代理测试 `/proxy/test` 仍然从 inkdove 直连上游代理去测，不经过中继。
 - README 写明这套中继机制。
 - 测试：
   - 用本地起的假 SOCKS5 上游加一个假目标服务，验证 CONNECT 经中继能打通；
@@ -407,7 +407,7 @@ SendableFile：
   - 同一会话每天最多自动发 5 个文件，超出部分不发，并改判 handoff，code 是 `file_limit`。
 - 审核调用（4.3 第 3 层）的输入加上要发送的文件的 name 和 description，审核时要判断客户是否真的需要这些文件；与客户需求无关的判 ungrounded。
 - 发送顺序：先发 reply 文字（按 F1/F14 的节奏），停 1–2 秒，再按顺序发文件，文件不带 caption。
-  - **WAHA**：图片用 sendImage，其他文件用 sendFile。传文件的方式以文档为准，优先用 base64 data；超过 15MB 时，改用 kbwa 的内部签名下载地址 `http://kbwa:8794/internal/files/<id>?token=…`，10 分钟有效，HMAC 签名，只放行这一个文件。GOWS 是否支持发文件要核实。
+  - **WAHA**：图片用 sendImage，其他文件用 sendFile。传文件的方式以文档为准，优先用 base64 data；超过 15MB 时，改用 inkdove 的内部签名下载地址 `http://inkdove:8794/internal/files/<id>?token=…`，10 分钟有效，HMAC 签名，只放行这一个文件。GOWS 是否支持发文件要核实。
   - **Meta**：先 `POST /{phone-number-id}/media` 上传，再发 document 或 image 消息；拿到的 media id 缓存 25 天。
 - 发出的文件在 Message 表里另存一条，`attachment: {fileId, filename, mime, size}`，text 为空。成功后文件的 sendCount 加 1。
 - decisions 里另记 `sentFileIds` 字段。
@@ -476,7 +476,7 @@ SPEC.md 3.2 里的以下字段从全局设置**挪到 Account**：
     "smtp": {"host":"", "port":465, "secure":true, "user":"", "passwordSet":false},
     "resend": {"apiKeySet":false, "apiKeyLast4":null}
   },
-  "webhookBase": "<KBWA_PUBLIC_BASE_URL>"
+  "webhookBase": "<INKDOVE_PUBLIC_BASE_URL>"
 }
 ```
 （`email` 的说明见 F10。）
@@ -488,8 +488,8 @@ Account：
   "autoReply":false,
   "persona":"",
   "scope":"all", "allowlist":[], "blocklist":[],
-  "waha": {"sessionName":"kbwa_<id>", "proxy": {"enabled":false, "protocol":"socks5", "host":"", "port":null, "username":"", "passwordSet":false}},
-  "meta": {"phoneNumberId":"", "apiVersion":"<默认值同 SPEC.md>", "verifyToken":"", "accessTokenSet":false, "appSecretSet":false, "webhookUrl":"<KBWA_PUBLIC_BASE_URL>/webhooks/meta/<id>"},
+  "waha": {"sessionName":"inkdove_<id>", "proxy": {"enabled":false, "protocol":"socks5", "host":"", "port":null, "username":"", "passwordSet":false}},
+  "meta": {"phoneNumberId":"", "apiVersion":"<默认值同 SPEC.md>", "verifyToken":"", "accessTokenSet":false, "appSecretSet":false, "webhookUrl":"<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta/<id>"},
   "notify": {
     "email": {"enabled":false, "to":[]},
     "whatsapp": {"enabled":false, "number":""}

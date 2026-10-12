@@ -26,7 +26,7 @@ const newChat = () => `86138${String(Date.now() % 1e6).padStart(6, '0')}${++phon
 
 async function setup({ waha = {}, env = {}, account = {} } = {}) {
   const fake = await startFakeWaha(waha);
-  const t = await startApp({ env: { KBWA_WAHA_URL: fake.url, ...env } });
+  const t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url, ...env } });
   await t.login();
   for (const e of ENTRIES) await t.req('POST', '/api/kb/entries', { body: e });
   await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.1 } } });
@@ -55,7 +55,7 @@ describe('WAHA 号', () => {
   });
 
   it('新建的号：sessionName 由系统生成；start 建 session，webhook、events 和 HMAC key 正确', async () => {
-    assert.match(acc.waha.sessionName, new RegExp(`^kbwa_${acc.id}$`));
+    assert.match(acc.waha.sessionName, new RegExp(`^inkdove_${acc.id}$`));
     assert.equal(acc.meta, null);
     assert.deepEqual(acc.waha.proxy, { enabled: false, protocol: 'socks5', host: '', port: null, username: '', passwordSet: false });
     const create = fake.state.requests.find((r) => r.method === 'POST' && r.path === '/api/sessions');
@@ -382,7 +382,7 @@ describe('WAHA 二维码、登出、代理、配置指纹', () => {
 
   it('http 代理：start 时写进 session 配置；改代理会 PUT 新配置；关掉后去掉 proxy；改别的不触发', async () => {
     const fake = await startFakeWaha();
-    const t = await startApp({ env: { KBWA_WAHA_URL: fake.url, KBWA_WAHA_API_KEY: 'waha-key' } });
+    const t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url, INKDOVE_WAHA_API_KEY: 'waha-key' } });
     try {
       await t.login();
       const proxy = { enabled: true, protocol: 'http', host: 'host.docker.internal', port: 3128, username: 'user@corp', password: 'p/w#1' };
@@ -418,7 +418,7 @@ describe('WAHA 二维码、登出、代理、配置指纹', () => {
 
   it('配置指纹：WAHA 读回来的配置把密码打码时，重复 start 也不会每次都 PUT（只在配置变了时 PUT）', async () => {
     const fake = await startFakeWaha({ maskSecrets: true });
-    const t = await startApp({ env: { KBWA_WAHA_URL: fake.url } });
+    const t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     try {
       await t.login();
       const acc = await t.createAccount({

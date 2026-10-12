@@ -231,7 +231,7 @@ describe('获取模型列表：POST /api/settings/llm/models', () => {
   let t;
   before(async () => {
     f = await startFakeProvider();
-    t = await startApp({ env: { KBWA_LLM_MOCK: '0' } });
+    t = await startApp({ env: { INKDOVE_LLM_MOCK: '0' } });
     await t.login();
     await t.req('PUT', '/api/settings', { body: { llm: { format: 'openai', baseUrl: `${f.url}/v1`, apiKey: KEY, model: 'gpt-a' } } });
   });
@@ -372,7 +372,7 @@ describe('品牌：网站名称和 Logo', () => {
 
     // 客户端改不了 logo，branding 里的别的键忽略
     const r = await t.req('PUT', '/api/settings', {
-      body: { branding: { title: '小王的店', logo: { filename: '../../kbwa.db', mime: 'text/plain', updatedAt: 1 }, logoUrl: 'https://evil' } },
+      body: { branding: { title: '小王的店', logo: { filename: '../../inkdove.db', mime: 'text/plain', updatedAt: 1 }, logoUrl: 'https://evil' } },
     });
     assert.equal(r.status, 200);
     assert.deepEqual(r.body.branding, { title: '小王的店', logoSet: false, logoUrl: null });
@@ -513,13 +513,13 @@ describe('品牌：网站名称和 Logo', () => {
 
 describe('品牌：旧数据', () => {
   it('loadSettings 给没有 branding 的旧设置补上默认值，坏掉的 logo 元数据当成没有', () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kbwa-test-'));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-test-'));
     const config = loadConfig({
-      KBWA_DATA_DIR: dataDir,
-      KBWA_ADMIN_EMAIL: 'admin@example.com',
-      KBWA_ADMIN_PASSWORD: 'test-password-123',
-      KBWA_SESSION_SECRET: 's',
-      KBWA_WAHA_WEBHOOK_SECRET: 'w',
+      INKDOVE_DATA_DIR: dataDir,
+      INKDOVE_ADMIN_EMAIL: 'admin@example.com',
+      INKDOVE_ADMIN_PASSWORD: 'test-password-123',
+      INKDOVE_SESSION_SECRET: 's',
+      INKDOVE_WAHA_WEBHOOK_SECRET: 'w',
     });
     const db = openDb(dataDir);
     try {
@@ -529,7 +529,7 @@ describe('品牌：旧数据', () => {
       assert.equal(kvGet(db, 'settings', null).branding, undefined);
       assert.deepEqual(loadSettings(db, config).branding, { title: '', logo: null });
 
-      kvSet(db, 'settings', { ...old, branding: { title: '旧店名', logo: { filename: '../kbwa.db', mime: 'image/png', updatedAt: 1 } } });
+      kvSet(db, 'settings', { ...old, branding: { title: '旧店名', logo: { filename: '../inkdove.db', mime: 'image/png', updatedAt: 1 } } });
       assert.deepEqual(loadSettings(db, config).branding, { title: '旧店名', logo: null });
 
       const meta = { filename: 'logo-abc.png', mime: 'image/png', updatedAt: 1700000000000 };

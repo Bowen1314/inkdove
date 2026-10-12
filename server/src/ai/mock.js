@@ -1,4 +1,4 @@
-// KBWA_LLM_MOCK=1 时使用的确定性假实现。不发任何网络请求。
+// INKDOVE_LLM_MOCK=1 时使用的确定性假实现。不发任何网络请求。
 import { bm25Rank, entrySearchText, normKey } from '../kb/search.js';
 import { CLICHE_TERMS, findTerms } from '../reply/redlines.js';
 import { clip, sleep } from '../util.js';

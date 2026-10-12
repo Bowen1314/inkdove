@@ -80,7 +80,7 @@ export function normalizeEmails(input, field = 'to') {
 }
 
 /**
- * 首次启动用 KBWA_LLM_* 作为初始值；之后以 DB 为准。
+ * 首次启动用 INKDOVE_LLM_* 作为初始值；之后以 DB 为准。
  * 第一期存的旧字段（reply.autoReply、notify、channel）不再出现在全局设置里，由 accounts.js 的迁移接走。
  * @param {import('better-sqlite3').Database} db
  * @param {import('./config.js').Config} config

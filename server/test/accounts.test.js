@@ -33,7 +33,7 @@ describe('F7 多个号：数据互不串', () => {
   let b;
   before(async () => {
     fake = await startFakeWaha();
-    t = await startApp({ env: { KBWA_WAHA_URL: fake.url } });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: { type: 'product', title: '保温杯 A100', content: '保温杯 A100 价格 59 元。' } });
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });
@@ -188,7 +188,7 @@ describe('F8 agent 只能看分给自己的号', () => {
   const as = (method, p, body) => t.req(method, p, { body, cookie: agent.cookie });
   before(async () => {
     fake = await startFakeWaha();
-    t = await startApp({ env: { KBWA_WAHA_URL: fake.url } });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     await t.login();
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });
     mine = await t.createAccount({ name: '我的号', autoReply: true });
@@ -279,7 +279,7 @@ describe('F8 agent 只能看分给自己的号', () => {
 describe('第一期数据迁移', () => {
   it('第一期的 WAHA 通道 → 号「默认号」：沿用 session 名，旧会话挂到这个号下，旧 SMTP 挪到全局发信方式', async () => {
     const fake = await startFakeWaha();
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kbwa-legacy-'));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-legacy-'));
     const db = openDb(dataDir);
     kvSet(db, 'settings', {
       llm: { format: 'openai', baseUrl: '', apiKey: '', model: '', distillModel: '' },
@@ -301,15 +301,15 @@ describe('第一期数据迁移', () => {
     ).run(now);
     db.close();
     const config = loadConfig({
-      KBWA_DATA_DIR: dataDir,
-      KBWA_LLM_MOCK: '1',
-      KBWA_ADMIN_EMAIL: ADMIN_EMAIL,
-      KBWA_ADMIN_PASSWORD: PASSWORD,
-      KBWA_SESSION_SECRET: 'x',
-      KBWA_WAHA_WEBHOOK_SECRET: WAHA_SECRET,
-      KBWA_WAHA_URL: fake.url,
-      KBWA_WAHA_SESSION: 'shop',
-      KBWA_PROXY_RELAY_PORT_BASE: '29900',
+      INKDOVE_DATA_DIR: dataDir,
+      INKDOVE_LLM_MOCK: '1',
+      INKDOVE_ADMIN_EMAIL: ADMIN_EMAIL,
+      INKDOVE_ADMIN_PASSWORD: PASSWORD,
+      INKDOVE_SESSION_SECRET: 'x',
+      INKDOVE_WAHA_WEBHOOK_SECRET: WAHA_SECRET,
+      INKDOVE_WAHA_URL: fake.url,
+      INKDOVE_WAHA_SESSION: 'shop',
+      INKDOVE_PROXY_RELAY_PORT_BASE: '29900',
     });
     const log = quietLog();
     const created = createApp(config, { log, webDist: path.join(dataDir, 'no-web'), relayBindHost: '127.0.0.1', humanize: ZERO_HUMANIZE });

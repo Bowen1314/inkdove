@@ -115,7 +115,7 @@ export function createWahaClient(config) {
     },
     /**
      * F4：下载入站媒体。payload.media.url 由 WAHA 按 WAHA_BASE_URL 拼成，形如 http://<host>/api/files/<session>/<file>；
-     * 这里只取路径，拼到 KBWA_WAHA_URL 上再请求（带 X-Api-Key），不会把 key 发到别的主机。
+     * 这里只取路径，拼到 INKDOVE_WAHA_URL 上再请求（带 X-Api-Key），不会把 key 发到别的主机。
      * @returns {Promise<{buffer:Buffer, mime:string}>}
      */
     async downloadMedia(mediaUrl, { maxBytes, timeoutMs = 60_000 } = {}) {

@@ -169,7 +169,7 @@ export function createNotifier(deps) {
     /** POST /api/accounts/:id/notify/test：返回 {email, whatsapp}，没开的通道为 null */
     async test(acc) {
       const n = acc.notify;
-      const subject = `[待人工] KBWA 测试通知（${acc.name}）`;
+      const subject = `[待人工] 墨鸽 测试通知（${acc.name}）`;
       const text = `这是一条测试通知。机器人拿不准的问题不会回复客户，会这样通知你。\n后台：${config.publicBaseUrl}/whatsapp`;
       const run = async (fn) => {
         try {

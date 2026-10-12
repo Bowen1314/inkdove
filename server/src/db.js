@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS file_meta_media (
 export function openDb(dataDir) {
   fs.mkdirSync(path.join(dataDir, 'uploads'), { recursive: true });
   fs.mkdirSync(path.join(dataDir, 'files', 'tmp'), { recursive: true });
-  const db = new Database(path.join(dataDir, 'kbwa.db'));
+  const db = new Database(path.join(dataDir, 'inkdove.db'));
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   db.pragma('foreign_keys = ON');

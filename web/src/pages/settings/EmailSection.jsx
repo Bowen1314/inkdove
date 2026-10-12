@@ -228,7 +228,7 @@ export default function EmailSection({ settings, onSaved }) {
             <input
               {...fieldProps('em-from', errOf('from'))}
               className="input"
-              placeholder="KBWA <notify@example.com>"
+              placeholder="墨鸽 <notify@example.com>"
               value={draft.from}
               onChange={(e) => set('from', e.target.value)}
               spellCheck={false}

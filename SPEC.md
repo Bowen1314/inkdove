@@ -1,4 +1,4 @@
-# KBWA — 企业知识库蒸馏 + WhatsApp 自动回复平台（规格）
+# 墨鸽 — 企业知识库蒸馏 + WhatsApp 自动回复平台（规格）
 
 单租户：一套部署服务一家企业（私有化部署口径）。一个管理员密码登录。
 两大块：
@@ -21,7 +21,7 @@ kb-whatsapp/
   web/               React 18 + Vite（JS），构建产物 web/dist 由 server 静态托管
     package.json     scripts: dev / build
   Dockerfile         多阶段：构建 web → 装 server 依赖 → node:22-slim 运行
-  docker-compose.yml kbwa + waha 两个服务
+  docker-compose.yml inkdove + waha 两个服务
   .env.example
   README.md
 ```
@@ -30,23 +30,23 @@ kb-whatsapp/
 - 本地开发端口：server **8794**；web 的 Vite dev server **5194**，把 `/api` 和 `/webhooks` 代理到 `http://127.0.0.1:8794`。
 - 生产：server 在 8794 同时提供 `/api/*`、`/webhooks/*` 和 `web/dist`（SPA 回退到 index.html）。
 
-## 1. 环境变量（只能读带 `KBWA_` 前缀的；**禁止读取** `LLM_API_KEY`、`OPENAI_API_KEY`、`LLM_BASE_URL` 等通用名）
+## 1. 环境变量（只能读带 `INKDOVE_` 前缀的；**禁止读取** `LLM_API_KEY`、`OPENAI_API_KEY`、`LLM_BASE_URL` 等通用名）
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `KBWA_PORT` | 8794 | |
-| `KBWA_DATA_DIR` | `./data` | SQLite（`kbwa.db`）和上传文件（`uploads/`） |
-| `KBWA_ADMIN_PASSWORD` | 无，必填 | 少于 12 字符则拒绝启动 |
-| `KBWA_SESSION_SECRET` | 无，必填 | cookie 签名 |
-| `KBWA_PUBLIC_BASE_URL` | `http://127.0.0.1:8794` | 用于显示 Meta webhook 地址 |
-| `KBWA_COOKIE_SECURE` | `0` | 生产设 1 |
-| `KBWA_WAHA_URL` | `http://127.0.0.1:3000` | compose 里是 `http://waha:3000` |
-| `KBWA_WAHA_API_KEY` | 空 | WAHA 的 `X-Api-Key` |
-| `KBWA_WAHA_WEBHOOK_URL` | `http://127.0.0.1:8794/webhooks/waha` | WAHA 回调本服务的地址（compose 里是 `http://kbwa:8794/webhooks/waha`） |
-| `KBWA_WAHA_WEBHOOK_SECRET` | 无，必填 | WAHA webhook HMAC key |
-| `KBWA_WAHA_SESSION` | `default` | |
-| `KBWA_LLM_BASE_URL` / `KBWA_LLM_API_KEY` / `KBWA_LLM_MODEL` / `KBWA_LLM_DISTILL_MODEL` | 空 | 仅作首次启动的初始值；之后以设置页存进 DB 的值为准 |
-| `KBWA_LLM_MOCK` | `0` | 设 1 时 LLM 调用全部走确定性的假实现（测试和前端联调用） |
+| `INKDOVE_PORT` | 8794 | |
+| `INKDOVE_DATA_DIR` | `./data` | SQLite（`inkdove.db`）和上传文件（`uploads/`） |
+| `INKDOVE_ADMIN_PASSWORD` | 无，必填 | 少于 12 字符则拒绝启动 |
+| `INKDOVE_SESSION_SECRET` | 无，必填 | cookie 签名 |
+| `INKDOVE_PUBLIC_BASE_URL` | `http://127.0.0.1:8794` | 用于显示 Meta webhook 地址 |
+| `INKDOVE_COOKIE_SECURE` | `0` | 生产设 1 |
+| `INKDOVE_WAHA_URL` | `http://127.0.0.1:3000` | compose 里是 `http://waha:3000` |
+| `INKDOVE_WAHA_API_KEY` | 空 | WAHA 的 `X-Api-Key` |
+| `INKDOVE_WAHA_WEBHOOK_URL` | `http://127.0.0.1:8794/webhooks/waha` | WAHA 回调本服务的地址（compose 里是 `http://inkdove:8794/webhooks/waha`） |
+| `INKDOVE_WAHA_WEBHOOK_SECRET` | 无，必填 | WAHA webhook HMAC key |
+| `INKDOVE_WAHA_SESSION` | `default` | |
+| `INKDOVE_LLM_BASE_URL` / `INKDOVE_LLM_API_KEY` / `INKDOVE_LLM_MODEL` / `INKDOVE_LLM_DISTILL_MODEL` | 空 | 仅作首次启动的初始值；之后以设置页存进 DB 的值为准 |
+| `INKDOVE_LLM_MOCK` | `0` | 设 1 时 LLM 调用全部走确定性的假实现（测试和前端联调用） |
 
 密钥（LLM key、Meta access token、app secret）存在 SQLite，**任何接口都不回传明文**，日志里不打印。
 
@@ -55,7 +55,7 @@ kb-whatsapp/
 - 所有 JSON 字段 camelCase。时间一律 ISO 8601 字符串（UTC）。ID 是字符串（nanoid/uuid 均可）。
 - 错误响应：HTTP 4xx/5xx + `{"error": "<中文可读信息>", "code": "<机器码>"}`。
 - 除 `POST /api/auth/login`、`GET /api/health`、`/webhooks/*` 外，`/api/*` 都要登录，未登录返回 401 `{"error":"未登录","code":"unauthorized"}`。
-- 登录态：httpOnly、SameSite=Lax 的签名 cookie `kbwa_session`，有效期 30 天。
+- 登录态：httpOnly、SameSite=Lax 的签名 cookie `inkdove_session`，有效期 30 天。
 
 ## 3. 接口
 
@@ -89,7 +89,7 @@ kb-whatsapp/
              "proxy": {"enabled":false, "protocol":"socks5", "host":"", "port":null, "username":"", "passwordSet":false}},
     "meta": {"phoneNumberId":"", "apiVersion":"v23.0", "verifyToken":"", "accessTokenSet":false, "appSecretSet":false}
   },
-  "webhookUrls": {"meta": "<KBWA_PUBLIC_BASE_URL>/webhooks/meta"}
+  "webhookUrls": {"meta": "<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta"}
 }
 ```
 - `persona`：语气和身份说明，如"你是 XX 公司的客服小王，语气热情专业"。
@@ -181,7 +181,7 @@ Gap：
   - waha：映射 WAHA session 状态：STOPPED→stopped，STARTING→starting，SCAN_QR_CODE→scan_qr，WORKING→working，FAILED→failed；WAHA 连不上时 state=failed 并填 error。
   - meta：凭证齐全则 state=configured，否则 not_configured。
   - channel 为 null 时 state=not_configured。
-- `POST /api/wa/waha/start` → 确保 session 存在并已启动，webhook 配置指向 `KBWA_WAHA_WEBHOOK_URL`，events `["message","session.status"]`，带 HMAC key。同时把 `channel.type` 设为 `"waha"`。返回 status。
+- `POST /api/wa/waha/start` → 确保 session 存在并已启动，webhook 配置指向 `INKDOVE_WAHA_WEBHOOK_URL`，events `["message","session.status"]`，带 HMAC key。同时把 `channel.type` 设为 `"waha"`。返回 status。
 - `GET /api/wa/waha/qr` → `image/png`（代理 WAHA 的二维码；非 scan_qr 状态返回 409）
 - `POST /api/wa/waha/logout` → 登出并停止 session，返回 status
 - `GET /api/wa/conversations` → Conversation[]（按 updatedAt 倒序）：
@@ -310,7 +310,7 @@ Gap：
 - 代理设置在 session 已存在时被改动（包括开关），`PUT /api/settings` 之后要把新配置更新到 WAHA session 并重启它，尽量不丢登录态，具体以文档为准。做不到不丢登录态的话，前端要提示"修改代理需要重新扫码"。
 - 要去 WAHA 文档核实 GOWS 引擎支持哪些代理协议。不支持的协议，PUT 时返回 400 `code:"proxy_protocol_unsupported"`，error 里写明支持哪些。如果 GOWS 只支持一部分，在 README「偏离规格」里写清楚。
 - 代理测试：http/https 用 undici 的 ProxyAgent，socks4/socks5 用 socks-proxy-agent 一类成熟库。
-- docker-compose 给 kbwa 和 waha 两个容器都加上 `extra_hosts: ["host.docker.internal:host-gateway"]`。容器里的 127.0.0.1 指的是容器自己，要用宿主机上的代理，就填 `host.docker.internal`。
+- docker-compose 给 inkdove 和 waha 两个容器都加上 `extra_hosts: ["host.docker.internal:host-gateway"]`。容器里的 127.0.0.1 指的是容器自己，要用宿主机上的代理，就填 `host.docker.internal`。
 - 代理密码按密钥处理：不回传，不写日志。
 
 ### 4.2 转人工通知
@@ -320,7 +320,7 @@ Gap：
   - 客户名称和号码；
   - 原因：用模型给的 reason 或拦截规则的说明，比如"客户要求打折""客户想下单""客户问是不是机器人""价格数字对不上资料"；另外两种是"非文字消息"和"回复次数超限"；
   - 触发前客户最近的几条消息（合计最多 500 字符）；
-  - 后台会话链接：`KBWA_PUBLIC_BASE_URL/whatsapp?chat=<encodeURIComponent(chatId)>`。
+  - 后台会话链接：`INKDOVE_PUBLIC_BASE_URL/whatsapp?chat=<encodeURIComponent(chatId)>`。
   - 中文，简短。邮件标题形如「[待人工] 客户 +86xxx：……」。
 - **通道**：
   - **email**：nodemailer，用设置里的 SMTP。
@@ -342,7 +342,7 @@ LLM 客户端：支持三种接口格式，由 `llm.format` 决定。三种格�
 - 超时：回复 60 秒，蒸馏单次 180 秒。429 和 5xx 重试 2 次，指数退避；Anthropic 的 529 overloaded 也重试。
 - 错误信息要可读，带上 HTTP 状态码和对方返回的 error message。**不能把 key 写进错误信息或日志。**
 - 回复用 `model`，蒸馏用 `distillModel`（为空则回退到 `model`）。`/api/settings/llm/test` 按当前 format 发一条最小请求。
-`KBWA_LLM_MOCK=1` 时返回确定性的假结果：extract 每块产出 2–3 条，ask 用关键词命中条目拼接回复，含"人工"或"human"时 category=handoff，含"写代码""code""翻译""ignore previous"时 category=offtopic；含"折扣""便宜""discount""下单""付款""是不是机器人""are you a bot"时 category=handoff；mock 审核在回复含 ``` 时给 offtopic，其余给 ok。
+`INKDOVE_LLM_MOCK=1` 时返回确定性的假结果：extract 每块产出 2–3 条，ask 用关键词命中条目拼接回复，含"人工"或"human"时 category=handoff，含"写代码""code""翻译""ignore previous"时 category=offtopic；含"折扣""便宜""discount""下单""付款""是不是机器人""are you a bot"时 category=handoff；mock 审核在回复含 ``` 时给 offtopic，其余给 ok。
 
 ## 5. 前端页面（中文界面）
 
@@ -378,6 +378,6 @@ LLM 客户端：支持三种接口格式，由 `llm.format` 决定。三种格�
 ## 6. 部署（Dell，Docker）
 
 - `docker-compose.yml`：
-  - `kbwa`：本仓库 Dockerfile 构建，`127.0.0.1:8794:8794`，`./data:/app/data`，mem_limit 384m，restart unless-stopped，env_file `.env`。
+  - `inkdove`：本仓库 Dockerfile 构建，`127.0.0.1:8794:8794`，`./data:/app/data`，mem_limit 384m，restart unless-stopped，env_file `.env`。
   - `waha`：`devlikeapro/waha` 的 GOWS 引擎镜像（tag 以官方文档为准），不映射到宿主端口，只在 compose 内网可达。`WAHA_API_KEY`、`WHATSAPP_DEFAULT_ENGINE=GOWS`，会话数据挂卷持久化，mem_limit 384m，restart unless-stopped。
 - `.env.example` 列出所有变量，不放真实值。

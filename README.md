@@ -1,4 +1,4 @@
-# KBWA：企业知识库 + WhatsApp 自动回复
+# 墨鸽 Inkdove：企业知识库 + WhatsApp 自动回复
 
 把企业的产品资料、价格表、政策文档整理成知识库，再用它在 WhatsApp 上自动回复客户。拿不准的问题不回，转给人工，并在 WhatsApp 或邮件里通知你。
 
@@ -38,8 +38,8 @@ Dockerfile、docker-compose.yml、.env.example
 
 ```bash
 cp .env.example .env
-# 至少填：KBWA_ADMIN_EMAIL、KBWA_ADMIN_PASSWORD（≥12 位）、KBWA_SESSION_SECRET、
-#        KBWA_WAHA_WEBHOOK_SECRET、KBWA_WAHA_API_KEY（后三个用 openssl rand -hex 32 生成）
+# 至少填：INKDOVE_ADMIN_EMAIL、INKDOVE_ADMIN_PASSWORD（≥12 位）、INKDOVE_SESSION_SECRET、
+#        INKDOVE_WAHA_WEBHOOK_SECRET、INKDOVE_WAHA_API_KEY（后三个用 openssl rand -hex 32 生成）
 docker compose up -d --build
 ```
 
@@ -60,22 +60,22 @@ docker compose pull && docker compose up -d
 3. **知识库 → 测试对话**：问几个客户常问的问题，看回答对不对。
 4. **WhatsApp → 号码 → 新建**：
    - 扫码号：点"启动"，用手机 WhatsApp 的"已关联的设备"扫二维码；
-   - Meta 号：填 phone number id、verify token、access token、app secret，把页面上显示的 webhook 地址（`<KBWA_PUBLIC_BASE_URL>/webhooks/meta/<号的 id>`）填进 Meta 后台，订阅 `messages`。
+   - Meta 号：填 phone number id、verify token、access token、app secret，把页面上显示的 webhook 地址（`<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta/<号的 id>`）填进 Meta 后台，订阅 `messages`。
 5. 在号详情里打开**自动回复**，并配好"拿不准时通知我"。要发邮件通知的话，先在**设置 → 发信方式**里配 SMTP 或 Resend。
 
 部署说明：
 
-- `kbwa` 只监听宿主的 `127.0.0.1:8794`，对外请用 nginx 之类反代到 HTTPS，并在 `.env` 里设 `KBWA_PUBLIC_BASE_URL=https://kb.example.com`、`KBWA_COOKIE_SECURE=1`。Meta 回调必须是公网 HTTPS 地址。
-- `waha` 用 `devlikeapro/waha:gows`，不映射宿主端口，只有 kbwa 能访问。登录态存在 `./waha-sessions`，重建容器不用重新扫码。
-- `kbwa` 的主机名固定为 `kbwa`，WAHA 经 `kbwa:<端口>` 连代理中继（见下文）。中继端口不映射到宿主。
+- `inkdove` 只监听宿主的 `127.0.0.1:8794`，对外请用 nginx 之类反代到 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`。Meta 回调必须是公网 HTTPS 地址。
+- `waha` 用 `devlikeapro/waha:gows`，不映射宿主端口，只有 inkdove 能访问。登录态存在 `./waha-sessions`，重建容器不用重新扫码。
+- `inkdove` 的主机名固定为 `inkdove`，WAHA 经 `inkdove:<端口>` 连代理中继（见下文）。中继端口不映射到宿主。
 - 数据（SQLite 和上传的文件）在 `./data`，备份这个目录即可。
 - 两个容器都配了 `host.docker.internal:host-gateway`。要用宿主机上的代理时，代理地址填 `host.docker.internal`。
-- `waha` 设了 `WAHA_EVENTS_DOWNLOAD_MEDIA=true` 和 `WAHA_BASE_URL=http://waha:3000`：客户发来的语音、图片由 WAHA 先下载，kbwa 再带 `X-Api-Key` 从 `waha:3000/api/files/...` 取。发给客户的文件超过 15MB 时，WAHA 反过来从 `http://kbwa:<KBWA_PORT>/internal/files/<id>?token=…` 拉取（签名地址，10 分钟有效），所以两个容器要在同一个网络里（compose 默认就是）。
+- `waha` 设了 `WAHA_EVENTS_DOWNLOAD_MEDIA=true` 和 `WAHA_BASE_URL=http://waha:3000`：客户发来的语音、图片由 WAHA 先下载，inkdove 再带 `X-Api-Key` 从 `waha:3000/api/files/...` 取。发给客户的文件超过 15MB 时，WAHA 反过来从 `http://inkdove:<INKDOVE_PORT>/internal/files/<id>?token=…` 拉取（签名地址，10 分钟有效），所以两个容器要在同一个网络里（compose 默认就是）。
 
 ### 从第一期升级
 
-- 必须新增 `KBWA_ADMIN_EMAIL`。第一次启动时用它和 `KBWA_ADMIN_PASSWORD` 建管理员；旧的登录 cookie 全部失效，重新登录即可。
-- 第一期的通道设置会自动迁移成一个叫「默认号」的号：自动回复开关、回复范围、名单、代理和通知都带过去，旧会话挂到这个号下。扫码号沿用原来的 session 名（第一期设过 `KBWA_WAHA_SESSION` 的，升级时保留这个变量），不用重新扫码。旧的 SMTP 设置挪到全局"发信方式"。
+- 必须新增 `INKDOVE_ADMIN_EMAIL`。第一次启动时用它和 `INKDOVE_ADMIN_PASSWORD` 建管理员；旧的登录 cookie 全部失效，重新登录即可。
+- 第一期的通道设置会自动迁移成一个叫「默认号」的号：自动回复开关、回复范围、名单、代理和通知都带过去，旧会话挂到这个号下。扫码号沿用原来的 session 名（第一期设过 `INKDOVE_WAHA_SESSION` 的，升级时保留这个变量），不用重新扫码。旧的 SMTP 设置挪到全局"发信方式"。
 - **Meta 号的回调地址变了**：从 `/webhooks/meta` 改成 `/webhooks/meta/<号的 id>`，旧地址已删除。升级后去 Meta 后台把回调地址换成号详情页显示的新地址。
 - 产品资料库、缺口来源、语音图片这些新增的表和列在启动时自动加上，不改动已有数据。已经在待处理的会话会从最近一条未回复的客户消息补上 `pendingReason`。WAHA 容器要按新的 compose 加上两个环境变量（见上文），重建一次 waha 容器即可，不用重新扫码。
 
@@ -86,8 +86,8 @@ docker compose pull && docker compose up -d
 ```bash
 cd server
 npm install
-KBWA_LLM_MOCK=1 KBWA_ADMIN_EMAIL=admin@example.com KBWA_ADMIN_PASSWORD=change-me-123456 \
-  KBWA_SESSION_SECRET=dev KBWA_WAHA_WEBHOOK_SECRET=dev KBWA_PROXY_RELAY_HOST=127.0.0.1 npm run dev
+INKDOVE_LLM_MOCK=1 INKDOVE_ADMIN_EMAIL=admin@example.com INKDOVE_ADMIN_PASSWORD=change-me-123456 \
+  INKDOVE_SESSION_SECRET=dev INKDOVE_WAHA_WEBHOOK_SECRET=dev INKDOVE_PROXY_RELAY_HOST=127.0.0.1 npm run dev
 # http://127.0.0.1:8794/api/health
 
 cd ../web
@@ -98,34 +98,34 @@ cd ../server
 npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问外网
 ```
 
-- `KBWA_LLM_MOCK=1` 时所有 LLM 调用走确定性的假实现，不需要 key，也不会产生费用。
-- 服务只读取 `KBWA_` 开头的环境变量，不会读 `LLM_API_KEY`、`OPENAI_API_KEY` 这类通用变量。
+- `INKDOVE_LLM_MOCK=1` 时所有 LLM 调用走确定性的假实现，不需要 key，也不会产生费用。
+- 服务只读取 `INKDOVE_` 开头的环境变量，不会读 `LLM_API_KEY`、`OPENAI_API_KEY` 这类通用变量。
 - 如果 `web/dist` 存在，server 会同时托管前端；不存在时只提供接口。
 - 测试里的 WAHA、Meta Graph API、Resend、SMTP（nodemailer 的 jsonTransport）、LLM 接口（三种格式）、HTTP/SOCKS4/SOCKS5 代理和中继的目标服务，都是本地起的假服务。拟真发送的等待时间在测试里注入成 0 或几百毫秒。
 
 ## 环境变量
 
-只读 `KBWA_` 开头的变量。完整列表和注释见 [.env.example](.env.example)。
+只读 `INKDOVE_` 开头的变量。完整列表和注释见 [.env.example](.env.example)。
 
 | 变量 | 必填 | 说明 |
 |---|---|---|
-| `KBWA_ADMIN_EMAIL` | ✔ | 第一个管理员的邮箱。只在库里还没有任何账号时用 |
-| `KBWA_ADMIN_PASSWORD` | ✔ | 第一个管理员的密码，至少 12 个字符 |
-| `KBWA_SESSION_SECRET` | ✔ | cookie 签名密钥，也用来算 WAHA 配置指纹 |
-| `KBWA_WAHA_WEBHOOK_SECRET` | ✔ | WAHA webhook 的 HMAC 密钥 |
-| `KBWA_WAHA_API_KEY` | compose 里必填 | WAHA 的 `X-Api-Key`，compose 同时传给 waha 容器 |
-| `KBWA_PORT` | | 默认 8794 |
-| `KBWA_DATA_DIR` | | 默认 `./data`，compose 里是 `/app/data` |
-| `KBWA_PUBLIC_BASE_URL` | | 对外地址：Meta 回调地址、邀请链接、通知里的后台链接都用它 |
-| `KBWA_COOKIE_SECURE` | | 经 HTTPS 对外时设 1 |
-| `KBWA_WAHA_URL` | | 默认 `http://127.0.0.1:3000`，compose 里是 `http://waha:3000` |
-| `KBWA_WAHA_WEBHOOK_URL` | | WAHA 回调本服务的地址，compose 里是 `http://kbwa:8794/webhooks/waha` |
-| `KBWA_PROXY_RELAY_PORT_BASE` | | 代理中继的起始端口，默认 18000，每个扫码号占一个 |
-| `KBWA_PROXY_RELAY_HOST` | | WAHA 连中继用的主机名，默认 `kbwa`；超过 15MB 的文件给 WAHA 的签名下载地址也用它 |
-| `KBWA_WAHA_SESSION` | | 仅第一期升级用：迁移成「默认号」时沿用的 session 名 |
-| `KBWA_LLM_BASE_URL` 等 4 个 | | LLM 初始值，只在第一次启动时写进库，之后以设置页为准 |
-| `KBWA_LLM_MOCK` | | 设 1 走假 LLM |
-| `KBWA_META_GRAPH_URL`、`KBWA_RESEND_API_URL` | | 仅测试用，生产不要设 |
+| `INKDOVE_ADMIN_EMAIL` | ✔ | 第一个管理员的邮箱。只在库里还没有任何账号时用 |
+| `INKDOVE_ADMIN_PASSWORD` | ✔ | 第一个管理员的密码，至少 12 个字符 |
+| `INKDOVE_SESSION_SECRET` | ✔ | cookie 签名密钥，也用来算 WAHA 配置指纹 |
+| `INKDOVE_WAHA_WEBHOOK_SECRET` | ✔ | WAHA webhook 的 HMAC 密钥 |
+| `INKDOVE_WAHA_API_KEY` | compose 里必填 | WAHA 的 `X-Api-Key`，compose 同时传给 waha 容器 |
+| `INKDOVE_PORT` | | 默认 8794 |
+| `INKDOVE_DATA_DIR` | | 默认 `./data`，compose 里是 `/app/data` |
+| `INKDOVE_PUBLIC_BASE_URL` | | 对外地址：Meta 回调地址、邀请链接、通知里的后台链接都用它 |
+| `INKDOVE_COOKIE_SECURE` | | 经 HTTPS 对外时设 1 |
+| `INKDOVE_WAHA_URL` | | 默认 `http://127.0.0.1:3000`，compose 里是 `http://waha:3000` |
+| `INKDOVE_WAHA_WEBHOOK_URL` | | WAHA 回调本服务的地址，compose 里是 `http://inkdove:8794/webhooks/waha` |
+| `INKDOVE_PROXY_RELAY_PORT_BASE` | | 代理中继的起始端口，默认 18000，每个扫码号占一个 |
+| `INKDOVE_PROXY_RELAY_HOST` | | WAHA 连中继用的主机名，默认 `inkdove`；超过 15MB 的文件给 WAHA 的签名下载地址也用它 |
+| `INKDOVE_WAHA_SESSION` | | 仅第一期升级用：迁移成「默认号」时沿用的 session 名 |
+| `INKDOVE_LLM_BASE_URL` 等 4 个 | | LLM 初始值，只在第一次启动时写进库，之后以设置页为准 |
+| `INKDOVE_LLM_MOCK` | | 设 1 走假 LLM |
+| `INKDOVE_META_GRAPH_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |
 
 ## 两种接入方式的区别和风险
 
@@ -160,16 +160,16 @@ npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问�
 
 ## 代理中继（F13）
 
-WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http://host:port`（WAHA 源码 `src/core/engines/gows/session.gows.core.ts` 的 `getProxyUrl`）。为了让四种协议都能用，kbwa 做协议转换：
+WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http://host:port`（WAHA 源码 `src/core/engines/gows/session.gows.core.ts` 的 `getProxyUrl`）。为了让四种协议都能用，inkdove 做协议转换：
 
 - 上游是 **http**：直接交给 WAHA，`config.proxy = {server: "host:port", username, password}`（账号密码先 URL 编码）。
-- 上游是 **https / socks4 / socks5**：kbwa 为这个号起一个**本地 HTTP CONNECT 中继**，WAHA 的代理指向 `kbwa:<端口>`，账号密码是这个号专属的随机凭证（存在库里，不出现在接口里）。中继收到 CONNECT 后：
+- 上游是 **https / socks4 / socks5**：inkdove 为这个号起一个**本地 HTTP CONNECT 中继**，WAHA 的代理指向 `inkdove:<端口>`，账号密码是这个号专属的随机凭证（存在库里，不出现在接口里）。中继收到 CONNECT 后：
   - https：先用 TLS 连上代理本身，再发 CONNECT；
   - socks4 / socks5：用 [`socks`](https://www.npmjs.com/package/socks) 包建立连接。
 - 中继只放行 CONNECT（其他方法 405），必须带正确的 `Proxy-Authorization`（否则 407），上游连不上返回 502。
-- 端口从 `KBWA_PROXY_RELAY_PORT_BASE`（默认 18000）开始，每个扫码号建号时分一个。容器里绑 `0.0.0.0`，但 compose 不映射这些端口，只有同一内网的 WAHA 能连到。
-- 号的代理一改，中继就重启，同时 `PUT /api/sessions/{name}` 更新 WAHA session（运行中的 session 会被 WAHA 自动重启，不用重新扫码）。kbwa 重启时按库里的配置重新拉起所有中继。删除号时关掉它的中继。
-- "测试代理"仍然从 kbwa 直连上游代理去测，不经过中继。
+- 端口从 `INKDOVE_PROXY_RELAY_PORT_BASE`（默认 18000）开始，每个扫码号建号时分一个。容器里绑 `0.0.0.0`，但 compose 不映射这些端口，只有同一内网的 WAHA 能连到。
+- 号的代理一改，中继就重启，同时 `PUT /api/sessions/{name}` 更新 WAHA session（运行中的 session 会被 WAHA 自动重启，不用重新扫码）。inkdove 重启时按库里的配置重新拉起所有中继。删除号时关掉它的中继。
+- "测试代理"仍然从 inkdove 直连上游代理去测，不经过中继。
 
 ## 知识库闭环、语音图片、发文件（F2、F4、F15）
 
@@ -227,7 +227,7 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
     - `file_limit`：同一会话每天自动发超过 5 个，改判 handoff；
   - 审核调用的输入里带上要发的文件的名称和描述。
 - **发送顺序**：先按 F1/F14 的节奏发文字，停 1–2 秒，再逐个发文件，不带 caption。
-  - WAHA：jpeg、png 走 sendImage，其他走 sendFile。15MB 以内传 base64，超过时传签名地址 `http://<KBWA_PROXY_RELAY_HOST>:<KBWA_PORT>/internal/files/<id>?token=<过期时间>.<HMAC>`。签名地址 10 分钟有效，HMAC-SHA256 的密钥是 `KBWA_SESSION_SECRET`，只放行这一个文件，token 不写日志。
+  - WAHA：jpeg、png 走 sendImage，其他走 sendFile。15MB 以内传 base64，超过时传签名地址 `http://<INKDOVE_PROXY_RELAY_HOST>:<INKDOVE_PORT>/internal/files/<id>?token=<过期时间>.<HMAC>`。签名地址 10 分钟有效，HMAC-SHA256 的密钥是 `INKDOVE_SESSION_SECRET`，只放行这一个文件，token 不写日志。
   - Meta：先 `POST /{phone-number-id}/media` 上传，再发 document 消息（带 filename）或 image 消息。media id 按（文件、号）缓存 25 天；用缓存的 id 发送失败时，重新上传一次再发。
 - **记录**：
   - 每个发出的文件另存一条消息：`attachment: {fileId, filename, mime, size}`，text 为空（人工发时是 caption）；
@@ -249,10 +249,10 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 ## 偏离规格
 
 1. **Meta Graph API 默认版本是 `v26.0`**。规格示例写的是 v23.0，这里按 Meta 的版本变更日志用了核实时最新的版本，号详情里可以改。
-2. **WAHA 配置只在变了时才 PUT**。kbwa 管理的那部分 session 配置（webhook 和代理）算一个指纹（`HMAC-SHA256(KBWA_SESSION_SECRET, 配置)`），存在 `accounts.waha_config_hash`。start 时 session 已存在且指纹没变、中继也没重启，就不 PUT，避免 WAHA 读回来的配置把密码打码后每次都判成"变了"。PUT 时只覆盖 webhooks 和 proxy，session 配置里的其他字段原样保留。中继重启时即使指纹没变（中继地址和凭证不变）也会 PUT 一次，让 WAHA 重连到新的上游。
+2. **WAHA 配置只在变了时才 PUT**。inkdove 管理的那部分 session 配置（webhook 和代理）算一个指纹（`HMAC-SHA256(INKDOVE_SESSION_SECRET, 配置)`），存在 `accounts.waha_config_hash`。start 时 session 已存在且指纹没变、中继也没重启，就不 PUT，避免 WAHA 读回来的配置把密码打码后每次都判成"变了"。PUT 时只覆盖 webhooks 和 proxy，session 配置里的其他字段原样保留。中继重启时即使指纹没变（中继地址和凭证不变）也会 PUT 一次，让 WAHA 重连到新的上游。
 3. **https 上游的中继没有自动化测试**。测试用自签名证书时 TLS 校验会失败；socks4、socks5 两条路径有完整测试（假上游 + 假目标服务）。中继的随机凭证明文存在 SQLite 里。
 4. **只用于测试的覆盖项**：
-   - 环境变量 `KBWA_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `KBWA_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
+   - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
    - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址只能通过 `createApp` 的选项覆盖。
 5. **LLM 参数**：
    - openai 格式不发 `max_tokens`，因为 OpenAI 的新模型只认 `max_completion_tokens`，而很多兼容接口只认 `max_tokens`；
@@ -326,7 +326,7 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
     - 计数：`sendCount` 和 `lastSentAt` 统计所有成功发出的，包括机器人、后台人工和 `/d`。
     - 错误码：人工发送停用的文件返回 400 `file_disabled`；签名地址不对返回 403 `bad_token`；重新生成描述时，图片没开识别返回 400 `image_disabled`，模型没配置返回 400 `llm_not_configured`。
 32. **产品资料库不分号**：agent 能浏览和下载全部文件，只能把文件发到自己有权限的会话。
-33. **WAHA 内联 base64 的上限 15MB** 是常量，测试通过 `createApp` 的选项 `wahaInlineMaxBytes` 改小。签名地址的主机名用 `KBWA_PROXY_RELAY_HOST`，默认 `kbwa`。
+33. **WAHA 内联 base64 的上限 15MB** 是常量，测试通过 `createApp` 的选项 `wahaInlineMaxBytes` 改小。签名地址的主机名用 `INKDOVE_PROXY_RELAY_HOST`，默认 `inkdove`。
 
 ## 已核实的外部接口
 
@@ -369,4 +369,4 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 KBWA contributors
+[MIT](LICENSE) © 2026 Inkdove contributors

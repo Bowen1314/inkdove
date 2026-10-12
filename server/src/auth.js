@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import { badRequest, HttpError, newId, nowIso, safeEqual, safeJsonParse } from './util.js';
 
-export const COOKIE_NAME = 'kbwa_session';
+export const COOKIE_NAME = 'inkdove_session';
 export const ROLES = ['admin', 'agent'];
 const MAX_AGE_MS = 30 * 24 * 3600 * 1000;
 const INVITE_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -117,7 +117,7 @@ export function createAuth(ctx) {
   const getUserRow = (id) => db.prepare('SELECT * FROM users WHERE id = ?').get(id);
   const getUserByEmail = (email) => db.prepare('SELECT * FROM users WHERE email = ?').get(normalizeEmail(email));
 
-  /** 首次启动、库里没有用户时，用 KBWA_ADMIN_EMAIL / KBWA_ADMIN_PASSWORD 建第一个 admin */
+  /** 首次启动、库里没有用户时，用 INKDOVE_ADMIN_EMAIL / INKDOVE_ADMIN_PASSWORD 建第一个 admin */
   function bootstrapAdmin() {
     const n = db.prepare('SELECT COUNT(*) n FROM users').get().n;
     if (n > 0) return null;

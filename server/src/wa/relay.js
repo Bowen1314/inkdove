@@ -1,5 +1,5 @@
 // F13 代理协议转换中继。WAHA 的 GOWS 引擎只会走 HTTP 代理（CONNECT），
-// 上游是 https / socks4 / socks5 时，kbwa 为这个号起一个本地 HTTP CONNECT 中继，WAHA 连中继，中继再按上游协议连出去。
+// 上游是 https / socks4 / socks5 时，inkdove 为这个号起一个本地 HTTP CONNECT 中继，WAHA 连中继，中继再按上游协议连出去。
 // - 只放行 CONNECT，其他方法 405；
 // - 必须带正确的 Proxy-Authorization（每个号随机生成的账号密码），否则 407；
 // - https 上游：先 TLS 连上代理本身，再发 CONNECT；socks4/socks5 上游：用 socks 包建立连接。
@@ -100,7 +100,7 @@ export async function startRelay(o) {
     client.on('error', () => {});
     const deny = (line, extra = '') => client.end(`HTTP/1.1 ${line}\r\n${extra}Connection: close\r\n\r\n`);
     const got = String(req.headers['proxy-authorization'] || '');
-    if (!got || !safeEqual(got, expected)) return deny('407 Proxy Authentication Required', 'Proxy-Authenticate: Basic realm="kbwa"\r\n');
+    if (!got || !safeEqual(got, expected)) return deny('407 Proxy Authentication Required', 'Proxy-Authenticate: Basic realm="inkdove"\r\n');
     const target = parseTarget(String(req.url || ''));
     if (!target) return deny('400 Bad Request');
     let upstream;

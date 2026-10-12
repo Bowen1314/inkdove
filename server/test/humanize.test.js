@@ -45,7 +45,7 @@ describe('F1 / F14 拟真发送（等待注入成 0）', () => {
     fake = await startFakeWaha();
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url },
+      env: { INKDOVE_WAHA_URL: fake.url },
       options: { aiOverrides: hooks.overrides, onDecision: (d) => decisions.push(d) },
     });
     await t.login();
@@ -190,7 +190,7 @@ describe('F1 / F14 取消：等待期间来了新消息', () => {
     fake = await startFakeWaha();
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url },
+      env: { INKDOVE_WAHA_URL: fake.url },
       options: {
         aiOverrides: hooks.overrides,
         humanize: { preMs: () => 80, typingMs: () => 300, betweenMs: () => 80 },

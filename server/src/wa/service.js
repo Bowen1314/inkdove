@@ -1269,7 +1269,7 @@ export function createWaService(ctx, opts = {}) {
   };
 
   /**
-   * WAHA session 的代理配置（4.5 / F13）。http 上游直接交给 WAHA；https / socks 上游指向 kbwa 的中继。
+   * WAHA session 的代理配置（4.5 / F13）。http 上游直接交给 WAHA；https / socks 上游指向 inkdove 的中继。
    * server 按文档不带协议头；WAHA 把账号密码原样拼进代理 URL，所以先做 URL 编码。
    */
   function wahaProxyFor(acc) {
@@ -1286,7 +1286,7 @@ export function createWaService(ctx, opts = {}) {
     return out;
   }
 
-  /** kbwa 管理的那部分 session 配置：webhook 和代理 */
+  /** inkdove 管理的那部分 session 配置：webhook 和代理 */
   function wahaManagedConfig(acc) {
     const cfg = {
       webhooks: [

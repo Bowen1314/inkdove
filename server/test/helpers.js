@@ -22,21 +22,21 @@ export function quietLog() {
 const relayPortBase = () => 20000 + Math.floor(Math.random() * 400) * 100;
 
 /**
- * 启动一个测试实例（临时 DATA_DIR，KBWA_LLM_MOCK=1）。
+ * 启动一个测试实例（临时 DATA_DIR，INKDOVE_LLM_MOCK=1）。
  * @param {{env?: Record<string,string>, options?: object}} [p]
  */
 export async function startApp({ env = {}, options = {} } = {}) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kbwa-test-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-test-'));
   const config = loadConfig({
-    KBWA_DATA_DIR: dataDir,
-    KBWA_LLM_MOCK: '1',
-    KBWA_ADMIN_EMAIL: ADMIN_EMAIL,
-    KBWA_ADMIN_PASSWORD: PASSWORD,
-    KBWA_SESSION_SECRET: 'test-session-secret',
-    KBWA_WAHA_WEBHOOK_SECRET: WAHA_SECRET,
-    KBWA_PUBLIC_BASE_URL: 'https://kb.example.com',
-    KBWA_WAHA_URL: 'http://127.0.0.1:9', // 默认指向一个连不上的端口
-    KBWA_PROXY_RELAY_PORT_BASE: String(relayPortBase()),
+    INKDOVE_DATA_DIR: dataDir,
+    INKDOVE_LLM_MOCK: '1',
+    INKDOVE_ADMIN_EMAIL: ADMIN_EMAIL,
+    INKDOVE_ADMIN_PASSWORD: PASSWORD,
+    INKDOVE_SESSION_SECRET: 'test-session-secret',
+    INKDOVE_WAHA_WEBHOOK_SECRET: WAHA_SECRET,
+    INKDOVE_PUBLIC_BASE_URL: 'https://kb.example.com',
+    INKDOVE_WAHA_URL: 'http://127.0.0.1:9', // 默认指向一个连不上的端口
+    INKDOVE_PROXY_RELAY_PORT_BASE: String(relayPortBase()),
     ...env,
   });
   const log = quietLog();
@@ -218,7 +218,7 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     timeline: [],
     /** F15：发出去的文件 {kind:'image'|'file', chatId, file, caption, id, fetched?:{status, bytes}} */
     media: [],
-    /** F15：file.url 时去拉的地址的基址（测试里设成 kbwa 实例的 base） */
+    /** F15：file.url 时去拉的地址的基址（测试里设成 inkdove 实例的 base） */
     fetchBase: null,
     /** F4：/api/files/<路径> → {buffer, mime} */
     files: new Map(),

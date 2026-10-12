@@ -44,7 +44,7 @@ describe('F2 知识库闭环 + F14 草稿', () => {
     fake = await startFakeWaha();
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url },
+      env: { INKDOVE_WAHA_URL: fake.url },
       options: { aiOverrides: hooks.overrides, onDecision: (row) => decisions.push(row) },
     });
     await t.login();

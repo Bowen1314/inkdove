@@ -225,7 +225,7 @@ export function settingsRouter(ctx) {
     try {
       await ctx.mailer.sendEmail({
         to: [to],
-        subject: 'KBWA 测试邮件',
+        subject: '墨鸽 测试邮件',
         text: `这是一封测试邮件。收到说明发信方式配置正确，转人工通知会用同样的方式发出。\n后台：${ctx.config.publicBaseUrl}`,
       });
       res.json({ ok: true });

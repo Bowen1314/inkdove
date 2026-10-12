@@ -3,7 +3,7 @@ import { after, afterEach, before, describe, it } from 'node:test';
 import { buildReplySystemPrompt, buildReplyUserPrompt, STYLE_RULES } from '../src/reply/prompts.js';
 import { aiHooks, convIdOf, getConv, sleep, startApp, startFakeWaha, waitDecided, wahaSend } from './helpers.js';
 
-const CANARY = 'KBWA-0123456789ab';
+const CANARY = 'INKDOVE-0123456789ab';
 
 describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
   let t;
@@ -146,7 +146,7 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
     });
 
     it('说话方式规则写进回复 system prompt；重写时 user 消息带上一版和要去掉的模板腔', () => {
-      const sys = buildReplySystemPrompt({ profile: {}, persona: '', entries: [], canary: 'KBWA-x' });
+      const sys = buildReplySystemPrompt({ profile: {}, persona: '', entries: [], canary: 'INKDOVE-x' });
       assert.ok(sys.includes(`四、说话方式（发给客户的 reply 都要遵守）\n${STYLE_RULES}\n`));
       assert.match(STYLE_RULES, /感谢您的咨询/);
       assert.match(STYLE_RULES, /Feel free to reach out/);
@@ -289,7 +289,7 @@ describe('防滥用：会话闸门（WhatsApp）', () => {
   before(async () => {
     fake = await startFakeWaha();
     hooks = await aiHooks();
-    t = await startApp({ env: { KBWA_WAHA_URL: fake.url }, options: { aiOverrides: hooks.overrides } });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url }, options: { aiOverrides: hooks.overrides } });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: { type: 'product', title: '保温杯 A100', content: '保温杯 A100 价格 59 元，容量 500ml。' } });
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });

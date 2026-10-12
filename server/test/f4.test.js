@@ -61,7 +61,7 @@ describe('F4 语音和图片识别', () => {
   function wahaFile(buffer, mimetype) {
     const p = `${acc.waha.sessionName}/F4MEDIA${++fileSeq}.${mimetype.startsWith('audio') ? 'oga' : 'jpeg'}`;
     fake.state.files.set(p, { buffer, mime: mimetype.split(';')[0] });
-    // 真 WAHA 按 WAHA_BASE_URL 拼地址；KBWA 只取路径，换成自己配置的 WAHA 地址
+    // 真 WAHA 按 WAHA_BASE_URL 拼地址；墨鸽 只取路径，换成自己配置的 WAHA 地址
     return { url: `http://waha:3000/api/files/${p}`, mimetype, filename: null };
   }
   async function sendMedia(chat, media, { body = '', data } = {}) {
@@ -83,7 +83,7 @@ describe('F4 语音和图片识别', () => {
     graph = await startFakeGraph({ token: META_TOKEN });
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url, KBWA_WAHA_API_KEY: WAHA_KEY, KBWA_META_GRAPH_URL: graph.url },
+      env: { INKDOVE_WAHA_URL: fake.url, INKDOVE_WAHA_API_KEY: WAHA_KEY, INKDOVE_META_GRAPH_URL: graph.url },
       options: { aiOverrides: hooks.overrides, onDecision: (row) => decisions.push(row) },
     });
     await t.login();

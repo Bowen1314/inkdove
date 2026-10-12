@@ -77,7 +77,7 @@ export function accountsRouter(ctx, auth) {
   });
   router.post('/:id/waha/logout', async (req, res) => res.json(await wa.wahaLogout(load(req))));
 
-  // 代理测试仍从 kbwa 直连上游代理，不经过中继（F13）
+  // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）
   router.post('/:id/proxy/test', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
     if (acc.channel !== 'waha') throw badRequest('这个号不是扫码接入', 'wrong_channel');

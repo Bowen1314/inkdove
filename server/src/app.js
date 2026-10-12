@@ -65,7 +65,7 @@ export function createApp(config, options = {}) {
     db,
     log,
     // 金丝雀串：每次进程启动随机生成，埋进 system prompt，用来发现提示词泄露
-    canary: options.canary || `KBWA-${crypto.randomBytes(6).toString('hex')}`,
+    canary: options.canary || `INKDOVE-${crypto.randomBytes(6).toString('hex')}`,
     proxyTestUrl: options.proxyTestUrl || PROXY_TEST_URL,
     getSettings: () => settings,
     setSettings(next) {
@@ -209,7 +209,7 @@ export function createApp(config, options = {}) {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
     if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: '请求体不是合法的 JSON', code: 'bad_json' });
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: '请求体太大', code: 'payload_too_large' });
-    log.error(`[kbwa] 未处理的错误：${err?.stack || err}`);
+    log.error(`[inkdove] 未处理的错误：${err?.stack || err}`);
     res.status(500).json({ error: '服务器内部错误', code: 'internal' });
   });
 

@@ -94,13 +94,13 @@ describe('转人工通知（按号；邮件走全局 SMTP）', () => {
     mail = mailStub();
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url },
+      env: { INKDOVE_WAHA_URL: fake.url },
       options: { createMailTransport: mail.create, aiOverrides: hooks.overrides },
     });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: { type: 'product', title: '保温杯 A100', content: '保温杯 A100 价格 59 元，容量 500ml。' } });
     await t.req('PUT', '/api/settings', {
-      body: { reply: { debounceSeconds: 0.05 }, email: { provider: 'smtp', from: 'KBWA <bot@example.com>', smtp: SMTP } },
+      body: { reply: { debounceSeconds: 0.05 }, email: { provider: 'smtp', from: 'Inkdove <bot@example.com>', smtp: SMTP } },
     });
     acc = await t.createAccount({
       name: '销售一号',
@@ -143,7 +143,7 @@ describe('转人工通知（按号；邮件走全局 SMTP）', () => {
     assert.match(email.subject, new RegExp(`^\\[待人工\\] 客户 \\+${number}：`));
     assert.deepEqual(email.to.map((x) => x.address), ['boss@example.com']);
     assert.equal(email.from.address, 'bot@example.com');
-    assert.equal(email.from.name, 'KBWA');
+    assert.equal(email.from.name, 'Inkdove');
     assert.ok(email.text.includes(link));
     assert.ok(!email.text.includes(F3_USAGE_FOOTER), '邮件里不带 WhatsApp 用法');
     const opts = mail.opts.at(-1);
@@ -333,10 +333,10 @@ describe('发信方式（F10）', () => {
     before(async () => {
       resend = await startFakeResend();
       fake = await startFakeWaha();
-      t = await startApp({ env: { KBWA_RESEND_API_URL: resend.url, KBWA_WAHA_URL: fake.url }, options: { resendRetryDelayMs: 10 } });
+      t = await startApp({ env: { INKDOVE_RESEND_API_URL: resend.url, INKDOVE_WAHA_URL: fake.url }, options: { resendRetryDelayMs: 10 } });
       await t.login();
       await t.req('PUT', '/api/settings', {
-        body: { reply: { debounceSeconds: 0.05 }, email: { provider: 'resend', from: 'KBWA <bot@example.com>', resend: { apiKey: 're_test_key_1234' } } },
+        body: { reply: { debounceSeconds: 0.05 }, email: { provider: 'resend', from: 'Inkdove <bot@example.com>', resend: { apiKey: 're_test_key_1234' } } },
       });
     });
     after(async () => {
@@ -354,7 +354,7 @@ describe('发信方式（F10）', () => {
       assert.equal(req.headers.authorization, 'Bearer re_test_key_1234');
       assert.match(req.headers['content-type'], /^application\/json/);
       assert.deepEqual(Object.keys(req.body).sort(), ['from', 'subject', 'text', 'to']);
-      assert.equal(req.body.from, 'KBWA <bot@example.com>');
+      assert.equal(req.body.from, 'Inkdove <bot@example.com>');
       assert.deepEqual(req.body.to, ['boss@example.com']);
       assert.match(req.body.subject, /测试邮件/);
       assert.ok(req.body.text.length > 0);

@@ -20,8 +20,8 @@ RUN npm ci --omit=dev
 # 3) 运行
 FROM node:22-slim
 ENV NODE_ENV=production \
-    KBWA_PORT=8794 \
-    KBWA_DATA_DIR=/app/data
+    INKDOVE_PORT=8794 \
+    INKDOVE_DATA_DIR=/app/data
 WORKDIR /app/server
 COPY --from=server-deps /app/server/node_modules ./node_modules
 COPY server/package.json ./

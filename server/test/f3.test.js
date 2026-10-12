@@ -43,7 +43,7 @@ describe('F3 在 WhatsApp 里直接处理转人工', () => {
 
   before(async () => {
     fake = await startFakeWaha();
-    t = await startApp({ env: { KBWA_WAHA_URL: fake.url } });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: { type: 'product', title: '保温杯 A100', content: '保温杯 A100 价格 59 元。' } });
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });

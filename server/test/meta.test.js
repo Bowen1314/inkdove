@@ -81,7 +81,7 @@ describe('Meta Cloud API 号', () => {
   const cid = (n) => convIdOf(acc, n);
   before(async () => {
     graph = await startFakeGraph();
-    t = await startApp({ env: { KBWA_META_GRAPH_URL: graph.url } });
+    t = await startApp({ env: { INKDOVE_META_GRAPH_URL: graph.url } });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: { type: 'product', title: '保温杯 A100', content: '保温杯 A100 价格 59 元。' } });
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });

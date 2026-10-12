@@ -65,7 +65,7 @@ async function post(graphBase, meta, body) {
 }
 
 /**
- * @param {string} graphBase 默认 https://graph.facebook.com（测试可用 KBWA_META_GRAPH_URL 覆盖）
+ * @param {string} graphBase 默认 https://graph.facebook.com（测试可用 INKDOVE_META_GRAPH_URL 覆盖）
  * @param {{phoneNumberId:string, apiVersion:string, accessToken:string}} meta
  * @param {string} to 纯数字号码（wa_id）
  * @param {string} text

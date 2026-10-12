@@ -80,7 +80,7 @@ describe('F15 文件管理', () => {
     graph = await startFakeGraph();
     hooks = await aiHooks();
     t = await startApp({
-      env: { KBWA_WAHA_URL: fake.url, KBWA_META_GRAPH_URL: graph.url },
+      env: { INKDOVE_WAHA_URL: fake.url, INKDOVE_META_GRAPH_URL: graph.url },
       options: { aiOverrides: hooks.overrides, onDecision: (row) => decisions.push(row), wahaInlineMaxBytes: INLINE_MAX },
     });
     fake.state.fetchBase = t.base;
@@ -313,7 +313,7 @@ describe('F15 文件管理', () => {
         assert.equal(img.file.mimetype, 'image/png');
         assert.equal(big.kind, 'file');
         assert.equal(big.file.data, undefined);
-        assert.match(big.file.url, new RegExp(`^http://kbwa:8794/internal/files/${bigTxt.id}\\?token=\\d+\\.[A-Za-z0-9_-]{43}$`));
+        assert.match(big.file.url, new RegExp(`^http://inkdove:8794/internal/files/${bigTxt.id}\\?token=\\d+\\.[A-Za-z0-9_-]{43}$`));
         assert.deepEqual(big.fetched, { status: 200, bytes: 3000, contentType: 'text/plain; charset=utf-8' });
       } finally {
         hooks.generate = null;

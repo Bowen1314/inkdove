@@ -1,7 +1,7 @@
 // 设置页「获取模型列表」：按接口格式调服务商的列模型接口，统一成 [{id, label?}]。
 import { ANTHROPIC_VERSION, LLM_FORMATS, LlmError, llmRoot } from './llm.js';
 
-/** 演示模式（KBWA_LLM_MOCK）下返回的固定列表，不发网络请求 */
+/** 演示模式（INKDOVE_LLM_MOCK）下返回的固定列表，不发网络请求 */
 export const MOCK_MODELS = [
   { id: 'mock-fast', label: '演示 · 快速' },
   { id: 'mock-smart', label: '演示 · 高质量' },

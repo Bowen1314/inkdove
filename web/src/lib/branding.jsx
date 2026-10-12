@@ -5,14 +5,14 @@ import { api } from '../api/client.js';
  * 网站名称和 Logo（GET /api/branding，公开接口，登录页也要用）。
  * App 启动时拉一次；拉不到就用默认值，不弹错误。设置页改完后调 refresh()。
  */
-export const DEFAULT_TITLE = 'KBWA';
-const DEFAULT_DOC_TITLE = 'KBWA 智能客服后台';
+export const DEFAULT_TITLE = '墨鸽';
+const DEFAULT_DOC_TITLE = '墨鸽 智能客服后台';
 
 // index.html 里原来的 favicon，没有自定义 Logo 时换回它。模块加载时记一次，StrictMode 重跑 effect 也不会记成 Logo
 const originalIcon = typeof document !== 'undefined' ? document.querySelector('link[rel~="icon"]')?.getAttribute('href') ?? null : null;
 
 // 上次拿到的品牌存在本机，下次打开先用它，免得先闪一下默认名称。存取失败（隐私模式等）就当没有
-const CACHE_KEY = 'kbwa.branding';
+const CACHE_KEY = 'inkdove.branding';
 function readCache() {
   try {
     const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');

@@ -191,7 +191,7 @@ function viaRelay(port, target, auth) {
   });
 }
 
-describe('代理测试（从 kbwa 直连上游，不经中继）', () => {
+describe('代理测试（从 inkdove 直连上游，不经中继）', () => {
   let ipsvc;
   let hp;
   let socks;
@@ -285,7 +285,7 @@ describe('代理协议转换中继（F13）', () => {
     socksB = await startSocks5({ user: 'su2', pass: 'sp2' });
     socks4 = await startSocks4();
     target = await startTarget();
-    t = await startApp({ env: { KBWA_WAHA_URL: fake.url } });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
     await t.login();
   });
   after(async () => {
@@ -310,7 +310,7 @@ describe('代理协议转换中继（F13）', () => {
     await t.req('DELETE', `/api/accounts/${a.id}`);
   });
 
-  it('socks5 上游：start 时传给 WAHA 的代理指向中继 kbwa:<端口>，带随机账号密码', async () => {
+  it('socks5 上游：start 时传给 WAHA 的代理指向中继 inkdove:<端口>，带随机账号密码', async () => {
     acc = await t.createAccount({
       name: '中继号',
       waha: { proxy: { enabled: true, protocol: 'socks5', host: '127.0.0.1', port: socksA.port, username: 'su', password: 'sp' } },
@@ -319,11 +319,11 @@ describe('代理协议转换中继（F13）', () => {
     assert.equal(st.status, 200, JSON.stringify(st.body));
     const create = fake.state.requests.find((r) => r.method === 'POST' && r.path === '/api/sessions' && r.body.name === acc.waha.sessionName);
     const px = create.body.config.proxy;
-    const m = /^kbwa:(\d+)$/.exec(px.server);
+    const m = /^inkdove:(\d+)$/.exec(px.server);
     assert.ok(m, px.server);
     relay = { port: Number(m[1]), username: px.username, password: px.password };
     assert.ok(relay.port >= t.config.proxyRelayPortBase);
-    assert.match(relay.username, /^kbwa_[0-9a-f]{12}$/);
+    assert.match(relay.username, /^inkdove_[0-9a-f]{12}$/);
     assert.ok(relay.password.length >= 24);
     assert.ok(!JSON.stringify(create.body).includes('"sp"'), '上游密码不交给 WAHA');
     const row = t.ctx.db.prepare('SELECT relay_port, relay_username, relay_password FROM accounts WHERE id = ?').get(acc.id);
@@ -373,7 +373,7 @@ describe('代理协议转换中继（F13）', () => {
     assert.equal(r.status, 200);
     assert.equal(puts(), n + 1, '更新了 WAHA session');
     assert.ok(t.log.lines.some((l) => l.includes(`号 ${acc.id} 的代理中继已重启`)));
-    assert.equal(wahaProxy().server, `kbwa:${relay.port}`);
+    assert.equal(wahaProxy().server, `inkdove:${relay.port}`);
     const a = socksA.state.targets.length;
     const ok = await viaRelay(relay.port, `127.0.0.1:${target.port}`, basic(relay.username, relay.password));
     assert.equal(ok.status, 200);

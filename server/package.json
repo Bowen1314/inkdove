@@ -1,9 +1,9 @@
 {
-  "name": "kbwa-server",
+  "name": "inkdove-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "KBWA 后端：知识库蒸馏 + WhatsApp 自动回复",
+  "description": "墨鸽后端：知识库蒸馏 + WhatsApp 自动回复",
   "main": "src/index.js",
   "engines": {
     "node": ">=20.18.1"

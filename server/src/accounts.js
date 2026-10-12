@@ -271,10 +271,10 @@ export function createAccountStore(db, config) {
         id,
         name,
         channel,
-        isWaha ? sessionName || `kbwa_${id}` : null,
+        isWaha ? sessionName || `inkdove_${id}` : null,
         storedConfig(acc),
         isWaha ? allocateRelayPort() : null,
-        isWaha ? `kbwa_${crypto.randomBytes(6).toString('hex')}` : null,
+        isWaha ? `inkdove_${crypto.randomBytes(6).toString('hex')}` : null,
         isWaha ? crypto.randomBytes(24).toString('base64url') : null,
         nowIso(),
       );

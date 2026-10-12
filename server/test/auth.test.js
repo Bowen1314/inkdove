@@ -7,25 +7,25 @@ import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { ADMIN_EMAIL, PASSWORD, quietLog, startApp } from './helpers.js';
 
-const BASE_ENV = { KBWA_ADMIN_EMAIL: 'admin@example.com', KBWA_SESSION_SECRET: 'x', KBWA_WAHA_WEBHOOK_SECRET: 'y' };
+const BASE_ENV = { INKDOVE_ADMIN_EMAIL: 'admin@example.com', INKDOVE_SESSION_SECRET: 'x', INKDOVE_WAHA_WEBHOOK_SECRET: 'y' };
 
 describe('配置', () => {
-  it('缺 KBWA_ADMIN_EMAIL 或 KBWA_ADMIN_PASSWORD 拒绝启动；密码少于 12 字符拒绝启动', () => {
-    assert.throws(() => loadConfig({ ...BASE_ENV, KBWA_ADMIN_PASSWORD: 'short' }), /至少 12/);
-    assert.throws(() => loadConfig({ ...BASE_ENV, KBWA_ADMIN_EMAIL: '', KBWA_ADMIN_PASSWORD: 'long-enough-pass' }), /KBWA_ADMIN_EMAIL/);
-    assert.throws(() => loadConfig({ ...BASE_ENV }), /KBWA_ADMIN_PASSWORD/);
-    assert.throws(() => loadConfig({ ...BASE_ENV, KBWA_ADMIN_EMAIL: 'not-an-email', KBWA_ADMIN_PASSWORD: 'long-enough-pass' }), /邮箱/);
-    assert.throws(() => loadConfig({ KBWA_ADMIN_EMAIL: 'a@example.com', KBWA_ADMIN_PASSWORD: 'long-enough-pass' }), /KBWA_SESSION_SECRET/);
+  it('缺 INKDOVE_ADMIN_EMAIL 或 INKDOVE_ADMIN_PASSWORD 拒绝启动；密码少于 12 字符拒绝启动', () => {
+    assert.throws(() => loadConfig({ ...BASE_ENV, INKDOVE_ADMIN_PASSWORD: 'short' }), /至少 12/);
+    assert.throws(() => loadConfig({ ...BASE_ENV, INKDOVE_ADMIN_EMAIL: '', INKDOVE_ADMIN_PASSWORD: 'long-enough-pass' }), /INKDOVE_ADMIN_EMAIL/);
+    assert.throws(() => loadConfig({ ...BASE_ENV }), /INKDOVE_ADMIN_PASSWORD/);
+    assert.throws(() => loadConfig({ ...BASE_ENV, INKDOVE_ADMIN_EMAIL: 'not-an-email', INKDOVE_ADMIN_PASSWORD: 'long-enough-pass' }), /邮箱/);
+    assert.throws(() => loadConfig({ INKDOVE_ADMIN_EMAIL: 'a@example.com', INKDOVE_ADMIN_PASSWORD: 'long-enough-pass' }), /INKDOVE_SESSION_SECRET/);
     assert.throws(
-      () => loadConfig({ ...BASE_ENV, KBWA_ADMIN_PASSWORD: 'long-enough-pass', KBWA_PROXY_RELAY_PORT_BASE: '80' }),
-      /KBWA_PROXY_RELAY_PORT_BASE/,
+      () => loadConfig({ ...BASE_ENV, INKDOVE_ADMIN_PASSWORD: 'long-enough-pass', INKDOVE_PROXY_RELAY_PORT_BASE: '80' }),
+      /INKDOVE_PROXY_RELAY_PORT_BASE/,
     );
   });
 
-  it('不读取通用名的 LLM 环境变量；中继默认端口 18000、主机名 kbwa', () => {
+  it('不读取通用名的 LLM 环境变量；中继默认端口 18000、主机名 inkdove', () => {
     const c = loadConfig({
       ...BASE_ENV,
-      KBWA_ADMIN_PASSWORD: 'long-enough-pass',
+      INKDOVE_ADMIN_PASSWORD: 'long-enough-pass',
       LLM_API_KEY: 'should-not-be-read',
       OPENAI_API_KEY: 'should-not-be-read',
       LLM_BASE_URL: 'http://evil',
@@ -33,14 +33,14 @@ describe('配置', () => {
     assert.equal(c.llmInit.apiKey, '');
     assert.equal(c.llmInit.baseUrl, '');
     assert.equal(c.proxyRelayPortBase, 18000);
-    assert.equal(c.proxyRelayHost, 'kbwa');
+    assert.equal(c.proxyRelayHost, 'inkdove');
     assert.equal(c.resendApiUrl, 'https://api.resend.com/emails');
   });
 
   it('第一次启动建 admin；之后改环境变量不影响已有账号', async () => {
-    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kbwa-boot-'));
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-boot-'));
     const env = (pw) =>
-      loadConfig({ ...BASE_ENV, KBWA_ADMIN_EMAIL: 'Boss@Example.com', KBWA_ADMIN_PASSWORD: pw, KBWA_DATA_DIR: dataDir, KBWA_LLM_MOCK: '1' });
+      loadConfig({ ...BASE_ENV, INKDOVE_ADMIN_EMAIL: 'Boss@Example.com', INKDOVE_ADMIN_PASSWORD: pw, INKDOVE_DATA_DIR: dataDir, INKDOVE_LLM_MOCK: '1' });
     const log = quietLog();
     const a = createApp(env('first-password-1'), { log, relayBindHost: '127.0.0.1' });
     await a.ready;
@@ -97,7 +97,7 @@ describe('登录和会话', () => {
   it('登录成功下发 httpOnly + SameSite=Lax 的签名 cookie，30 天；邮箱不分大小写；me 返回 User', async () => {
     const res = await t.login(ADMIN_EMAIL.toUpperCase());
     const sc = res.headers.get('set-cookie');
-    assert.match(sc, /^kbwa_session=[^;]+\.[^;]+;/);
+    assert.match(sc, /^inkdove_session=[^;]+\.[^;]+;/);
     assert.match(sc, /HttpOnly/i);
     assert.match(sc, /SameSite=Lax/i);
     assert.match(sc, /Max-Age=2592000/);
@@ -382,7 +382,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
       body: {
         llm: { apiKey: 'sk-secret-ABCD', model: 'gpt-x', format: 'anthropic' },
         reply: { persona: '客服小王', humanize: false },
-        email: { provider: 'resend', from: 'KBWA <notify@example.com>', resend: { apiKey: 're_secret_WXYZ' }, smtp: { password: 'smtp-pass', port: 587, secure: false } },
+        email: { provider: 'resend', from: 'Inkdove <notify@example.com>', resend: { apiKey: 're_secret_WXYZ' }, smtp: { password: 'smtp-pass', port: 587, secure: false } },
       },
     });
     assert.equal(r.status, 200);
