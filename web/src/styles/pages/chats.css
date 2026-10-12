@@ -326,6 +326,42 @@
   height: 20px;
   color: var(--text-muted);
 }
+/* F15：文件卡片可以点击下载 */
+a.msg__file {
+  max-width: 100%;
+  color: var(--text);
+  text-decoration: none;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+a.msg__file:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-subtle);
+}
+.msg__file > .msg__file-dl {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.msg__file-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.msg__file-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg__file-meta {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.msg--failed .msg__file {
+  opacity: 0.6;
+}
 
 /* ---- 草稿和输入框 ---- */
 .inbox__compose {
@@ -362,6 +398,141 @@
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+/* F15：草稿附带的文件 */
+.draft__files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.draft__file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  text-decoration: none;
+}
+a.draft__file:hover {
+  border-color: var(--border-strong);
+}
+.draft__file > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-muted);
+}
+.draft__file.is-missing {
+  color: var(--text-muted);
+}
+.draft__file-name {
+  min-width: 0;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.draft__file-meta {
+  flex: none;
+  color: var(--text-muted);
+}
+.draft__files > li {
+  min-width: 0;
+  max-width: 100%;
+}
+/* 草稿文件列表 + "发送这些文件"按钮：放不下时按钮折到下一行 */
+.draft__files-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+.draft__files-row > .draft__files {
+  flex: 1 1 240px;
+  min-width: 0;
+  margin: 0;
+}
+.draft__files-row > .btn {
+  flex: none;
+}
+
+/* F15：发送文件弹窗（可搜索的文件列表） */
+.file-pick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.file-pick__list {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.file-pick__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: 10px var(--sp-3);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  color: var(--text);
+  text-align: left;
+  transition: background-color var(--dur-fast) ease;
+}
+.file-pick__item:last-child {
+  border-bottom: 0;
+}
+.file-pick__item:hover {
+  background: var(--bg-subtle);
+}
+.file-pick__item.is-selected {
+  background: var(--bg-muted);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.file-pick__item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+.file-pick__icon {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  flex: none;
+  color: var(--text-muted);
+}
+.file-pick__body {
+  flex: 1;
+  /* width: 0 让长名字不把对话框撑宽（对话框是 grid 项，会按内容最小宽度撑开） */
+  width: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-pick__name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-pick__meta {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer {
@@ -404,6 +575,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 翻译完成的短暂提示（"已翻译为 西班牙语"），手机上也显示 */
+.composer__hint--status {
+  color: var(--success);
 }
 
 /* ---- 客户信息 ---- */
@@ -500,6 +675,9 @@
   }
   .composer__hint {
     display: none;
+  }
+  .composer__hint--status {
+    display: block;
   }
   .composer__bar {
     justify-content: flex-end;

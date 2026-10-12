@@ -141,6 +141,25 @@ export const api = {
   getSource: (id) => get(`/api/sources/${enc(id)}`),
   deleteSource: (id) => del(`/api/sources/${enc(id)}`),
 
+  // 产品资料库（F15）：浏览、下载两种角色都能用；上传、修改、删除、重新生成描述只有 admin
+  /** → SendableFile[]，按添加时间倒序；status: active | disabled */
+  listFiles: ({ q, status } = {}, o) => get('/api/files', { ...o, query: { q, status } }),
+  /** multipart：字段 files 可多个（一次最多 20 个），另带 addToKb → SendableFile[] */
+  uploadFiles: (files, { addToKb = true } = {}, o) => {
+    const form = new FormData();
+    files.forEach((f) => form.append('files', f, f.name));
+    form.append('addToKb', addToKb ? 'true' : 'false');
+    return request('POST', '/api/files', { ...o, form });
+  },
+  getFile: (id, o) => get(`/api/files/${enc(id)}`, o),
+  /** patch: {name?, description?, tags?, status?}；改了 description 后端会把 descriptionStatus 记为 manual */
+  updateFile: (id, patch, o) => put(`/api/files/${enc(id)}`, patch, o),
+  deleteFile: (id) => del(`/api/files/${enc(id)}`),
+  /** 重新生成描述 → SendableFile（descriptionStatus 变成 pending） */
+  describeFile: (id, o) => post(`/api/files/${enc(id)}/describe`, {}, o),
+  /** 下载地址：后端带 Content-Disposition: attachment，直接给 <a href download> 用 */
+  fileDownloadUrl: (id) => `/api/files/${enc(id)}/download`,
+
   // 蒸馏（界面上叫"整理知识库"）
   startDistill: ({ mode, sourceIds }) =>
     post('/api/distill', sourceIds && sourceIds.length ? { mode, sourceIds } : { mode }),
@@ -161,6 +180,15 @@ export const api = {
   answerGap: (id, answer) => post(`/api/kb/gaps/${enc(id)}/answer`, { answer }),
   dismissGap: (id) => post(`/api/kb/gaps/${enc(id)}/dismiss`, {}),
   ask: (message, history) => post('/api/kb/ask', { message, history }),
+
+  // 红线体检（F5，admin）
+  /** → {runId}。已有体检在跑：409 code=job_running；没配模型：400 code=llm_not_configured */
+  startRedteam: (o) => post('/api/redteam/run', {}, o),
+  /** 最近 10 次，不含明细（results）→ Run[] */
+  listRedteamRuns: (o) => get('/api/redteam/runs', o),
+  /** → {id, status, progress:{done,total}, summary, results[], startedAt, finishedAt, error} */
+  getRedteamRun: (id, o) => get(`/api/redteam/runs/${enc(id)}`, o),
+  cancelRedteamRun: (id, o) => post(`/api/redteam/runs/${enc(id)}/cancel`, {}, o),
 
   // WhatsApp 号码（F7）
   listAccounts: (o) => get('/api/accounts', o),
@@ -188,10 +216,61 @@ export const api = {
   listConversations: ({ accountId } = {}, o) => get('/api/wa/conversations', { ...o, query: { accountId } }),
   listMessages: (id, o) => get(`/api/wa/conversations/${enc(id)}/messages`, o),
 
-  // 客户线索（F6）
+  // 客户线索（F6）：agent 只能看、改自己号的线索，服务端按权限过滤
+  /** query: {q, stage, accountId}，空值不带 → Lead[]（也兼容 {leads: Lead[]}） */
   listLeads: (query, o) => get('/api/leads', { ...o, query }),
-  sendMessage: (id, text) => post(`/api/wa/conversations/${enc(id)}/send`, { text }),
+  getLead: (id, o) => get(`/api/leads/${enc(id)}`, o),
+  /** patch 只放改过的字段（name/company/country/email/interest/quantity/stage/summary），后端记进 manualFields → Lead */
+  updateLead: (id, patch, o) => put(`/api/leads/${enc(id)}`, patch, o),
+  deleteLead: (id) => del(`/api/leads/${enc(id)}`),
+  /** 立即重新提取（要调模型，可能要几秒）→ Lead */
+  refreshLead: (id, o) => post(`/api/leads/${enc(id)}/refresh`, {}, o),
+  /** 导出 CSV 的下载地址，带上当前筛选；后端带 Content-Disposition，直接给 <a href download> 用 */
+  leadsExportUrl: ({ q, stage, accountId } = {}) => buildUrl('/api/leads/export.csv', { q, stage, accountId }),
+
+  // 主动外联（F11）：agent 只看得到、只能操作自己建的任务，服务端按权限过滤
+  /** → Campaign[]（也兼容 {campaigns: Campaign[]}） */
+  listCampaigns: (o) => get('/api/campaigns', o),
+  /** → Campaign（也兼容 {campaign}） */
+  getCampaign: (id, o) => get(`/api/campaigns/${enc(id)}`, o),
+  /**
+   * multipart：file（.txt）、name、mode、accountIds（JSON 数组字符串）、message、defaultCountry，
+   * 有 Meta 号时再带 metaTemplateName、metaTemplateLanguage（空值不带）。
+   * → {campaign, preview:{valid, invalidLines:[{line, raw}], skipped:{<reason>: count}}}。缺模板：400 code=template_required
+   */
+  createCampaign: ({ file, name, mode, accountIds, message, metaTemplateName, metaTemplateLanguage, defaultCountry }, o) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    form.append('name', name);
+    form.append('mode', mode);
+    form.append('accountIds', JSON.stringify(accountIds || []));
+    form.append('message', message);
+    form.append('defaultCountry', defaultCountry);
+    if (metaTemplateName) form.append('metaTemplateName', metaTemplateName);
+    if (metaTemplateLanguage) form.append('metaTemplateLanguage', metaTemplateLanguage);
+    return request('POST', '/api/campaigns', { ...o, form });
+  },
+  startCampaign: (id, o) => post(`/api/campaigns/${enc(id)}/start`, {}, o),
+  pauseCampaign: (id, o) => post(`/api/campaigns/${enc(id)}/pause`, {}, o),
+  resumeCampaign: (id, o) => post(`/api/campaigns/${enc(id)}/resume`, {}, o),
+  cancelCampaign: (id, o) => post(`/api/campaigns/${enc(id)}/cancel`, {}, o),
+  /** 只能删 draft、cancelled、done */
+  deleteCampaign: (id, o) => del(`/api/campaigns/${enc(id)}`, o),
+  /**
+   * 收件人分页，page 从 1 开始。status 取 pending | sent | replied | declined | failed | skipped，空为全部
+   * （replied、declined 是按 repliedAt、declinedAt 筛的虚拟值，sent 指已发未回复）
+   * → {recipients: Recipient[], total, page, pageSize}（也兼容 {items} 或直接给数组）
+   */
+  listCampaignRecipients: (id, { status, page, pageSize } = {}, o) =>
+    get(`/api/campaigns/${enc(id)}/recipients`, { ...o, query: { status, page, pageSize } }),
+
+  sendMessage:(id, text) => post(`/api/wa/conversations/${enc(id)}/send`, { text }),
+  /** F15：人工发文件，发完会话进入 botPaused → Message（attachment 有值） */
+  sendFile: (id, fileId, caption, o) =>
+    post(`/api/wa/conversations/${enc(id)}/send-file`, caption ? { fileId, caption } : { fileId }, o),
   setBotPaused: (id, paused) => post(`/api/wa/conversations/${enc(id)}/bot`, { paused }),
+  /** 输入框一键翻译成客户的语言（只翻译，不发送、不改会话）→ {text, language}，language 是中文语言名 */
+  translateText: (id, text, o) => post(`/api/wa/conversations/${enc(id)}/translate`, { text }, o),
   /** F2b：人工消息改写成条目草稿，不落库 → {type, title, content, tags} */
   kbDraft: (convId, messageId) =>
     post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/kb-draft`, {}),

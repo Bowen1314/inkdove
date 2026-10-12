@@ -1,0 +1,84 @@
+/* 客户页（F6 客户线索）。见 DESIGN.md 第 5 节和第 7 节「客户、成员、外联」 */
+
+/* 页头：自动提取关闭时的一行小字（只有 admin 看得到），后面跟去设置的链接 */
+.leads-page__off {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* ---- 表格 ---- */
+
+/* 文字列超长省略、悬停看全文；意向产品列是 is-fluid，吃掉剩余宽度 */
+.leads-page__contact {
+  min-width: 0;
+  max-width: 180px;
+}
+.leads-page__text {
+  display: block;
+  max-width: 140px;
+}
+.leads-page__text--sm {
+  max-width: 96px;
+}
+.leads-page__text--fluid {
+  max-width: none;
+}
+
+/* 所属号那列隐藏后，所属号挪到客户名下面那行 */
+.leads-page__acct-inline {
+  display: none;
+}
+
+/* DataTable 只带 hide-md / hide-sm，这页列多，再加两档：< 1280（xl）、< 1440（2xl） */
+@media (max-width: 1439px) {
+  .leads-page .table .hide-2xl {
+    display: none;
+  }
+}
+@media (max-width: 1279px) {
+  .leads-page .table .hide-xl {
+    display: none;
+  }
+  .leads-page__acct-inline {
+    display: inline;
+  }
+}
+@media (max-width: 640px) {
+  /* 手机上意向产品列也隐藏，客户列吃掉剩余宽度，不把表格撑出横向滚动 */
+  .leads-page .table th:first-child,
+  .leads-page .table td:first-child {
+    width: 100%;
+  }
+  .leads-page .table td:first-child {
+    max-width: 0;
+  }
+  .leads-page__contact {
+    max-width: none;
+  }
+}
+
+/* ---- 详情抽屉（抽屉挂在 body 下，不在 .leads-page 里面） ---- */
+.leads-drawer {
+  gap: var(--sp-4);
+}
+.leads-drawer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.leads-drawer__fields {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.leads-drawer__busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+.leads-drawer__foot-start {
+  margin-right: auto;
+}

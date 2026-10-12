@@ -127,13 +127,65 @@ export const MEDIA_LABEL = {
   image: '图片',
 };
 
-// F6 客户阶段。前四个是漏斗顺序
+// F6 客户阶段。前四个是漏斗顺序。tone 是「客户」页阶段小标签的颜色（Tag 的语义色，neutral 为灰）：
+// 前期蓝、议价琥珀、有下单意向绿，售后和其他灰
 export const LEAD_STAGES = [
-  { value: 'inquiry', label: '询价' },
-  { value: 'sample', label: '要样品' },
-  { value: 'negotiation', label: '议价' },
-  { value: 'order_intent', label: '有下单意向' },
-  { value: 'after_sales', label: '售后' },
-  { value: 'other', label: '其他' },
+  { value: 'inquiry', label: '询价', tone: 'info' },
+  { value: 'sample', label: '要样品', tone: 'info' },
+  { value: 'negotiation', label: '议价', tone: 'warning' },
+  { value: 'order_intent', label: '有下单意向', tone: 'success' },
+  { value: 'after_sales', label: '售后', tone: 'neutral' },
+  { value: 'other', label: '其他', tone: 'neutral' },
 ];
 export const leadStageLabel = (s) => LEAD_STAGES.find((x) => x.value === s)?.label || s || '—';
+export const leadStageTone = (s) => LEAD_STAGES.find((x) => x.value === s)?.tone || 'neutral';
+
+// F5 红线体检：题目类别。前六个 key 是 SPEC 原文；多轮题、正常题的 key 规格没写死，这里约定为 multi_turn、legit
+export const REDTEAM_CATEGORY = {
+  price_discount: '要折扣砍价',
+  price_quote: '按量报价',
+  purchase: '下单付款',
+  identity: '问身份',
+  offtopic_task: '离题任务',
+  injection: '注入攻击',
+  multi_turn: '多轮题',
+  legit: '正常题',
+};
+/** 结果行 → 类别文案。key 不认识时：isLegit 的算正常题，带 history 的算多轮题，否则原样显示 key */
+export function redteamCategoryLabel(r) {
+  const c = r?.category;
+  if (c && REDTEAM_CATEGORY[c]) return REDTEAM_CATEGORY[c];
+  if (r?.isLegit) return REDTEAM_CATEGORY.legit;
+  if (Array.isArray(r?.history) && r.history.length > 0) return REDTEAM_CATEGORY.multi_turn;
+  return c || '—';
+}
+
+// F5 题目语言（中文、英文、西班牙语混用）。zh-CN 这种带地区的只看前半段
+export const REDTEAM_LANG = { zh: '中文', en: '英文', es: '西班牙语' };
+export const redteamLangLabel = (l) => REDTEAM_LANG[String(l || '').split(/[-_]/)[0].toLowerCase()] || l || '—';
+
+// F11 主动外联：任务状态、模式、收件人状态、预检跳过原因（值和 SPEC 一字不差）
+export const CAMPAIGN_STATUS = {
+  draft: { label: '草稿', tone: 'neutral' },
+  running: { label: '发送中', tone: 'info', pulse: true },
+  paused: { label: '已暂停', tone: 'warning' },
+  done: { label: '已完成', tone: 'success' },
+  cancelled: { label: '已取消', tone: 'neutral' },
+};
+export const campaignStatus = (s) => CAMPAIGN_STATUS[s] || { label: s || '未知', tone: 'neutral' };
+
+export const CAMPAIGN_MODES = [
+  { value: 'single', label: '指定一个号' },
+  { value: 'pooled', label: '平均分给多个号' },
+];
+export const campaignModeLabel = (m) => CAMPAIGN_MODES.find((x) => x.value === m)?.label || m || '—';
+
+export const SKIP_REASON = {
+  invalid: '格式不对',
+  duplicate: '重复',
+  blocklisted: '在黑名单',
+  already_contacted: '联系过',
+  not_on_whatsapp: '没有 WhatsApp',
+  notify_number: '是通知号码',
+};
+export const skipReasonLabel = (r) => SKIP_REASON[r] || r || '—';

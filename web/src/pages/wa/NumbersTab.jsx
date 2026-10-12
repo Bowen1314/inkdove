@@ -255,6 +255,19 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
             ))}
           </ul>
         )}
+        {/* 导入时被自动调整过的号（比如没配发信方式，邮件通知被关掉了） */}
+        {result.created.some((c) => c.notices?.length > 0) && (
+          <ul className="numbers-import__list" aria-label="需要留意的号">
+            {result.created
+              .filter((c) => c.notices?.length > 0)
+              .map((c) => (
+                <li key={c.id} className="numbers-import__item numbers-import__item--stack">
+                  <span className="numbers-import__name">{c.name}</span>
+                  <span className="numbers-import__reason">{c.notices.join('；')}</span>
+                </li>
+              ))}
+          </ul>
+        )}
         {result.created.length > 0 && hasWaha && (
           <div className="field__hint">扫码接入的号还没有连接，请到各号的「连接」里重新扫码或用配对码连接。</div>
         )}

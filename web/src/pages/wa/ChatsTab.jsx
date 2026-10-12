@@ -5,6 +5,7 @@ import {
   BookPlus,
   CornerDownLeft,
   Image as ImageIcon,
+  Languages,
   MessagesSquare,
   Mic,
   PanelRight,
@@ -31,6 +32,7 @@ import { setPendingCount } from '../../lib/inboxCount.js';
 import { AUTHOR_LABEL, BOT_DECISION_NOTE, LEAD_STAGES, MEDIA_LABEL, leadStageLabel } from '../../lib/labels.js';
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
+import { AttachmentCard, DraftFiles, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
 
 const POLL_MS = 4000;
 
@@ -229,7 +231,8 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
   const [showActions, setShowActions] = useState(false);
   const pressRef = useRef(null);
   const MediaIcon = kind === 'customer' && msg.media ? MEDIA_ICON[msg.media.type] : null;
-  const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed';
+  // 只发了文件、没有文字的人工消息不能存进知识库（后端会报 empty_message）
+  const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed' && !!msg.text?.trim();
   const fromUs = kind !== 'customer';
 
   // 人工消息：悬停（桌面）或长按（手机）时出现"存进知识库"
@@ -261,14 +264,18 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
       className={`msg msg--${kind}${fromUs ? ' msg--out' : ''}${msg.status === 'failed' ? ' msg--failed' : ''}${showActions ? ' show-actions' : ''}`}
       {...touchProps}
     >
-      <div className="msg__bubble">
-        {MediaIcon && (
-          <span className="msg__media" title={MEDIA_LABEL[msg.media.type]} aria-label={MEDIA_LABEL[msg.media.type]}>
-            <MediaIcon />
-          </span>
-        )}
-        {msg.text}
-      </div>
+      {/* F15：发出的文件显示成文件卡片；带说明文字（caption）时文字另起一个气泡 */}
+      {msg.attachment && <AttachmentCard attachment={msg.attachment} />}
+      {(!msg.attachment || msg.text) && (
+        <div className="msg__bubble">
+          {MediaIcon && (
+            <span className="msg__media" title={MEDIA_LABEL[msg.media.type]} aria-label={MEDIA_LABEL[msg.media.type]}>
+              <MediaIcon />
+            </span>
+          )}
+          {msg.text}
+        </div>
+      )}
       <div className="msg__meta">
         {fromUs && <span>{label}</span>}
         {kind === 'bot' && !campaign && ids.length > 0 && <KnowledgeRefs ids={ids} />}
@@ -357,26 +364,58 @@ function MessageStream({ messages, convId, canSaveToKb, onSaveToKb }) {
   );
 }
 
-/** F2a 草稿：输入框上方显示，"填入输入框"后由人工修改再发 */
-function DraftBox({ draft, onFill }) {
-  if (!draft?.text) return null;
+/**
+ * F2a 草稿：输入框上方显示，"填入输入框"后由人工修改再发。
+ * F15：草稿可以只带文件（text 为空、fileIds 有值），文件列在文字下面，旁边"发送这些文件"按顺序逐个发。
+ * kept：草稿已被自己发的消息清掉（后端规则），只剩前端记住的文件建议；这时不显示文字，可以手动关掉。
+ */
+function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss }) {
+  const text = !kept && draft?.text?.trim() ? draft.text : '';
+  const fileIds = kept ? kept.fileIds : Array.isArray(draft?.fileIds) ? draft.fileIds : [];
+  if (!text && !fileIds.length) return null;
   return (
     <div className="draft">
       <div className="draft__head">
         <Sparkles aria-hidden="true" />
-        <span>建议回复（草稿，未发送）</span>
-        <button type="button" className="btn btn--sm" onClick={() => onFill(draft.text)}>
-          <CornerDownLeft />
-          填入输入框
-        </button>
+        <span>{kept ? '草稿建议发送的文件（还没发）' : '建议回复（草稿，未发送）'}</span>
+        {text && (
+          <button type="button" className="btn btn--sm" onClick={() => onFill(text)}>
+            <CornerDownLeft />
+            填入输入框
+          </button>
+        )}
+        {kept && (
+          <Tooltip content="不发了，关掉">
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              onClick={onDismiss}
+              disabled={sendingFiles}
+              aria-label="关掉草稿建议的文件"
+            >
+              <X />
+            </button>
+          </Tooltip>
+        )}
       </div>
-      <div className="draft__text">{draft.text}</div>
+      {text && <div className="draft__text">{text}</div>}
+      {fileIds.length > 0 && <DraftFiles fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} />}
     </div>
   );
 }
 
 function Composer({ conv, text, setText, onSent, inputRef }) {
   const [sending, setSending] = useState(false);
+  const [translating, setTranslating] = useState(false);
+  const [status, setStatus] = useState(''); // 翻译完成后在底栏左侧短暂显示
+  const textRef = useRef(text);
+  textRef.current = text;
+
+  useEffect(() => {
+    if (!status) return undefined;
+    const timer = setTimeout(() => setStatus(''), 4000);
+    return () => clearTimeout(timer);
+  }, [status]);
 
   // 自动增高，最多 6 行
   useLayoutEffect(() => {
@@ -388,7 +427,7 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
 
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
+    if (!t || sending || translating) return;
     setSending(true);
     try {
       const msg = await api.sendMessage(conv.id, t);
@@ -401,6 +440,32 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
     }
   };
 
+  // 一键翻译成客户的语言：只替换输入框内容，不发送。失败时接口已弹提示，原文不动
+  const translate = async () => {
+    const original = text;
+    if (!original.trim() || sending || translating) return;
+    setTranslating(true);
+    setStatus('');
+    try {
+      const res = await api.translateText(conv.id, original);
+      // 翻译期间输入框只读，但"填入输入框"仍可能换掉内容；换过就不覆盖
+      if (textRef.current !== original) return;
+      setText(res.text);
+      setStatus(res.text === original.trim() ? `原文已是${res.language}，没有改动` : `已翻译为 ${res.language}`);
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (el) {
+          el.focus();
+          el.setSelectionRange?.(res.text.length, res.text.length);
+        }
+      }, 0);
+    } catch {
+      // 已提示
+    } finally {
+      setTranslating(false);
+    }
+  };
+
   return (
     <div className="composer">
       <textarea
@@ -410,6 +475,8 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
         placeholder={`回复 ${convName(conv)}…`}
         value={text}
         disabled={sending}
+        readOnly={translating}
+        aria-busy={translating || undefined}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -420,10 +487,22 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
         aria-label="回复内容"
       />
       <div className="composer__bar">
-        <span className="composer__hint">
-          Enter 发送 · Shift+Enter 换行{conv.botPaused ? '' : ' · 手动发送后机器人会暂停这个会话'}
+        <span className={`composer__hint${status ? ' composer__hint--status' : ''}`} aria-live="polite">
+          {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
         </span>
-        <button type="button" className="btn btn--primary btn--sm" onClick={send} disabled={!text.trim() || sending}>
+        <SendFileButton conv={conv} onSent={onSent} disabled={sending} />
+        <Tooltip content="翻译成客户的语言">
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon btn--sm"
+            onClick={translate}
+            disabled={!text.trim() || sending || translating}
+            aria-label="翻译成客户的语言"
+          >
+            {translating ? <Spinner /> : <Languages />}
+          </button>
+        </Tooltip>
+        <button type="button" className="btn btn--primary btn--sm" onClick={send} disabled={!text.trim() || sending || translating}>
           {sending ? <Spinner /> : <SendHorizontal />}
           发送
         </button>
@@ -552,6 +631,55 @@ function ChatPane({ conv, convId, messages, msgError, onBack, onConvUpdate, onSe
   const [text, setText] = useState('');
   const [kbMsg, setKbMsg] = useState(null);
   const inputRef = useRef(null);
+  // 自己发出任何消息后端都会清空草稿（F2a），草稿里建议的文件先在这里记住：发完、手动关掉或切换会话
+  // （ChatPane 按会话 key，切换即重置）前一直显示。{draftAt: 来自哪份草稿的 createdAt, fileIds}
+  const [keptFiles, setKeptFiles] = useState(null);
+  const [sendingFiles, setSendingFiles] = useState(false);
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const liveDraft = conv?.draft || null;
+  const liveFileIds = Array.isArray(liveDraft?.fileIds) ? liveDraft.fileIds : [];
+  // 服务端出了新草稿（createdAt 不同）就以新草稿为准；同一份草稿（轮询拿到旧数据）仍按已清掉显示
+  const kept = keptFiles && (!liveDraft || liveDraft.createdAt === keptFiles.draftAt) ? keptFiles : null;
+  const liveDraftAt = liveDraft?.createdAt;
+  useEffect(() => {
+    if (liveDraftAt !== undefined) setKeptFiles((prev) => (prev && prev.draftAt !== liveDraftAt ? null : prev));
+  }, [liveDraftAt]);
+
+  /** 自己发出消息或文件：先记住草稿里的文件建议，发出去的那个文件从里面去掉 */
+  const handleSent = (msg) => {
+    if (liveFileIds.length) {
+      setKeptFiles((prev) => (prev && prev.draftAt === liveDraftAt ? prev : { draftAt: liveDraftAt, fileIds: liveFileIds }));
+    }
+    const sentFileId = msg?.status !== 'failed' ? msg?.attachment?.fileId : null;
+    if (sentFileId) {
+      setKeptFiles((prev) => {
+        if (!prev) return prev;
+        const rest = prev.fileIds.filter((id) => id !== sentFileId);
+        return rest.length ? { ...prev, fileIds: rest } : null;
+      });
+    }
+    onSent(msg);
+  };
+
+  /** 草稿里的文件按顺序逐个发，中途失败就停（已提示是哪个）；全部发完收起。切走会话后照样发完，只是不再更新这里 */
+  const sendDraftFiles = async (files) => {
+    if (!conv || sendingFiles || !files.length) return;
+    setSendingFiles(true);
+    try {
+      const done = await sendFilesInOrder({ convId: conv.id, files, onSent: (msg) => aliveRef.current && handleSent(msg) });
+      // 已删除、已停用的发不了，全部发完时一起收起
+      if (done && aliveRef.current) setKeptFiles(null);
+    } finally {
+      if (aliveRef.current) setSendingFiles(false);
+    }
+  };
 
   const toggleBot = async () => {
     if (!conv) return;
@@ -650,8 +778,15 @@ function ChatPane({ conv, convId, messages, msgError, onBack, onConvUpdate, onSe
 
       {conv && (
         <div className="inbox__compose">
-          <DraftBox draft={conv.draft} onFill={fillDraft} />
-          <Composer conv={conv} text={text} setText={setText} onSent={onSent} inputRef={inputRef} />
+          <DraftBox
+            draft={conv.draft}
+            kept={kept}
+            onFill={fillDraft}
+            onSendFiles={sendDraftFiles}
+            sendingFiles={sendingFiles}
+            onDismiss={() => setKeptFiles(null)}
+          />
+          <Composer conv={conv} text={text} setText={setText} onSent={handleSent} inputRef={inputRef} />
         </div>
       )}
 
@@ -772,7 +907,10 @@ export default function ChatsTab() {
         ...conv,
         botPaused: true,
         draft: null, // 人工发出任何消息都会清空草稿（F2a）
-        lastMessage: msg ? { text: msg.text, direction: 'out', ts: msg.ts } : conv.lastMessage,
+        // 文件消息 text 为空，预览和后端一样显示"[文件] 文件名"（F15）
+        lastMessage: msg
+          ? { text: msg.text || (msg.attachment ? `[文件] ${msg.attachment.filename}` : ''), direction: 'out', ts: msg.ts }
+          : conv.lastMessage,
         updatedAt: msg?.ts || conv.updatedAt,
       });
     }

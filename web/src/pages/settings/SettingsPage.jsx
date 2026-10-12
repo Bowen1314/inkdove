@@ -9,18 +9,20 @@ import MediaSection from './MediaSection.jsx';
 import LeadsSection from './LeadsSection.jsx';
 import EmailSection from './EmailSection.jsx';
 import BrandSection from './BrandSection.jsx';
+import OutreachSection from './OutreachSection.jsx';
 
-/** 分组子导航，每组一个子路由。「品牌」放最后；「主动外联」「模型单价」第二批再加。 */
+/** 分组子导航，每组一个子路由。「品牌」放最后；「模型单价」第二批再加。 */
 const NAV = [
   { to: '/settings/llm', label: 'AI 模型' },
   { to: '/settings/reply', label: '回复' },
   { to: '/settings/media', label: '语音和图片' },
   { to: '/settings/leads', label: '客户线索' },
   { to: '/settings/email', label: '发信方式' },
+  { to: '/settings/outreach', label: '主动外联' },
   { to: '/settings/brand', label: '品牌' },
 ];
 
-const GROUPS = ['llm', 'reply', 'media', 'leads', 'email', 'brand'];
+const GROUPS = ['llm', 'reply', 'media', 'leads', 'email', 'outreach', 'brand'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -82,8 +84,9 @@ export default function SettingsPage() {
           <Route path="media" element={<MediaSection {...props} />} />
           <Route path="leads" element={<LeadsSection {...props} />} />
           <Route path="email" element={<EmailSection {...props} />} />
+          <Route path="outreach" element={<OutreachSection {...props} />} />
           <Route path="brand" element={<BrandSection {...props} />} />
-          {/* 第二批：outreach（主动外联，settings.outreach）、pricing（模型单价） */}
+          {/* 第二批：pricing（模型单价） */}
           <Route path="*" element={<Navigate to="/settings/llm" replace />} />
         </Routes>
         {health?.version && <div className="settings-page__version">版本 {health.version}</div>}

@@ -1,0 +1,156 @@
+/* 知识库「红线体检」标签（F5）。见 DESIGN.md 第 7 节「知识库 → 红线体检」、第 5 节「可展开的行」，颜色规则按 SPEC-phase2 */
+
+.kb-redteam {
+  flex: 1 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部一行：圆点 + 状态 + 说明问号，右边是取消按钮（和整理的 DistillBar 同一种排法） */
+.kb-redteam__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 52px;
+  padding: 10px var(--gutter);
+  border-bottom: 1px solid var(--border);
+}
+.kb-redteam__status {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+  min-width: 0;
+}
+.kb-redteam__bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* 没配模型时挡住"开始体检"的提示 */
+.kb-redteam__notice {
+  padding: var(--sp-4) var(--gutter) 0;
+}
+
+/* ============ 进度 / 汇总卡片 ============ */
+.kb-redteam__overview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--gutter);
+  border-bottom: 1px solid var(--border);
+}
+.kb-redteam__metric {
+  min-width: 0;
+}
+.kb-redteam__metric > .card {
+  height: 100%;
+}
+/* 红线失守 > 0：整张卡片用错误色突出（数字的红色由 Metric 的 tone 给） */
+.kb-redteam__metric > .kb-redteam__card--danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+.kb-redteam__skeleton-card {
+  height: 90px;
+  border-radius: var(--radius-lg);
+}
+
+.kb-redteam__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 880px;
+}
+.kb-redteam__progress-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+/* 还不知道总题数时：来回滑动的进度条（动画沿用 knowledge.css 里整理用的 kb-indeterminate） */
+.kb-redteam__progress--indeterminate .progress__bar {
+  animation: kb-indeterminate 1.2s var(--ease) infinite;
+}
+
+/* ============ 结果表 ============ */
+.kb-redteam__outcome {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+/* 类别、语言两列隐藏时（≤768、测试对话面板挤窄内容时），挪到问题下面那行 */
+.kb-redteam__inline {
+  display: none;
+}
+
+/* 展开行 */
+.kb-redteam__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 880px;
+}
+.kb-redteam__detail-meta {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.kb-redteam__detail-actual {
+  display: inline-flex;
+  align-items: center;
+}
+.kb-redteam__kv dd {
+  white-space: pre-wrap;
+}
+/* 多轮题前面的对话：一行一条，左边是谁说的 */
+.kb-redteam__turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  list-style: none;
+  white-space: normal;
+}
+.kb-redteam__turn {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  column-gap: var(--sp-2);
+}
+.kb-redteam__turn-role {
+  color: var(--text-muted);
+}
+
+@media (max-width: 768px) {
+  .kb-redteam__inline {
+    display: inline;
+  }
+  .kb-redteam__detail-meta {
+    display: flex;
+  }
+}
+.kb-page--docked .kb-redteam__inline {
+  display: inline;
+}
+.kb-page--docked .kb-redteam__detail-meta {
+  display: flex;
+}
+/* ============ 最近的体检记录 ============ */
+.kb-redteam__history {
+  padding: var(--sp-8) 0 var(--sp-12);
+}
+.kb-redteam__history-title {
+  padding: 0 var(--gutter) var(--sp-3);
+}

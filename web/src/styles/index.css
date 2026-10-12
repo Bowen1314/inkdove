@@ -5,8 +5,11 @@
 @import './pages/chats.css';
 @import './pages/overview.css';
 @import './pages/knowledge.css';
+@import './pages/redteam.css';
 @import './pages/files.css';
 @import './pages/numbers.css';
 @import './pages/members.css';
+@import './pages/leads.css';
+@import './pages/outreach.css';
 @import './pages/settings.css';
 @import './pages/auth.css';

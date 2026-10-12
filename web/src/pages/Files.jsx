@@ -40,12 +40,5 @@ export default function FilesPage() {
 
   if (tab === 'sources') return <SourcesTab header={header} onChanged={refreshStats} />;
 
-  return (
-    <div className="page">
-      {header()}
-      <div className="files-page__body">
-        <SendableTab />
-      </div>
-    </div>
-  );
+  return <SendableTab header={header} onChanged={refreshStats} />;
 }

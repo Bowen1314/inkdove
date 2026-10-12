@@ -1,17 +1,19 @@
-import { PageHeader } from '../ui/common.jsx';
-import { ComingSoon } from '../ui/ComingSoon.jsx';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import CampaignList from './outreach/CampaignList.jsx';
+import CampaignNew from './outreach/CampaignNew.jsx';
+import CampaignDetail from './outreach/CampaignDetail.jsx';
 
 /**
- * 主动外联（F11）。占位：下一段补完。
- * 路由注册为 /outreach/*，可以在这里用嵌套 <Routes> 加 /outreach/:id 等子页面，不用改 App.jsx。
+ * 主动外联（F11）。路由注册为 /outreach/*：
+ * /outreach 任务列表；/outreach/new 新建（三步）；/outreach/:id 任务详情。
  */
 export default function Outreach() {
   return (
-    <div className="page">
-      <PageHeader title="外联" />
-      <div className="page-body">
-        <ComingSoon desc="主动外联正在开发中。" />
-      </div>
-    </div>
+    <Routes>
+      <Route index element={<CampaignList />} />
+      <Route path="new" element={<CampaignNew />} />
+      <Route path=":id" element={<CampaignDetail />} />
+      <Route path="*" element={<Navigate to="/outreach" replace />} />
+    </Routes>
   );
 }

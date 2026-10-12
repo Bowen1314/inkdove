@@ -96,7 +96,7 @@ export default function KnowledgePage() {
           {tab === 'profile' && <ProfileTab readOnly={!isAdmin} />}
           {tab === 'gaps' && <GapsTab onChanged={refreshStats} />}
           {tab === 'distill' && <DistillTab onChanged={refreshStats} actionsSlot={slot} />}
-          {tab === 'redteam' && <RedteamTab />}
+          {tab === 'redteam' && <RedteamTab actionsSlot={slot} />}
         </div>
       </div>
 

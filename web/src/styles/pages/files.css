@@ -131,3 +131,92 @@
 .files-page__preview--loading {
   white-space: normal;
 }
+
+/* ============ 产品资料（可发送） ============ */
+
+/* 页头说明（规格点名要求的原文）＋"同时加入知识库"复选框，一行 Caption，窄屏折行 */
+.files-page__intro {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  padding: var(--sp-3) var(--gutter) 0;
+}
+.files-page__intro-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.files-page__kb-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex: none;
+}
+
+/* 名称列不让长文件名把表格撑宽；描述列是 fluid，吃掉剩余宽度 */
+.files-page__sendable .files-page__name {
+  max-width: 320px;
+}
+.files-page__desc {
+  display: block;
+  color: var(--text-muted);
+}
+.files-page__desc-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  /* 手机上描述列隐藏，名称列吃掉剩余宽度 */
+  .files-page__sendable .table th:first-child,
+  .files-page__sendable .table td:first-child {
+    width: 100%;
+  }
+  .files-page__sendable .table td:first-child {
+    max-width: 0;
+  }
+  .files-page__sendable .files-page__name {
+    max-width: none;
+  }
+}
+
+/* 抽屉 */
+.files-page__foot-start {
+  margin-right: auto;
+}
+.files-page__switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+.files-page__switch-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.files-page__meta {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.files-page__filename {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.files-page__filename > span {
+  min-width: 0;
+  word-break: break-all;
+}
+.files-page__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}

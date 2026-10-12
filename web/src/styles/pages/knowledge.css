@@ -18,6 +18,10 @@
   display: flex;
   flex-direction: column;
 }
+/* 标签栏不参与收缩：.tabs 带 overflow-x，内容比屏幕高时（比如红线体检的结果表）会被压成 1px */
+.kb-page__main > .tabs {
+  flex: none;
+}
 /* 各标签把自己的主操作放进页头这个位置 */
 .kb-page__slot {
   display: contents;

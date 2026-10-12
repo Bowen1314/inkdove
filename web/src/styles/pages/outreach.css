@@ -1,0 +1,372 @@
+/* 外联页（F11 主动外联）。见 DESIGN.md 第 5 节和第 7 节「客户、成员、外联」；设置页「主动外联」区块的几处也写在这里 */
+
+/* ============ 进度：进度条 + 右边 Caption "132 / 300" ============ */
+.outreach-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.outreach-progress__bar {
+  flex: none;
+  width: 96px;
+}
+.outreach-progress__text {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+
+.outreach-metric {
+  min-width: 0;
+}
+.outreach-metric > .card {
+  height: 100%;
+}
+
+/* ============ 列表 ============ */
+.outreach-list__accounts {
+  display: block;
+  max-width: 220px;
+}
+/* 名称下面那行：宽屏写模式；「用到的号」那列隐藏后（< 1280）改写用到的号 */
+.outreach-list__sub-narrow {
+  display: none;
+}
+/* DataTable 只带 hide-md / hide-sm，这页再加一档：< 1280（lg） */
+@media (max-width: 1279px) {
+  .outreach-list .table .hide-lg {
+    display: none;
+  }
+  .outreach-list__sub-wide {
+    display: none;
+  }
+  .outreach-list__sub-narrow {
+    display: inline;
+  }
+}
+@media (max-width: 640px) {
+  .outreach-progress__bar {
+    width: 56px;
+  }
+}
+
+/* ============ 新建（整页 + 3 步步骤条） ============ */
+.outreach-new__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  /* .steps 是 overflow-x: auto，内容高出 1px 时会冒出竖滚动条 */
+  overflow-y: hidden;
+}
+.outreach-new__steps .steps__index > svg {
+  width: 12px;
+  height: 12px;
+}
+@media (max-width: 640px) {
+  .outreach-new__steps .steps__item:not(.is-current) .outreach-new__step-label {
+    display: none;
+  }
+  .outreach-new__steps .steps__item + .steps__item::before {
+    width: 12px;
+  }
+}
+
+.outreach-new__panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin-top: var(--sp-6);
+}
+.outreach-new__fields {
+  gap: var(--sp-6);
+  max-width: 560px;
+  min-width: 0;
+}
+
+/* 选文件：按钮 + 文件名、大小、行数，窄屏折行 */
+.outreach-new__file {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-width: 0;
+}
+.outreach-new__file > .btn {
+  flex: none;
+}
+.outreach-new__file-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.outreach-new__file-info > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+
+/* 选号列表：每行 单选/多选 + 号名 · 接入方式 + 连接状态 */
+.outreach-new__accounts {
+  gap: var(--sp-2);
+}
+.outreach-new__account {
+  align-items: center;
+  min-width: 0;
+}
+.outreach-new__account > .checkbox,
+.outreach-new__account > .radio {
+  margin-top: 0;
+}
+.outreach-new__account-name {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 第 3 步：左边写消息，右边预览（会话页的机器人气泡），窄屏上下排 */
+.outreach-new__compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--sp-6);
+  align-items: start;
+}
+.outreach-new__compose .outreach-new__fields {
+  max-width: none;
+}
+@media (max-width: 768px) {
+  .outreach-new__compose {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.outreach-new__aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.outreach-new__aside-title {
+  font-weight: 500;
+}
+.outreach-new__chat {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 140px;
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+.outreach-new__chat > .msg {
+  max-width: 88%;
+}
+.outreach-new__chat-empty {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-align: center;
+}
+.outreach-new__rules {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: var(--sp-1) 0 0;
+  padding-left: var(--sp-4);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+.outreach-new__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ---- 预检结果 ---- */
+.outreach-new__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.outreach-new__preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+.outreach-new__block > h3 {
+  margin-bottom: var(--sp-2);
+}
+.outreach-new__reasons {
+  margin: 0;
+  max-width: 360px;
+}
+.outreach-new__reason {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  height: 36px;
+  border-bottom: 1px solid var(--border);
+}
+.outreach-new__reason > dt {
+  color: var(--text-muted);
+}
+.outreach-new__reason > dd {
+  margin: 0;
+  font-weight: 500;
+}
+.outreach-new__invalid {
+  border-top: 1px solid var(--border);
+}
+.outreach-new__invalid-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-height: 280px;
+  margin: 0 0 var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  overflow-y: auto;
+  border-radius: var(--radius-lg);
+  background: var(--bg-muted);
+  list-style: none;
+}
+.outreach-new__invalid-list > li {
+  display: flex;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.outreach-new__invalid-line {
+  flex: none;
+  width: 72px;
+  color: var(--text-muted);
+}
+.outreach-new__invalid-raw {
+  min-width: 0;
+  word-break: break-all;
+}
+.outreach-new__invalid-more {
+  padding-bottom: var(--sp-3);
+}
+
+/* ============ 详情 ============ */
+/* 任务名很长时先省略名字，状态圆点和文字不被挤掉 */
+.outreach-detail .page-header__meta {
+  flex: none;
+}
+.outreach-detail__summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--gutter);
+  border-bottom: 1px solid var(--border);
+}
+.outreach-detail__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  max-width: 880px;
+}
+.outreach-detail__progress-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  font-weight: 500;
+}
+.outreach-detail__progress .outreach-progress__bar {
+  flex: 1;
+  width: auto;
+}
+.outreach-detail__skeleton-card {
+  height: 90px;
+  border-radius: var(--radius-lg);
+}
+.outreach-detail__info {
+  max-width: 880px;
+  padding-top: var(--sp-2);
+}
+
+.outreach-detail__section {
+  padding-top: var(--sp-8);
+}
+.outreach-detail__section:last-child {
+  padding-bottom: var(--sp-12);
+}
+.outreach-detail__section-title {
+  padding: 0 var(--gutter) var(--sp-3);
+}
+.outreach-detail__section > .table-toolbar {
+  border-top: 1px solid var(--border);
+}
+
+/* 收件人状态筛选：窄屏放不下时自己横向滚动，不撑宽页面 */
+.outreach-detail__filter {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.outreach-detail__filter::-webkit-scrollbar {
+  display: none;
+}
+@media (max-width: 640px) {
+  .outreach-detail__filter {
+    width: 100%;
+  }
+}
+
+.outreach-detail__status {
+  min-width: 0;
+}
+.outreach-detail__error {
+  max-width: 360px;
+}
+.outreach-detail__acct {
+  display: block;
+  max-width: 180px;
+}
+/* 分配的号、跳过原因两列隐藏后（< 768），挪到号码、状态下面那行 */
+.outreach-detail__inline {
+  display: none;
+}
+@media (max-width: 768px) {
+  .outreach-detail__inline {
+    display: block;
+  }
+}
+
+/* ============ 设置页「主动外联」区块 ============ */
+.settings-outreach__inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.settings-outreach__num,
+.settings-outreach__time {
+  width: 88px;
+}
+
+/* 国家下拉的弹出层：顶部搜索框，下面是可滚动的列表（宽度在组件里按触发按钮算，不受 .popover 的 320 上限） */
+.popover.outreach-country {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: calc(100vw - 16px);
+}
+.outreach-country__search {
+  flex: none;
+}
+.outreach-country__list {
+  max-height: 260px;
+}
