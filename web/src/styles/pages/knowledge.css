@@ -1,0 +1,512 @@
+/* 知识库页。见 DESIGN.md 第 7 节「知识库」和「文件」里的 DistillBar */
+
+/* ============ 页面骨架：内容列 + 测试对话侧栏 ============ */
+.kb-page {
+  flex-direction: row;
+}
+.kb-page__main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.kb-page__body {
+  flex: 1 0 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 各标签把自己的主操作放进页头这个位置 */
+.kb-page__slot {
+  display: contents;
+}
+@media (max-width: 640px) {
+  .kb-page__test-toggle {
+    width: 32px;
+    padding: 0;
+  }
+  .kb-page__test-label {
+    display: none;
+  }
+}
+
+/* ≥1280：面板把内容挤窄，不加遮罩 */
+.kb-page__panel {
+  flex: none;
+  width: 420px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+.kb-page__panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  height: var(--header-h);
+  padding: 0 var(--sp-3) 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.kb-page__panel-title {
+  flex: 1;
+  min-width: 0;
+}
+/* 内容被挤窄时，表格按窄屏隐藏次要列 */
+.kb-page--docked .table .hide-md {
+  display: none;
+}
+
+/* 更窄时：抽屉里不要内边距，让消息区自己滚、输入框贴底 */
+.kb-test-drawer .drawer__body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ============ 表格 ============ */
+/* 展开行（缺口）在窄屏不跟着第一列吸附，底色保持 --bg-subtle */
+.kb-page .table .table__expanded > td {
+  position: static;
+  background: var(--bg-subtle);
+}
+
+/* ============ 测试对话 ============ */
+.kb-test {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kb-test__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-subtle);
+}
+.kb-test__samples {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.kb-test__turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  max-width: 85%;
+  min-width: 0;
+}
+.kb-test__turn--customer {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+.kb-test__turn--bot {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.kb-test__bubble {
+  max-width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-bubble);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.kb-test__turn--customer .kb-test__bubble {
+  border-color: var(--border);
+  border-top-left-radius: var(--radius-sm);
+  background: var(--bg);
+}
+.kb-test__turn--bot .kb-test__bubble {
+  border-top-right-radius: var(--radius-sm);
+  background: var(--bg-muted);
+}
+.kb-test__turn.is-failed .kb-test__bubble {
+  border-color: var(--danger-border);
+}
+/* 没有回复客户：虚线框，写明结果和原因 */
+.kb-test__turn--bot .kb-test__bubble--decision {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: var(--bg);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  white-space: normal;
+}
+.kb-test__decision {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+.kb-test__decision > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+.kb-test__reason {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+.kb-test__reason > .muted {
+  flex: none;
+}
+.kb-test__bubble--typing {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+.kb-test__files {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.kb-test__files > svg {
+  width: 14px;
+  height: 14px;
+}
+.kb-test__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  column-gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.kb-test__turn--customer .kb-test__meta {
+  justify-content: flex-start;
+}
+.kb-test__meta > * + *::before {
+  content: '·';
+  margin-right: var(--sp-2);
+  color: var(--text-faint);
+}
+.kb-test__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: inherit;
+  font-weight: 500;
+}
+.kb-test__link:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.kb-test__link > svg {
+  width: 13px;
+  height: 13px;
+}
+.kb-test__note {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-align: right;
+}
+.kb-test__refs {
+  align-self: stretch;
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+.kb-test__compose {
+  flex: none;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.kb-test__composer {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+/* 焦点环由外框的 focus-within 代替 */
+.kb-test__composer:focus-within {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.kb-test__input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px var(--sp-3) 4px;
+  border: 0;
+  background: none;
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  resize: none;
+  outline: none;
+}
+.kb-test__input::placeholder {
+  color: var(--text-faint);
+}
+.kb-test__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 6px 6px var(--sp-3);
+}
+.kb-test__hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============ DistillBar：一行，圆点 + 状态 + 右边按钮（文件页和整理页共用） ============ */
+.kb-distillbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 52px;
+  padding: 10px var(--gutter);
+  border-bottom: 1px solid var(--border);
+}
+.kb-distillbar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.kb-distillbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+/* ============ 企业画像 ============ */
+/* 查看时右边是文字，标签不用为了对齐输入框往下挪 */
+.kb-profile--view .settings-row__label {
+  padding-top: 0;
+}
+
+/* ============ 条目抽屉 ============ */
+.kb-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.kb-entry__switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+}
+.kb-entry__switch-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-entry__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+
+/* ============ 缺口：展开行 ============ */
+.kb-gap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 720px;
+}
+/* 窄屏隐藏了时间、次数、来源列，在展开区里补上 */
+.kb-gap__meta {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+@media (max-width: 768px) {
+  .kb-gap__meta {
+    display: flex;
+  }
+}
+.kb-gap__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}
+
+/* ============ 整理 ============ */
+.kb-distill {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+}
+.kb-distill.page-body {
+  padding-bottom: var(--sp-8);
+}
+.kb-distill__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.kb-distill__title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-distill__title .hstack {
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+.kb-distill__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-distill__steps .steps__index > svg {
+  width: 12px;
+  height: 12px;
+}
+@media (max-width: 640px) {
+  .kb-distill__steps .steps__item:not(.is-current) .kb-distill__step-label {
+    display: none;
+  }
+  .kb-distill__steps .steps__item + .steps__item::before {
+    width: 8px;
+  }
+}
+
+.kb-distill__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.kb-distill__progress-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+.kb-distill__progress--indeterminate .progress__bar {
+  animation: kb-indeterminate 1.2s var(--ease) infinite;
+}
+@keyframes kb-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* 一行 Metric 小数字，竖线分隔，不套卡片 */
+.kb-distill__stats {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: var(--sp-3);
+  margin: 0;
+}
+.kb-distill__stat {
+  min-width: 0;
+  padding: 0 var(--sp-6);
+  border-left: 1px solid var(--border);
+}
+.kb-distill__stat:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+.kb-distill__stat dd {
+  margin-inline-start: 0;
+}
+@media (max-width: 640px) {
+  .kb-distill__stat {
+    padding: 0 var(--sp-4);
+  }
+}
+.kb-distill__links {
+  flex-wrap: wrap;
+}
+
+.kb-distill__log {
+  min-width: 0;
+}
+.kb-log {
+  height: 320px;
+  overflow-y: auto;
+}
+.kb-log__line {
+  display: flex;
+  gap: var(--sp-3);
+}
+.kb-log__ts {
+  flex: none;
+  color: var(--text-muted);
+}
+.kb-log__msg {
+  min-width: 0;
+}
+.kb-log__line--warn {
+  color: var(--warning);
+}
+.kb-log__line--error {
+  color: var(--danger);
+}
+
+.kb-distill__history {
+  padding-bottom: var(--sp-12);
+}
+.kb-distill__history-title {
+  padding: 0 var(--gutter) var(--sp-3);
+}
+
+/* ============ 存进知识库（会话页的弹窗） ============ */
+.kb-save__src {
+  grid-template-columns: 56px minmax(0, 1fr);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+}
+.kb-save__src dd {
+  max-height: 120px;
+  overflow-y: auto;
+}
+.kb-save__wait,
+.kb-save__form {
+  margin-top: var(--sp-4);
+}

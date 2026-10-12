@@ -1,0 +1,186 @@
+/* 概览页。见 DESIGN.md 第 7 节 */
+
+.ov-callout {
+  margin-bottom: var(--sp-4);
+}
+
+/* ---- 指标行：同一行的卡片等高 ---- */
+.ov-metric {
+  min-width: 0;
+}
+.ov-metric > .card {
+  height: 100%;
+}
+.ov-metric__skeleton {
+  width: 56px;
+  height: 24px;
+  margin: var(--sp-1) 0;
+}
+
+/* ---- 开始使用 ---- */
+.ov-guide__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-guide__item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 40px;
+  border-top: 1px solid var(--border);
+}
+.ov-guide__item:first-child {
+  border-top: 0;
+}
+.ov-guide__check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--on-primary);
+}
+.ov-guide__check > svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+.ov-guide__item.is-done .ov-guide__check {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.ov-guide__title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+.ov-guide__item.is-done .ov-guide__title {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+/* ---- 待你处理（卡片里的贴边表格） ---- */
+.ov-pending {
+  --gutter: var(--sp-4);
+}
+.ov-pending .table tbody tr:last-child > td {
+  border-bottom: 0;
+}
+/* 「最近消息」列吃掉剩余宽度并截断 */
+.ov-pending .table td:nth-child(2) {
+  width: 100%;
+  max-width: 0;
+}
+.ov-pending__who {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 220px;
+}
+.ov-pending__preview {
+  min-width: 0;
+}
+
+/* ---- 号码 ---- */
+/* 加载骨架（SkeletonRows）的左右内边距读 --gutter，卡片里不需要再缩进 */
+.ov-numbers,
+.ov-types {
+  --gutter: 0;
+}
+.ov-numbers__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-numbers__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+  border-top: 1px solid var(--border);
+}
+.ov-numbers__row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+.ov-numbers__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov-numbers__name {
+  display: block;
+  font-weight: 500;
+}
+.ov-numbers__name:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ov-numbers__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ov-numbers__warn {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+.ov-numbers .empty,
+.ov-types .empty {
+  padding: var(--sp-6) var(--sp-4);
+}
+/* 号码卡在没有侧栏空间时独占一行（栅格默认会给 span-4 留 6 列） */
+@media (max-width: 1023px) {
+  .grid-12 > .ov-numbers--side {
+    grid-column: span 12;
+  }
+}
+
+/* ---- 条目分类 ---- */
+.ov-types__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.ov-types__row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 24px;
+}
+.ov-types__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ov-types__num {
+  text-align: right;
+}
+.ov-types__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+.ov-types__foot .link {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ov-types__foot .link:hover {
+  color: var(--text);
+}

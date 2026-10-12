@@ -1,0 +1,157 @@
+/* 号码（列表和详情）页。见 DESIGN.md 第 6、7 节 */
+
+/* ============ 列表 ============ */
+.numbers-table__switch {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.numbers-table__time {
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 添加号码：接入方式二选一 */
+.numbers-channel {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+.numbers-channel > .option-card {
+  flex-direction: column;
+  gap: 0;
+}
+@media (max-width: 640px) {
+  .numbers-channel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ============ 详情 ============ */
+/* 面包屑里的名称过长时省略，不撑出横向滚动 */
+.numbers-detail .page-header__crumbs {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.numbers-detail .page-header__actions {
+  gap: var(--sp-3);
+}
+
+/* 分组里不是"标签 + 控件"的整块内容（二维码、提示框） */
+.numbers-block {
+  padding: var(--sp-4) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 扫码：240 宽的二维码卡片，右边是关联步骤 */
+.numbers-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--sp-6);
+}
+.numbers-qr__card {
+  position: relative;
+  flex: none;
+  width: 240px;
+}
+.numbers-qr__img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.numbers-qr__img.is-loading {
+  visibility: hidden;
+}
+.numbers-qr__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.numbers-qr__steps {
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.numbers-qr__list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.numbers-qr__list strong {
+  font-weight: 500;
+}
+
+/* 已登录的账号 */
+.numbers-me {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.numbers-me__text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 设置行里"输入框 + 按钮"并排 */
+.numbers-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 560px;
+}
+.numbers-inline > .input {
+  flex: 1;
+}
+/* 压过 .settings-row__control > .input 的 420 */
+.settings-row__control > .numbers-port {
+  max-width: 140px;
+}
+
+/* 测试按钮和结果：结果在按钮下方一行 */
+.numbers-test {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+.numbers-test .test-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.numbers-test .status__text {
+  white-space: normal;
+}
+
+/* 自动回复行的提示随状态变化；没连接时琥珀色 */
+.numbers-reply__warn {
+  color: var(--warning);
+}
+
+/* 白名单、黑名单下面的计数和提醒 */
+.numbers-list-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--sp-1) var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}

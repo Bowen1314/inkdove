@@ -1,0 +1,12 @@
+**/node_modules
+**/.DS_Store
+web/dist
+server/data
+server/test
+data
+waha-sessions
+.env
+.env.*
+!.env.example
+.git
+*.log

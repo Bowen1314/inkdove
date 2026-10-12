@@ -1,0 +1,60 @@
+/* 成员页。见 DESIGN.md 第 5 节和第 7 节「客户、成员、外联」 */
+
+.members__person {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 280px;
+}
+.members__person-text {
+  min-width: 0;
+}
+.members__self {
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+/* 窄屏隐藏「邮箱」列后，邮箱挪到名字下面一行 */
+.members__email-sm {
+  display: none;
+}
+@media (max-width: 640px) {
+  .members__email-sm {
+    display: block;
+  }
+  .members__person {
+    max-width: 44vw;
+  }
+}
+.members__email {
+  max-width: 260px;
+}
+.members__accts {
+  max-width: 240px;
+}
+
+.members__busy {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  color: var(--text-muted);
+}
+.members__more {
+  display: inline-flex;
+}
+
+/* 对话框、抽屉里的表单 */
+.members__stack {
+  gap: var(--sp-4);
+}
+.members__form {
+  gap: var(--sp-4);
+}
+.members__divider {
+  margin: var(--sp-1) 0;
+}
+.members__readonly {
+  color: var(--text);
+}

@@ -1,0 +1,133 @@
+/* 文件页。见 DESIGN.md 第 7 节「文件」 */
+
+/* 内容区：拖文件时盖 .drop-overlay，所以要 relative；撑满页面剩余高度 */
+.files-page__body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页头"上传文件"＋右边的下拉，拼成一个分体按钮 */
+.files-page__split {
+  display: inline-flex;
+  align-items: stretch;
+}
+.files-page__split > .btn {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.files-page__split-more {
+  display: inline-flex;
+}
+.files-page__split-more > .btn {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+/* 中间那条分隔线；选择器要压过 .btn--primary:hover:not(:disabled) 的 border-color */
+.files-page__split .files-page__split-more > .btn.btn--primary {
+  border-left-color: color-mix(in srgb, var(--on-primary) 28%, var(--primary));
+}
+
+/* 名称列吃掉剩余宽度、超长截断，其他列按内容宽；这样窄屏和长文件名都不会把表格撑出横向滚动 */
+.files-page__table .table th:nth-child(2),
+.files-page__table .table td:nth-child(2) {
+  width: 100%;
+}
+.files-page__table .table td:nth-child(2) {
+  max-width: 0;
+}
+
+/* 名称列：14px 类型图标 + 两行文字 */
+.files-page__name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.files-page__type-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.75;
+  color: var(--text-muted);
+}
+.files-page__status {
+  min-width: 0;
+  max-width: 220px;
+}
+@media (max-width: 640px) {
+  /* 手机上失败原因只在抽屉里看 */
+  .files-page__status .table__secondary {
+    display: none;
+  }
+}
+.files-page__uploading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+/* 拖文件：提示文字跟着可视区域走，内容很长时也停在视口中间 */
+.files-page__drop {
+  place-items: start center;
+}
+.files-page__drop-text {
+  position: sticky;
+  top: 40vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: var(--sp-6) var(--sp-4);
+  font-size: var(--fs-h2);
+  line-height: var(--lh-h2);
+  text-align: center;
+}
+.files-page__drop-hint {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: 400;
+}
+
+/* 对话框里的表单 */
+.files-page__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.files-page__pages {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  align-self: flex-start;
+}
+.files-page__pages.is-disabled {
+  color: var(--text-muted);
+}
+
+/* 详情抽屉 */
+.files-page__detail {
+  gap: var(--sp-4);
+}
+.files-page__preview-head {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.files-page__preview {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.files-page__preview--loading {
+  white-space: normal;
+}

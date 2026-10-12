@@ -1,0 +1,44 @@
+/* 登录和邀请页。见 DESIGN.md 第 7 节「登录、邀请」 */
+
+.auth {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: max(var(--sp-12), 12vh) var(--sp-4) var(--sp-12);
+  background: var(--bg-subtle);
+}
+.auth__col {
+  width: 100%;
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+}
+.auth__brand {
+  display: flex;
+  justify-content: center;
+}
+.auth__title {
+  margin-top: var(--sp-4);
+  text-align: center;
+}
+.auth__card {
+  margin-top: var(--sp-6);
+  padding: var(--sp-6);
+}
+.auth__form {
+  gap: var(--sp-4);
+}
+.auth__form > .btn--block {
+  margin-top: var(--sp-1);
+}
+.auth__info {
+  grid-template-columns: 48px minmax(0, 1fr);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.auth__foot {
+  margin-top: var(--sp-4);
+  text-align: center;
+}

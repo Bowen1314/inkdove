@@ -1,0 +1,42 @@
+services:
+  kbwa:
+    build: .
+    image: kbwa:latest
+    # 固定主机名：WAHA 经 kbwa:<端口> 连到 kbwa 起的代理中继（F13）
+    hostname: kbwa
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      KBWA_PORT: "8794"
+      KBWA_DATA_DIR: /app/data
+      KBWA_WAHA_URL: http://waha:3000
+      KBWA_WAHA_WEBHOOK_URL: http://kbwa:8794/webhooks/waha
+      KBWA_PROXY_RELAY_HOST: kbwa
+    # 只映射后台端口；代理中继的端口（KBWA_PROXY_RELAY_PORT_BASE 起）只在 compose 内网里给 WAHA 用，不要映射
+    ports:
+      - "127.0.0.1:8794:8794"
+    volumes:
+      - ./data:/app/data
+    mem_limit: 384m
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - waha
+
+  waha:
+    # GOWS 引擎镜像，见 https://waha.devlike.pro/docs/how-to/engines/
+    image: devlikeapro/waha:gows
+    restart: unless-stopped
+    environment:
+      WAHA_API_KEY: ${KBWA_WAHA_API_KEY:?请在 .env 里设置 KBWA_WAHA_API_KEY}
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      # F4：WAHA 自动下载客户发来的语音和图片（默认就是 true），webhook 里的 media.url 按 WAHA_BASE_URL 拼；
+      # kbwa 下载时只取路径部分、拼到 KBWA_WAHA_URL 上，所以这里写内网地址就行
+      WAHA_BASE_URL: http://waha:3000
+      WAHA_EVENTS_DOWNLOAD_MEDIA: "true"
+    # 不映射宿主端口，只在 compose 内网里给 kbwa 用
+    volumes:
+      - ./waha-sessions:/app/.sessions
+    mem_limit: 384m
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -1,0 +1,30 @@
+{
+  "name": "kbwa-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KBWA 后端：知识库蒸馏 + WhatsApp 自动回复",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.18.1"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1",
+    "cheerio": "^1.2.0",
+    "express": "^5.3.0",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "multer": "^2.4.0",
+    "nodemailer": "^10.1.0",
+    "pdf-parse": "^2.4.5",
+    "socks": "^2.8.10",
+    "socks-proxy-agent": "^10.1.0",
+    "undici": "^7.30.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

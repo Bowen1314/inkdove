@@ -1,0 +1,74 @@
+/* 设置页。见 DESIGN.md 第 6 节。布局、行、高级设置、保存栏都用 components.css 的 .settings* 类，这里只补页面自己的几处 */
+
+/* 状态 + 测试按钮：一行，按钮靠右 */
+.settings-page__test {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  min-height: 32px;
+}
+
+/* 输入框 + 按钮（发送测试邮件）：窄屏折行 */
+.settings-page__inline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.settings-page__inline > .input,
+.settings-page__inline > .combobox {
+  flex: 1 1 220px;
+  max-width: 420px;
+}
+
+/* 测试结果：按钮下方一行，圆点对齐第一行文字，长原因可以折行 */
+.settings-page__result {
+  display: flex;
+  align-items: flex-start;
+  white-space: normal;
+  word-break: break-word;
+}
+.settings-page__result > .status__dot {
+  margin-top: 5px;
+}
+
+/* 密钥框（输入框 + 清除按钮）和其他输入框对齐宽度 */
+.settings-page__secret {
+  max-width: 480px;
+}
+
+/* 品牌：48×48 的 Logo 预览格 + 上传、移除按钮，窄屏折行 */
+.settings-page__logo {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.settings-page__logo-preview.brand-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-lg);
+}
+.settings-page__logo-preview.brand-mark > svg {
+  width: 26px;
+  height: 26px;
+}
+/* 自定义 Logo 可能是透明底，加一圈细线让预览格的边界看得见 */
+.settings-page__logo-preview.brand-mark--image {
+  padding: var(--sp-1);
+  border: 1px solid var(--border);
+}
+
+/* 标签下面说明里的第二行（不支持的原因等） */
+.settings-page__note {
+  margin-top: var(--sp-1);
+}
+
+.settings-page__version {
+  margin-top: var(--sp-6);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
