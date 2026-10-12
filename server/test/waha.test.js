@@ -440,3 +440,195 @@ describe('WAHA 二维码、登出、代理、配置指纹', () => {
     }
   });
 });
+
+describe('手机号配对码', () => {
+  let t;
+  let fake;
+  let seq = 0;
+  const PHONE = '+86 (138) 1234-5678';
+  const newAcc = () => t.createAccount({ name: `配对码 ${++seq}` });
+  const reqCode = (acc, phoneNumber, o = {}) =>
+    t.req('POST', `/api/accounts/${acc.id}/waha/request-code`, { body: { phoneNumber }, ...o });
+  const sessOf = (acc) => fake.state.sessions.get(acc.waha.sessionName);
+  /** 这个号的 session 收到的写操作，按顺序：create / update / start / stop / logout / request-code */
+  const ops = (acc) => {
+    const name = acc.waha.sessionName;
+    return fake.state.requests
+      .filter((r) => r.method !== 'GET')
+      .map((r) => {
+        if (r.method === 'POST' && r.path === '/api/sessions') return r.body?.name === name ? 'create' : null;
+        if (r.path === `/api/sessions/${name}`) return r.method === 'PUT' ? 'update' : r.method.toLowerCase();
+        if (r.path.startsWith(`/api/sessions/${name}/`)) return r.path.split('/').pop();
+        if (r.path === `/api/${name}/auth/request-code`) return 'request-code';
+        return null;
+      })
+      .filter(Boolean);
+  };
+  before(async () => {
+    fake = await startFakeWaha({ initialStatus: 'SCAN_QR_CODE' });
+    t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url }, options: { wahaPairWaitMs: 300 } });
+    await t.login();
+  });
+  after(async () => {
+    await t.close();
+    await fake.close();
+  });
+
+  it('成功：没有 session 时先建好再申请；号码去掉空格横线括号和 +/00，日志里只留后 4 位', async () => {
+    const acc = await newAcc();
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body, { code: 'LDYW-LWV8' });
+    assert.deepEqual(ops(acc), ['create', 'request-code']);
+    assert.deepEqual(fake.state.codeRequests.at(-1), { session: acc.waha.sessionName, phoneNumber: '8613812345678' });
+    assert.equal((await t.req('GET', `/api/accounts/${acc.id}`)).body.status.state, 'scan_qr');
+    assert.ok(t.log.lines.some((l) => l.includes(acc.id) && l.includes('配对码') && l.includes('***5678')));
+    assert.ok(!t.log.lines.some((l) => l.includes('13812345678')), '日志里没有完整手机号');
+
+    const acc2 = await newAcc();
+    assert.equal((await reqCode(acc2, '0044 7700 900123')).status, 200);
+    assert.equal(fake.state.codeRequests.at(-1).phoneNumber, '447700900123');
+  });
+
+  it('号码格式不对：400 bad_phone，不碰 WAHA', async () => {
+    const acc = await newAcc();
+    for (const bad of ['13800', '+86 138 0000 0000 00000', 'abc12345678', '+0 138 0000 0000', '', null, 8613812345678]) {
+      const r = await reqCode(acc, bad);
+      assert.equal(r.status, 400, JSON.stringify(bad));
+      assert.equal(r.body.code, 'bad_phone');
+      assert.match(r.body.error, /国家码/);
+    }
+    const noBody = await t.req('POST', `/api/accounts/${acc.id}/waha/request-code`, { body: [] });
+    assert.equal(noBody.status, 400);
+    assert.deepEqual(ops(acc), []);
+  });
+
+  it('Meta 号：400 wrong_channel', async () => {
+    const meta = await t.createAccount({ name: 'Meta 号', channel: 'meta' });
+    const r = await reqCode(meta, PHONE);
+    assert.equal(r.status, 400);
+    assert.equal(r.body.code, 'wrong_channel');
+  });
+
+  it('agent：别人的号 403（不论存不存在），自己的号可以申请', async () => {
+    const mine = await newAcc();
+    const other = await newAcc();
+    const agent = await t.addMember({ email: 'pair-agent@example.com', accountIds: [mine.id] });
+    for (const acc of [other, { id: 'no-such-account' }]) {
+      const r = await reqCode(acc, PHONE, { cookie: agent.cookie });
+      assert.equal(r.status, 403);
+      assert.equal(r.body.code, 'forbidden');
+    }
+    assert.deepEqual(ops(other), []);
+    const ok = await reqCode(mine, PHONE, { cookie: agent.cookie });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  });
+
+  it('同一个号 20 秒内重复申请：429 too_frequent，第二次不找 WAHA；别的号不受影响', async () => {
+    const acc = await newAcc();
+    assert.equal((await reqCode(acc, PHONE)).status, 200);
+    const again = await reqCode(acc, PHONE);
+    assert.equal(again.status, 429);
+    assert.equal(again.body.code, 'too_frequent');
+    assert.match(again.body.error, /\d+ 秒后再试/);
+    assert.deepEqual(ops(acc), ['create', 'request-code']);
+    assert.equal((await reqCode(await newAcc(), PHONE)).status, 200);
+  });
+
+  it('会话 FAILED（残留了半截登录凭证）：先普通重启，又落回 FAILED 才 logout 再 start，再申请', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'FAILED', halfCreds: true });
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(ops(acc), ['create', 'stop', 'start', 'logout', 'start', 'request-code']);
+    assert.ok(t.log.lines.some((l) => l.includes(acc.id) && l.includes('先登出')));
+  });
+
+  it('会话 FAILED 但登录态还在（网络抖动）：普通重启后回到 WORKING，返回 409 already_connected，不登出', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'FAILED', me: { id: '8613812345678@c.us', pushName: 'Shop' } });
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, 'already_connected');
+    assert.deepEqual(ops(acc), ['create', 'stop', 'start']);
+    assert.equal(sessOf(acc).status, 'WORKING');
+  });
+
+  it('启动后又落到 FAILED：登出再启动一次，进入等待关联后再申请', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'STOPPED', halfCreds: true });
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(ops(acc), ['create', 'start', 'logout', 'start', 'request-code']);
+  });
+
+  it('已连接的号：409 already_connected，不登出也不申请', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'WORKING', me: { id: '8613812345678@c.us', pushName: 'Shop' } });
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 409);
+    assert.equal(r.body.code, 'already_connected');
+    assert.deepEqual(ops(acc), ['create']);
+    assert.equal(sessOf(acc).status, 'WORKING');
+  });
+
+  it('一直在启动：等到上限返回 502 并写明当前状态；没找 WhatsApp 要码，不占 20 秒间隔', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    sessOf(acc).status = 'STARTING';
+    const r = await reqCode(acc, PHONE);
+    assert.equal(r.status, 502);
+    assert.equal(r.body.code, 'waha_error');
+    assert.match(r.body.error, /当前：正在启动/);
+    assert.deepEqual(ops(acc), ['create']);
+    sessOf(acc).status = 'SCAN_QR_CODE';
+    assert.equal((await reqCode(acc, PHONE)).status, 200);
+  });
+
+  it('WAHA 的 422 转成中文的 409 not_scan_qr；其他错误 502 waha_error', async () => {
+    try {
+      fake.state.codeError = { status: 422, message: 'Can request code only in SCAN_QR_CODE status. The current status is STARTING' };
+      const r = await reqCode(await newAcc(), PHONE);
+      assert.equal(r.status, 409);
+      assert.equal(r.body.code, 'not_scan_qr');
+      assert.match(r.body.error, /不能获取配对码.*当前：正在启动/);
+      assert.doesNotMatch(r.body.error, /SCAN_QR_CODE|Can request/);
+      fake.state.codeError = { status: 500, message: 'pairing failed' };
+      const e = await reqCode(await newAcc(), PHONE);
+      assert.equal(e.status, 502);
+      assert.equal(e.body.code, 'waha_error');
+      assert.match(e.body.error, /^获取配对码失败：WAHA 返回 500：pairing failed/);
+    } finally {
+      fake.state.codeError = null;
+    }
+  });
+
+  it('开始扫码连接遇到 FAILED：普通重启又落回 FAILED，才 logout 再 start，重新出码；WORKING 的号不会被登出', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'FAILED', halfCreds: true });
+    const r = await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.state, 'scan_qr');
+    assert.deepEqual(ops(acc), ['create', 'stop', 'start', 'logout', 'start']);
+    assert.equal((await t.req('GET', `/api/accounts/${acc.id}/waha/qr`)).status, 200);
+    sessOf(acc).status = 'WORKING';
+    assert.equal((await t.req('POST', `/api/accounts/${acc.id}/waha/start`)).body.state, 'working');
+    assert.deepEqual(ops(acc), ['create', 'stop', 'start', 'logout', 'start']);
+  });
+
+  it('开始扫码连接遇到 FAILED 但登录态还在（网络抖动）：普通重启后回到已连接，不登出', async () => {
+    const acc = await newAcc();
+    await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    Object.assign(sessOf(acc), { status: 'FAILED', me: { id: '8613812345678@c.us', pushName: 'Shop' } });
+    const r = await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.state, 'working');
+    assert.deepEqual(r.body.me, { id: '8613812345678@c.us', pushName: 'Shop' });
+    assert.deepEqual(ops(acc), ['create', 'stop', 'start']);
+  });
+});

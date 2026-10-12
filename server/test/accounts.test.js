@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -223,6 +224,7 @@ describe('F8 agent 只能看分给自己的号', () => {
       ['POST', `/api/accounts/${other.id}/waha/start`],
       ['GET', `/api/accounts/${other.id}/waha/qr`],
       ['POST', `/api/accounts/${other.id}/waha/logout`],
+      ['POST', `/api/accounts/${other.id}/waha/request-code`, { phoneNumber: '+86 138 1234 5678' }],
       ['POST', `/api/accounts/${other.id}/notify/test`],
       ['GET', '/api/accounts/no-such-account'],
       ['GET', `/api/wa/conversations?accountId=${other.id}`],
@@ -346,5 +348,237 @@ describe('第一期数据迁移', () => {
       await fake.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('号码配置导出 / 导入（admin）', () => {
+  let t;
+  let agent;
+  let wahaAcc;
+  let metaAcc;
+  const EMAIL = { provider: 'smtp', from: 'bot@example.com', smtp: { host: 'smtp.example.com' } };
+  const EXPORT_KEYS = ['allowlist', 'autoReply', 'blocklist', 'channel', 'meta', 'name', 'notify', 'persona', 'scope', 'waha'];
+  const fileOf = (doc, raw) => {
+    const fd = new FormData();
+    fd.append('file', new Blob([raw ?? JSON.stringify(doc)], { type: 'application/json' }), 'inkdove-accounts.json');
+    return fd;
+  };
+  const importInto = (app, doc, o = {}) => app.req('POST', '/api/accounts/import', { body: fileOf(doc, o.raw), cookie: o.cookie });
+  const exportOf = async (app) => {
+    const r = await app.req('GET', '/api/accounts/export');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    return r.body;
+  };
+  const countOf = (app) => app.ctx.accounts.list().length;
+  const docOf = (accounts) => ({ format: 'inkdove-accounts', version: 1, exportedAt: new Date().toISOString(), accounts });
+  const wahaItem = (name, extra = {}) => ({ name, channel: 'waha', waha: null, meta: null, ...extra });
+
+  before(async () => {
+    t = await startApp();
+    await t.login();
+    await t.req('PUT', '/api/settings', { body: { email: EMAIL } });
+    wahaAcc = await t.createAccount({
+      name: '销售一号',
+      autoReply: true,
+      persona: '你是销售小王，说话简洁',
+      scope: 'allowlist',
+      allowlist: ['8613800000001', '8613800000002'],
+      blocklist: ['8613900000009'],
+      waha: { proxy: { enabled: true, protocol: 'socks5', host: 'proxy.example.com', port: 1080, username: 'px-user', password: 'px-secret-1' } },
+      notify: { email: { enabled: true, to: ['boss@example.com'] }, whatsapp: { enabled: true, number: '+86 138 0000 0003' } },
+    });
+    metaAcc = await t.createAccount({
+      name: '官方号',
+      channel: 'meta',
+      autoReply: true,
+      meta: { phoneNumberId: '1234567890', apiVersion: 'v25.0', verifyToken: 'verify-xyz', accessToken: 'EAAG-token-abc', appSecret: 'app-secret-abc' },
+    });
+    agent = await t.addMember({ email: 'agent-export@example.com', name: '小王', accountIds: [wahaAcc.id, metaAcc.id] });
+  });
+  after(async () => {
+    await t.close();
+  });
+
+  it('导出：附件文件名、不缓存；带密钥明文，不带 id、session 名、状态和时间', async () => {
+    const r = await t.req('GET', '/api/accounts/export');
+    assert.equal(r.status, 200);
+    assert.match(r.headers.get('content-disposition'), /^attachment; filename="inkdove-accounts-\d{8}\.json"$/);
+    assert.equal(r.headers.get('cache-control'), 'no-store');
+    const doc = r.body;
+    assert.equal(doc.format, 'inkdove-accounts');
+    assert.equal(doc.version, 1);
+    assert.ok(!Number.isNaN(Date.parse(doc.exportedAt)));
+    assert.equal(r.headers.get('content-disposition').slice(-14, -6), doc.exportedAt.slice(0, 10).replace(/-/g, ''));
+    assert.deepEqual(doc.accounts.map((a) => a.name), ['销售一号', '官方号']);
+    for (const a of doc.accounts) assert.deepEqual(Object.keys(a).sort(), EXPORT_KEYS);
+    const [w, m] = doc.accounts;
+    assert.deepEqual(w.waha, {
+      proxy: { enabled: true, protocol: 'socks5', host: 'proxy.example.com', port: 1080, username: 'px-user', password: 'px-secret-1' },
+    });
+    assert.equal(w.meta, null);
+    assert.deepEqual(w.notify, { email: { enabled: true, to: ['boss@example.com'] }, whatsapp: { enabled: true, number: '8613800000003' } });
+    assert.deepEqual(m.meta, {
+      phoneNumberId: '1234567890',
+      apiVersion: 'v25.0',
+      verifyToken: 'verify-xyz',
+      accessToken: 'EAAG-token-abc',
+      appSecret: 'app-secret-abc',
+    });
+    assert.equal(m.waha, null);
+    const text = JSON.stringify(doc);
+    for (const s of [wahaAcc.id, metaAcc.id, wahaAcc.waha.sessionName, 'sessionName', 'status', 'createdAt', 'passwordSet', 'webhookUrl', 'agent-export']) {
+      assert.ok(!text.includes(s), `导出文件不该包含 ${s}`);
+    }
+    // 日志只记人和数量，不记密钥
+    assert.ok(t.log.lines.some((l) => l.includes(ADMIN_EMAIL) && l.includes('导出了号码配置')));
+    assert.ok(!t.log.lines.some((l) => l.includes('px-secret-1') || l.includes('EAAG-token-abc')));
+  });
+
+  it('agent 导出和导入都是 403，什么都不建', async () => {
+    const before = countOf(t);
+    const e = await t.req('GET', '/api/accounts/export', { cookie: agent.cookie });
+    assert.equal(e.status, 403);
+    assert.equal(e.body.code, 'forbidden');
+    const i = await importInto(t, docOf([wahaItem('agent 想建的号')]), { cookie: agent.cookie });
+    assert.equal(i.status, 403);
+    assert.equal(countOf(t), before);
+  });
+
+  it('导出再导入到另一个实例：配置原样还原（新 id、新 session 名、不启动 WAHA），密钥能用', async () => {
+    const doc = await exportOf(t);
+    const fake = await startFakeWaha({ initialStatus: 'SCAN_QR_CODE' });
+    const t2 = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
+    try {
+      await t2.login();
+      // 发信方式没配时，开了邮件通知的号导入不了（和新建/更新的校验一致），整体 400
+      const noEmail = await importInto(t2, doc);
+      assert.equal(noEmail.status, 400);
+      assert.equal(noEmail.body.code, 'email_not_configured');
+      assert.match(noEmail.body.error, /^第 1 个号（销售一号）：notify\.email\.enabled/);
+      assert.equal(countOf(t2), 0);
+
+      await t2.req('PUT', '/api/settings', { body: { email: EMAIL } });
+      const r = await importInto(t2, doc);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.deepEqual(r.body.skipped, []);
+      assert.deepEqual(r.body.created.map((c) => c.name), ['销售一号', '官方号']);
+      const [w2, m2] = r.body.created;
+      assert.ok(![wahaAcc.id, metaAcc.id].includes(w2.id) && ![wahaAcc.id, metaAcc.id].includes(m2.id));
+      assert.ok(t2.log.lines.some((l) => l.includes(ADMIN_EMAIL) && l.includes('新建 2 个，跳过 0 个')));
+
+      // 再导出一次，和原来的逐字段相同
+      assert.deepEqual((await exportOf(t2)).accounts, doc.accounts);
+
+      // WAHA 没被动过（不建 session、不启动）
+      assert.deepEqual(fake.state.requests.filter((q) => q.method !== 'GET'), []);
+      const wv = (await t2.req('GET', `/api/accounts/${w2.id}`)).body;
+      assert.equal(wv.waha.sessionName, `inkdove_${w2.id}`);
+      assert.notEqual(wv.waha.sessionName, wahaAcc.waha.sessionName);
+      assert.equal(wv.waha.proxy.passwordSet, true);
+      assert.equal(t2.ctx.accounts.get(w2.id).waha.proxy.password, 'px-secret-1');
+
+      const mv = (await t2.req('GET', `/api/accounts/${m2.id}`)).body;
+      assert.equal(mv.meta.accessTokenSet, true);
+      assert.equal(mv.meta.appSecretSet, true);
+      assert.equal(mv.meta.webhookUrl, `https://kb.example.com/webhooks/meta/${m2.id}`);
+      assert.equal(mv.status.state, 'configured');
+      // verify token 和 app secret 在新号上能用
+      const ok = await t2.req('GET', `/webhooks/meta/${m2.id}?hub.mode=subscribe&hub.verify_token=verify-xyz&hub.challenge=4242`, { auth: false });
+      assert.equal(ok.status, 200);
+      assert.equal(ok.body, '4242');
+      const raw = JSON.stringify({ object: 'whatsapp_business_account', entry: [] });
+      const sig = (secret) => `sha256=${crypto.createHmac('sha256', secret).update(raw).digest('hex')}`;
+      const post = (secret) =>
+        t2.req('POST', `/webhooks/meta/${m2.id}`, {
+          body: raw,
+          auth: false,
+          headers: { 'content-type': 'application/json', 'x-hub-signature-256': sig(secret) },
+        });
+      assert.equal((await post('app-secret-abc')).status, 200);
+      assert.equal((await post('wrong-secret')).status, 401);
+
+      // 成员分配不导出：新实例里只有 admin
+      assert.equal((await t2.req('GET', '/api/users')).body.length, 1);
+    } finally {
+      await t2.close();
+      await fake.close();
+    }
+  });
+
+  it('同一个文件再导入一次：Meta 号 phoneNumberId 重复的跳过并说明原因，扫码号照建（名称可以重复）', async () => {
+    const doc = await exportOf(t);
+    const before = countOf(t);
+    const r = await importInto(t, doc);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.created.map((c) => c.name), ['销售一号']);
+    assert.equal(r.body.skipped.length, 1);
+    assert.equal(r.body.skipped[0].name, '官方号');
+    assert.match(r.body.skipped[0].reason, /1234567890/);
+    assert.match(r.body.skipped[0].reason, /「官方号」/);
+    assert.equal(countOf(t), before + 1);
+    assert.equal(t.ctx.accounts.list().filter((a) => a.name === '销售一号').length, 2);
+  });
+
+  it('文件里两个 Meta 号 phoneNumberId 相同：只建前一个；phoneNumberId 为空的不算重复', async () => {
+    const meta = (name, phoneNumberId) => ({ name, channel: 'meta', meta: { phoneNumberId } });
+    const r = await importInto(t, docOf([meta('甲', '5550001'), meta('乙', '5550001'), meta('丙', ''), meta('丁', '')]));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body.created.map((c) => c.name), ['甲', '丙', '丁']);
+    assert.equal(r.body.skipped.length, 1);
+    assert.equal(r.body.skipped[0].name, '乙');
+    assert.match(r.body.skipped[0].reason, /文件里前面的号「甲」/);
+    // 缺的字段按新建号的默认值
+    const yi = t.ctx.accounts.get(r.body.created[0].id);
+    assert.equal(yi.autoReply, false);
+    assert.equal(yi.meta.apiVersion, t.ctx.accounts.get(r.body.created[1].id).meta.apiVersion);
+  });
+
+  it('不是导出文件、版本不对、accounts 不是数组、没传文件：400，什么都不建', async () => {
+    const before = countOf(t);
+    const cases = [
+      [{ raw: '{不是 JSON' }, 'bad_format'],
+      [{ doc: [] }, 'bad_format'],
+      [{ doc: { format: 'something-else', version: 1, accounts: [] } }, 'bad_format'],
+      [{ doc: { format: 'inkdove-accounts', version: 2, accounts: [wahaItem('新版本的号')] } }, 'unsupported_version'],
+      [{ doc: { format: 'inkdove-accounts', accounts: [] } }, 'unsupported_version'],
+      [{ doc: { format: 'inkdove-accounts', version: 1, accounts: {} } }, 'bad_format'],
+    ];
+    for (const [c, code] of cases) {
+      const r = await importInto(t, c.doc, { raw: c.raw });
+      assert.equal(r.status, 400, JSON.stringify(c));
+      assert.equal(r.body.code, code, JSON.stringify(c));
+    }
+    // 带 BOM 的文件能读
+    const bom = await importInto(t, null, { raw: `﻿${JSON.stringify(docOf([]))}` });
+    assert.equal(bom.status, 200);
+    assert.deepEqual(bom.body, { created: [], skipped: [] });
+    const none = await t.req('POST', '/api/accounts/import', { body: new FormData() });
+    assert.equal(none.status, 400);
+    assert.equal(countOf(t), before);
+  });
+
+  it('有一个号不合法就整体 400：说明第几个号、哪个字段，一个都不建', async () => {
+    const before = countOf(t);
+    const ok = wahaItem('好号');
+    const cases = [
+      [{ channel: 'waha' }, /^第 2 个号：name 不能为空$/],
+      [{ name: 42, channel: 'waha' }, /^第 2 个号：name 必须是字符串$/],
+      ['不是对象', /^第 2 个号：必须是对象$/],
+      [{ name: '坏号', channel: 'telegram' }, /^第 2 个号（坏号）：channel /],
+      [{ name: '坏号', channel: 'waha', scope: 'some' }, /^第 2 个号（坏号）：scope /],
+      [{ name: '坏号', channel: 'waha', waha: { proxy: { enabled: true, host: '', port: null } } }, /^第 2 个号（坏号）：启用代理时必须填写 host 和 port$/],
+      [{ name: '坏号', channel: 'waha', waha: { proxy: { port: 70000 } } }, /^第 2 个号（坏号）：proxy\.port /],
+      [{ name: '坏号', channel: 'waha', meta: { phoneNumberId: '1' } }, /^第 2 个号（坏号）：meta 只有 Meta 号才有/],
+      [{ name: '坏号', channel: 'meta', waha: { proxy: {} } }, /^第 2 个号（坏号）：waha 只有扫码号才有/],
+      [{ name: '坏号', channel: 'meta', meta: { phoneNumberId: 'abc' } }, /^第 2 个号（坏号）：phoneNumberId 只能是数字$/],
+      [{ name: '坏号', channel: 'meta', meta: { accessToken: 123 } }, /^第 2 个号（坏号）：meta\.accessToken 必须是字符串$/],
+      [{ name: '坏号', channel: 'waha', notify: { email: { to: ['not-an-email'] } } }, /^第 2 个号（坏号）：/],
+    ];
+    for (const [bad, re] of cases) {
+      const r = await importInto(t, docOf([ok, bad, wahaItem('后面的好号')]));
+      assert.equal(r.status, 400, JSON.stringify(bad));
+      assert.match(r.body.error, re);
+    }
+    assert.equal(countOf(t), before);
   });
 });

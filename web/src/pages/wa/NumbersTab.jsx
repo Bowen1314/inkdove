@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Smartphone } from 'lucide-react';
+import { Download, MoreHorizontal, Plus, Smartphone, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { toast } from '../../ui/toastBus.js';
-import { Modal } from '../../ui/Modal.jsx';
-import { EmptyState, ErrorState, Field, fieldProps, PageHeader, Spinner, Switch } from '../../ui/common.jsx';
+import { Modal, useConfirm } from '../../ui/Modal.jsx';
+import { Callout, EmptyState, ErrorState, Field, fieldProps, PageHeader, Spinner, Switch } from '../../ui/common.jsx';
 import { CellText, DataTable, TableToolbar } from '../../ui/DataTable.jsx';
 import { Select } from '../../ui/Select.jsx';
-import { Tooltip } from '../../ui/Popover.jsx';
+import { Menu, Tooltip } from '../../ui/Popover.jsx';
 import { StatusDot } from '../../ui/StatusDot.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAuth } from '../../lib/auth.jsx';
@@ -180,6 +180,156 @@ function AddAccountModal({ open, onClose, onCreated }) {
   );
 }
 
+// 号码配置导出 / 导入（admin）。文件格式见 README「偏离规格」，服务端还会完整校验一遍
+const EXPORT_FORMAT = 'inkdove-accounts';
+const EXPORT_VERSION = 1;
+
+/** 和服务端的附件名一致：inkdove-accounts-YYYYMMDD.json（按导出时间的 UTC 日期） */
+const exportFileName = (doc) => `inkdove-accounts-${String(doc.exportedAt || '').slice(0, 10).replace(/-/g, '')}.json`;
+
+/** 本地先解析一遍，只为预览要建哪些号；格式不对直接在弹窗里提示，不上传 */
+function previewImport(text) {
+  let doc;
+  try {
+    doc = JSON.parse(text.replace(/^\uFEFF/, ''));
+  } catch {
+    throw new Error('文件不是有效的 JSON');
+  }
+  if (!doc || typeof doc !== 'object' || doc.format !== EXPORT_FORMAT) {
+    throw new Error('这不是墨鸽导出的号码配置文件');
+  }
+  if (doc.version !== EXPORT_VERSION) {
+    throw new Error(`不支持这个文件版本（version: ${JSON.stringify(doc.version ?? null)}），只能导入 version ${EXPORT_VERSION}`);
+  }
+  if (!Array.isArray(doc.accounts)) throw new Error('文件里的 accounts 不是列表');
+  return doc.accounts.map((a) => ({
+    name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : '（没有名称）',
+    channel: a?.channel,
+  }));
+}
+
+/** 导入弹窗：预览要新建的号 → 确认上传 → 显示新建和跳过的结果。文件和校验的错误都显示在弹窗里 */
+function ImportModal({ pick, onClose, onPickAgain, onImported }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
+  const items = pick.items || [];
+  const hasWaha = items.some((a) => a.channel === 'waha');
+  const hasMeta = items.some((a) => a.channel === 'meta');
+
+  const close = () => {
+    if (!busy) onClose();
+  };
+
+  const submit = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.importAccounts(pick.file, { silent: true });
+      setResult(res);
+      if (res.created.length) toast.success(`已导入 ${res.created.length} 个号`);
+      onImported();
+    } catch (err) {
+      setError(err?.message || '导入失败，请稍后重试');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  let body;
+  let footer;
+  if (result) {
+    body = (
+      <div className="vstack" style={{ gap: 'var(--sp-3)' }}>
+        <div className="numbers-import__summary">
+          新建了 {result.created.length} 个号{result.skipped.length > 0 && `，跳过 ${result.skipped.length} 个`}
+        </div>
+        {result.skipped.length > 0 && (
+          <ul className="numbers-import__list" aria-label="跳过的号">
+            {result.skipped.map((s, i) => (
+              <li key={i} className="numbers-import__item numbers-import__item--stack">
+                <span className="numbers-import__name">{s.name}</span>
+                <span className="numbers-import__reason">{s.reason}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {result.created.length > 0 && hasWaha && (
+          <div className="field__hint">扫码接入的号还没有连接，请到各号的「连接」里重新扫码或用配对码连接。</div>
+        )}
+      </div>
+    );
+    footer = (
+      <button type="button" className="btn btn--primary" onClick={onClose}>
+        完成
+      </button>
+    );
+  } else if (pick.error) {
+    body = (
+      <div className="vstack" style={{ gap: 'var(--sp-3)' }}>
+        <Callout tone="danger">{pick.error}</Callout>
+        <div className="field__hint">请选择从墨鸽「号码」页导出的 .json 文件。</div>
+      </div>
+    );
+    footer = (
+      <>
+        <button type="button" className="btn" onClick={onClose}>
+          取消
+        </button>
+        <button type="button" className="btn btn--primary" onClick={onPickAgain}>
+          <Upload /> 重新选择文件
+        </button>
+      </>
+    );
+  } else if (!items.length) {
+    body = <div className="muted">文件里没有号码，没有可以导入的内容。</div>;
+    footer = (
+      <button type="button" className="btn" onClick={onClose}>
+        关闭
+      </button>
+    );
+  } else {
+    body = (
+      <div className="vstack" style={{ gap: 'var(--sp-3)' }}>
+        {error && <Callout tone="danger">{error}</Callout>}
+        <div className="numbers-import__summary">将新建 {items.length} 个号</div>
+        <ul className="numbers-import__list" aria-label="要新建的号">
+          {items.map((a, i) => (
+            <li key={i} className="numbers-import__item">
+              <span className="numbers-import__name">{a.name}</span>
+              <span className="numbers-import__channel">{CHANNEL_LABEL[a.channel] || a.channel || '—'}</span>
+            </li>
+          ))}
+        </ul>
+        {hasWaha && <div className="field__hint">扫码接入的号导入后需要重新扫码或用配对码连接。</div>}
+        {hasMeta && (
+          <div className="field__hint">
+            Meta 号导入后回调地址会变成新地址，要到 Meta 开发者后台改一下；phoneNumberId 和已有的号重复的会跳过。
+          </div>
+        )}
+      </div>
+    );
+    footer = (
+      <>
+        <button type="button" className="btn" onClick={close} disabled={busy}>
+          取消
+        </button>
+        <button type="button" className="btn btn--primary" onClick={submit} disabled={busy}>
+          {busy ? <Spinner /> : <Upload />}
+          导入
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <Modal open onClose={close} title="导入号码配置" width={560} footer={footer}>
+      {body}
+    </Modal>
+  );
+}
+
 /** 行内的自动回复开关：直接调接口，结束后以服务端返回为准 */
 function AutoReplySwitch({ account }) {
   const [pending, setPending] = useState(null);
@@ -209,9 +359,13 @@ function AutoReplySwitch({ account }) {
 
 export default function NumbersTab() {
   const navigate = useNavigate();
+  const confirm = useConfirm();
   const { isAdmin } = useAuth();
   const { accounts, error, reload } = useAccounts();
   const [adding, setAdding] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [importPick, setImportPick] = useState(null); // {seq, file, items?, error?}
+  const fileRef = useRef(null);
   const [users, setUsers] = useState(null);
   const [q, setQ] = useState('');
   const [stateFilter, setStateFilter] = useState('');
@@ -342,6 +496,64 @@ export default function NumbersTab() {
     </button>
   );
 
+  const exportAll = async () => {
+    const ok = await confirm({
+      title: '导出号码配置',
+      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、代理密码等密钥的明文，请妥善保管。`,
+      confirmText: '导出',
+    });
+    if (!ok) return;
+    setExporting(true);
+    try {
+      const doc = await api.exportAccounts();
+      const url = URL.createObjectURL(new Blob([`${JSON.stringify(doc, null, 2)}\n`], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = exportFileName(doc);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      toast.success(`已导出 ${doc.accounts.length} 个号的配置`);
+    } catch {
+      // 已提示
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const pickImportFile = () => fileRef.current?.click();
+  const onImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // 同一个文件改完再选一次也能触发
+    if (!file) return;
+    const seq = Date.now();
+    try {
+      setImportPick({ seq, file, items: previewImport(await file.text()) });
+    } catch (err) {
+      setImportPick({ seq, file, error: err?.message || '读取文件失败，请重新选择' });
+    }
+  };
+
+  const headerActions = isAdmin && (
+    <>
+      <Menu
+        minWidth={160}
+        tooltip="导出、导入号码配置"
+        trigger={
+          <button type="button" className="btn btn--ghost btn--icon" aria-label="导出、导入号码配置" disabled={exporting}>
+            {exporting ? <Spinner /> : <MoreHorizontal />}
+          </button>
+        }
+        items={[
+          { label: '导出配置', icon: Download, onClick: exportAll, disabled: !accounts?.length },
+          { label: '导入配置', icon: Upload, onClick: pickImportFile },
+        ]}
+      />
+      {addButton}
+    </>
+  );
+
   let body;
   if (error && accounts == null) {
     body = <ErrorState error={error} onRetry={() => reload(true)} />;
@@ -405,9 +617,22 @@ export default function NumbersTab() {
 
   return (
     <div className="page">
-      <PageHeader title="号码" count={accounts?.length || null} actions={addButton} />
+      <PageHeader title="号码" count={accounts?.length || null} actions={headerActions} />
       {body}
       {isAdmin && <AddAccountModal open={adding} onClose={() => setAdding(false)} onCreated={onCreated} />}
+      {isAdmin && <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={onImportFile} />}
+      {importPick && (
+        <ImportModal
+          key={importPick.seq}
+          pick={importPick}
+          onClose={() => setImportPick(null)}
+          onPickAgain={pickImportFile}
+          onImported={() => {
+            invalidateAccounts();
+            reload(true);
+          }}
+        />
+      )}
     </div>
   );
 }

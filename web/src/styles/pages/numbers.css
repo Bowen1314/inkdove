@@ -95,6 +95,57 @@
   font-weight: 500;
 }
 
+/* 手机号配对码：号码输入框和按钮并排，窄屏放不下时按钮换到下一行 */
+.numbers-phone {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  max-width: 560px;
+}
+.numbers-phone > .input {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* 配对码卡片：和二维码卡片一样宽，码用大号等宽字 */
+.numbers-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  text-align: center;
+}
+.numbers-code__value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-metric);
+  line-height: var(--lh-metric);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+/* 失效提示占和码一样的高度，切换时卡片不跳 */
+.numbers-code__expired {
+  min-height: var(--lh-metric);
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+.numbers-code__phone {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  word-break: break-all;
+}
+.numbers-code__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
 /* 已登录的账号 */
 .numbers-me {
   display: flex;
@@ -154,4 +205,50 @@
   color: var(--text-muted);
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
+}
+
+/* 导入号码配置：要新建的号 / 跳过的号，列表太长时在框内滚动 */
+.numbers-import__summary {
+  font-weight: 500;
+}
+.numbers-import__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.numbers-import__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  min-width: 0;
+}
+.numbers-import__item + .numbers-import__item {
+  border-top: 1px solid var(--border);
+}
+.numbers-import__item--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+}
+.numbers-import__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.numbers-import__channel {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.numbers-import__reason {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  overflow-wrap: anywhere;
 }

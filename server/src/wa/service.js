@@ -14,7 +14,7 @@ import { baseMime, MEDIA_LIMITS, mediaTypeOf, oggDurationSeconds, wahaVoiceSecon
 import { metaDownloadMedia, metaMarkRead, metaSendMedia, metaSendText, metaUploadMedia } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
 import { needsRelay } from './relay.js';
-import { createWahaClient, mapWahaStatus, TooLargeError, WahaError } from './waha.js';
+import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
 
 const REPLIES_PER_MINUTE_PER_ACCOUNT = 30;
 const OFFTOPIC_STRIKES = 3;
@@ -35,6 +35,10 @@ const META_MEDIA_CACHE_MS = 25 * 24 * 3600 * 1000;
 const META_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_DRAFT_TEXT = 4000;
 const MAX_CAPTION = 1024;
+/** 手机号配对码：同一个号两次申请的最小间隔（连点会让 WhatsApp 风控这个号），等会话进入 SCAN_QR_CODE 的上限 */
+export const PAIR_CODE_INTERVAL_MS = 20_000;
+const PAIR_WAIT_MS = 15_000;
+const PAIR_POLL_MS = 500;
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -199,6 +203,19 @@ export function parseMetaMessage(msg, names) {
   };
 }
 
+/**
+ * 配对码要关联的手机号：去掉空格、横线、括号，允许开头 + 或 00，剩下是 8–15 位、不以 0 开头的数字（带国家码）。
+ * 返回纯数字号码，不合格返回 null。
+ */
+export function parsePairingPhone(raw) {
+  if (typeof raw !== 'string') return null;
+  const m = /^(?:\+|00)?([1-9]\d{7,14})$/.exec(raw.replace(/[\s\-()（）]/g, ''));
+  return m ? m[1] : null;
+}
+
+/** 日志里的手机号只留后 4 位 */
+export const maskPhone = (digits) => `***${String(digits).slice(-4)}`;
+
 /** 会话草稿 {text, fileIds, createdAt}（F2a / F15）。A 段存的 {text, createdAt} 也认，fileIds 记 []；文字和文件都没有时视为没有草稿 */
 export const parseDraft = (raw) => {
   const d = safeJsonParse(raw, null);
@@ -216,6 +233,8 @@ export const parseDraft = (raw) => {
  *   notifyRetryDelayMs?: number,
  *   onDecision?: (row:any) => void,
  *   wahaInlineMaxBytes?: number,
+ *   wahaPairWaitMs?: number,
+ *   wahaPollMs?: number,
  * }} [opts]
  */
 export function createWaService(ctx, opts = {}) {
@@ -239,6 +258,8 @@ export function createWaService(ctx, opts = {}) {
   /** @type {Map<string, number>} 会话 id → 正在识别的语音/图片条数（F4）；识别完之前不处理这个会话 */
   const converting = new Map();
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
+  const pairWaitMs = opts.wahaPairWaitMs ?? PAIR_WAIT_MS;
+  const wahaPollMs = opts.wahaPollMs ?? PAIR_POLL_MS;
   const startedAt = Date.now();
   let closed = false;
 
@@ -247,7 +268,7 @@ export function createWaService(ctx, opts = {}) {
   function state(accountId) {
     let s = accState.get(accountId);
     if (!s) {
-      s = { lastWahaStatus: null, connectedAt: 0, lastWebhookAt: null, statusCache: null, replies: [], usageHintAt: 0 };
+      s = { lastWahaStatus: null, connectedAt: 0, lastWebhookAt: null, statusCache: null, replies: [], usageHintAt: 0, pairCodeAt: 0 };
       accState.set(accountId, s);
     }
     return s;
@@ -1313,12 +1334,39 @@ export function createWaService(ctx, opts = {}) {
     return out;
   }
 
-  async function wahaStart(acc) {
-    assertWaha(acc);
+  /** WAHA 的 404、422（session 不存在、不在可操作的状态）当作已完成 */
+  const ignoreGone = (err) => {
+    if (err instanceof WahaError && (err.status === 404 || err.status === 422)) return;
+    throw err;
+  };
+
+  /**
+   * 登出再启动，清掉 session 里残留的半截登录凭证。申请过配对码却没输入时会留下这种凭证，之后再启动
+   * 会去"登录"然后 FAILED（Connection Failure），永远回不到 SCAN_QR_CODE。
+   * GOWS 实测：登出后 session 自己重启，1 秒内到 SCAN_QR_CODE；这时再 start 什么也不做。start 留着是防登出后停在
+   * STOPPED 的版本；别的版本对运行中的 session 可能返回 422，忽略。
+   */
+  async function logoutThenStart(acc) {
+    log.info(`[waha] 号 ${acc.id} 的会话重启后还是 FAILED：先登出清掉残留的登录凭证，再重新启动`);
+    await waha.logoutSession(acc.sessionName).catch(ignoreGone);
+    await waha.startSession(acc.sessionName).catch((err) => {
+      if (!(err instanceof WahaError && err.status === 422)) throw err;
+    });
+    const st = state(acc.id);
+    st.connectedAt = 0;
+    st.statusCache = null;
+  }
+
+  /**
+   * 确保 session 存在并已启动，webhook 和代理配置同步到 WAHA。FAILED 的先普通重启（不登出），WORKING 的不动。
+   * 返回 failed：进来时 session 是不是 FAILED（要等重启结果，见 settleOrRelogin）。
+   */
+  async function ensureWahaSession(acc) {
     const r = await relays.ensure(acc);
     if (r === 'failed') throw new HttpError(502, 'relay_failed', relays.error(acc.id) || '代理中继启动失败');
     const managed = wahaManagedConfig(acc);
     const hash = configHash(managed);
+    let failed = false;
     try {
       const sess = await waha.getSession(acc.sessionName, 10_000);
       if (!sess) {
@@ -1326,18 +1374,123 @@ export function createWaService(ctx, opts = {}) {
         accounts.setWahaConfigHash(acc.id, hash);
       } else {
         const update = acc.wahaConfigHash !== hash || r === 'started' || r === 'restarted';
+        failed = sess.status === 'FAILED';
         // 文档：session 不在 STOPPED 状态时，PUT 会用新配置自动 stop 再 start；stop 不会登出
         if (update) {
           await waha.updateSession(acc.sessionName, mergeConfig(sess.config, managed));
           accounts.setWahaConfigHash(acc.id, hash);
         }
-        if (sess.status === 'STOPPED' || (sess.status === 'FAILED' && !update)) await waha.startSession(acc.sessionName);
+        if (sess.status === 'STOPPED') await waha.startSession(acc.sessionName);
+        else if (failed && !update) {
+          // 普通重启：GOWS 对运行中的 session 调 start 什么也不做，FAILED 算不算"运行中"没核实过，所以先 stop（不登出）再 start
+          log.info(`[waha] 号 ${acc.id} 的会话是 FAILED：先不登出，重启一次`);
+          await waha.stopSession(acc.sessionName).catch(ignoreGone);
+          await waha.startSession(acc.sessionName);
+        }
       }
     } catch (err) {
       throw wahaFail(err);
     }
     state(acc.id).statusCache = null;
+    return { failed };
+  }
+
+  /**
+   * 等重启的结果：回到 WORKING 是恢复了（网络或代理抖动掉线的号不会被白白登出），到 SCAN_QR_CODE 就接着关联；
+   * 重启后又落回 FAILED，多半是之前申请过配对码没输入、留下了半截登录凭证，这时才登出再启动一次。
+   * 返回最后看到的 WAHA 状态。
+   */
+  async function settleOrRelogin(acc) {
+    let status = await waitWahaSettled(acc);
+    if (status === 'FAILED') {
+      await logoutThenStart(acc);
+      status = await waitWahaSettled(acc);
+    }
+    return status;
+  }
+
+  async function wahaStart(acc) {
+    assertWaha(acc);
+    const { failed } = await ensureWahaSession(acc);
+    // 只有进来时是 FAILED 才等重启结果；正常启动直接返回，前端会轮询状态
+    if (failed) {
+      try {
+        await settleOrRelogin(acc);
+      } catch (err) {
+        throw wahaFail(err);
+      }
+    }
     return getStatus(accounts.get(acc.id) || acc);
+  }
+
+  /** 等 session 离开 STOPPED / STARTING（最多 pairWaitMs），返回最后看到的 WAHA 状态 */
+  async function waitWahaSettled(acc) {
+    const deadline = Date.now() + pairWaitMs;
+    for (;;) {
+      const sess = await waha.getSession(acc.sessionName, 5000);
+      const status = sess?.status || 'STOPPED';
+      if (sess) observeWahaStatus(acc.id, status);
+      if ((status !== 'STARTING' && status !== 'STOPPED') || Date.now() >= deadline) return status;
+      await sleep(wahaPollMs);
+    }
+  }
+
+  const statusLabel = (s) => WAHA_STATUS_LABEL[s] || s;
+
+  /** request-code 的报错转成可读的中文。422 是会话不在 SCAN_QR_CODE（比如没人关联、刚好被 WAHA 停掉） */
+  function requestCodeFail(err) {
+    if (!(err instanceof WahaError)) return err;
+    const m = /current status is (\w+)/i.exec(err.message);
+    if (err.status === 422 && (m || err.message.includes('SCAN_QR_CODE'))) {
+      const now = m ? `（当前：${statusLabel(m[1])}）` : '';
+      return new HttpError(409, 'not_scan_qr', `现在不能获取配对码：会话不在等待关联状态${now}，请稍后重新获取`);
+    }
+    return new HttpError(502, 'waha_error', `获取配对码失败：${err.message}`);
+  }
+
+  /**
+   * 手机号配对码（规格外新增，见 README「偏离规格」）。和扫码共用同一轮等待关联的 session：确保 session 已启动、
+   * 进入 SCAN_QR_CODE，再向 WAHA 申请配对码。已连接的号直接拒绝，不会把在线的号登出。
+   * @returns {Promise<{code:string}>}
+   */
+  async function wahaRequestCode(acc, rawPhone) {
+    assertWaha(acc);
+    const phone = parsePairingPhone(rawPhone);
+    if (!phone) throw badRequest('请填带国家码的完整号码，例如 +86 138 0000 0000', 'bad_phone');
+    const st = state(acc.id);
+    const checkInterval = () => {
+      const left = st.pairCodeAt + PAIR_CODE_INTERVAL_MS - Date.now();
+      if (left > 0) throw new HttpError(429, 'too_frequent', `获取配对码太频繁，请 ${Math.ceil(left / 1000)} 秒后再试`);
+    };
+    const connected = () => new HttpError(409, 'already_connected', '这个号已经连接，不用再关联；要换号请先退出登录');
+    checkInterval();
+    try {
+      const sess = await waha.getSession(acc.sessionName, 10_000);
+      if (sess?.status === 'WORKING') throw connected();
+      await ensureWahaSession(acc);
+      // 不管进来时是什么状态，都等到能关联；启动后落到 FAILED 的登出再启动一次
+      const status = await settleOrRelogin(acc);
+      // FAILED 的号重启后连回来了，不用再关联
+      if (status === 'WORKING') throw connected();
+      if (status !== 'SCAN_QR_CODE') {
+        throw new HttpError(502, 'waha_error', `会话没能进入等待关联状态（当前：${statusLabel(status)}），请稍后再试`);
+      }
+      // 等会话的这段时间里可能有另一个申请先发出去了：真正找 WhatsApp 要码之前再判一次间隔，判完立刻记下时间
+      checkInterval();
+      st.pairCodeAt = Date.now();
+      let code;
+      try {
+        code = await waha.requestCode(acc.sessionName, phone);
+      } catch (err) {
+        throw requestCodeFail(err);
+      }
+      log.info(`[waha] 号 ${acc.id} 获取了配对码（手机号 ${maskPhone(phone)}）`);
+      return { code };
+    } catch (err) {
+      throw wahaFail(err);
+    } finally {
+      st.statusCache = null;
+    }
   }
 
   /**
@@ -1456,6 +1609,7 @@ export function createWaService(ctx, opts = {}) {
   return {
     getStatus,
     wahaStart,
+    wahaRequestCode,
     applyWahaConfig,
     wahaQr,
     wahaLogout,

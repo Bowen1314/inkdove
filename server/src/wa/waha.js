@@ -92,6 +92,15 @@ export function createWahaClient(config) {
       const res = await request('GET', `/api/${enc(name)}/auth/qr?format=image`, { accept: 'image/png', raw: true, timeoutMs: 5000 });
       return Buffer.from(await res.arrayBuffer());
     },
+    /**
+     * 手机号配对码：POST /api/{session}/auth/request-code {phoneNumber(纯数字国际号码)} → {code:"ABCD-EFGH"}。
+     * GOWS 只在 SCAN_QR_CODE 状态可用（STARTING 时最多等 2 秒），否则 422。
+     */
+    async requestCode(name, phoneNumber) {
+      const data = await request('POST', `/api/${enc(name)}/auth/request-code`, { body: { phoneNumber }, timeoutMs: 15_000 });
+      if (typeof data?.code !== 'string' || !data.code) throw new WahaError('WAHA 没有返回配对码');
+      return data.code;
+    },
     /** POST /api/sendText {session, chatId, text}，返回消息 id（拿不到为 null） */
     async sendText(session, chatId, text) {
       const data = await request('POST', '/api/sendText', { body: { session, chatId, text }, timeoutMs: 20_000 });
@@ -168,6 +177,15 @@ export class TooLargeError extends Error {
     this.limit = limit;
   }
 }
+
+/** WAHA 会话状态的中文名（报错里用） */
+export const WAHA_STATUS_LABEL = {
+  STOPPED: '已停止',
+  STARTING: '正在启动',
+  SCAN_QR_CODE: '等待关联',
+  WORKING: '已连接',
+  FAILED: '连接失败',
+};
 
 /** WAHA 会话状态 → 本系统 state */
 export function mapWahaStatus(status) {

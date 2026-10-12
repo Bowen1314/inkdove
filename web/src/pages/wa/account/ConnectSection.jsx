@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { LogOut, PlayCircle, PlugZap, RefreshCw, Shuffle } from 'lucide-react';
+import { KeyRound, LogOut, PlayCircle, PlugZap, RefreshCw, Shuffle } from 'lucide-react';
 import { api } from '../../../api/client.js';
 import { toast } from '../../../ui/toastBus.js';
 import { useConfirm } from '../../../ui/Modal.jsx';
-import { Callout, CopyButton, Spinner, Switch } from '../../../ui/common.jsx';
+import { Callout, CopyButton, Segmented, Spinner, Switch } from '../../../ui/common.jsx';
 import { Advanced, SaveBar, SettingsRow, SettingsSection } from '../../../ui/Settings.jsx';
 import { HintIcon } from '../../../ui/Popover.jsx';
 import { Select } from '../../../ui/Select.jsx';
@@ -13,6 +13,7 @@ import { Avatar } from '../../../ui/Avatar.jsx';
 import { usePolling } from '../../../hooks/usePolling.js';
 import { waState } from '../../../lib/labels.js';
 import { fmtTime } from '../../../lib/format.js';
+import { mapServerError } from '../../settings/shared.jsx';
 
 /**
  * waha/start、waha/logout "语义同 SPEC.md 3.6"，返回的可能是 status 对象，也可能是整个 Account。
@@ -334,14 +335,27 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
 
 /* ---------- 扫码连接（WAHA） ---------- */
 
+const LINK_MODES = [
+  { value: 'qr', label: '扫码' },
+  { value: 'code', label: '手机号配对码' },
+];
+
+// 服务端的 FAILED / 通行密钥提示以「重新连接」结尾（扫码模式的按钮名）；配对码模式下对应的是「重新获取配对码」
+const codeModeError = (msg) => msg.replace(/重新连接$/, '重新获取配对码');
+
 function WahaPanel({ account, setAccount, isAdmin }) {
   const confirm = useConfirm();
-  const [busy, setBusy] = useState(null); // 'start' | 'logout'
+  const [busy, setBusy] = useState(null); // 'start' | 'logout' | 'code'
   const [qrTs, setQrTs] = useState(() => Date.now());
   const [qrState, setQrState] = useState('loading'); // loading | ok | error
   const [pollFailed, setPollFailed] = useState(false);
   // 点"开始连接"或改代理后 30 秒内也轮询，防止后端先返回 stopped 再异步变成 starting/scan_qr
   const [kickUntil, setKickUntil] = useState(0);
+  // 关联方式：扫码或手机号配对码，两种共用同一轮等待关联和状态轮询
+  const [mode, setMode] = useState('qr');
+  const [phone, setPhone] = useState('');
+  const [phoneError, setPhoneError] = useState(null);
+  const [pair, setPair] = useState(null); // {code, phone, expired}
 
   const status = account.status || {};
   const state = status.state || 'not_configured';
@@ -365,7 +379,45 @@ function WahaPanel({ account, setAccount, isAdmin }) {
 
   useEffect(() => {
     setQrState('loading');
+    // 配对码只在这一轮等待关联里有效：连上了就收起；会话停掉或失败了，码随之作废
+    if (state === 'working') setPair(null);
+    else if (state === 'failed' || state === 'stopped') setPair((p) => (p ? { ...p, expired: true } : p));
   }, [state]);
+
+  const refresh = () =>
+    api
+      .getAccount(account.id, { silent: true })
+      .then((a) => a && setAccount((prev) => ({ ...prev, ...a })))
+      .catch(() => {});
+
+  // 申请配对码：服务端会先把会话拉起来、等到可以关联（最多十几秒），同一个号 20 秒内只能申请一次
+  const requestCode = async (number = phone) => {
+    const value = number.trim();
+    if (!value) {
+      setPhoneError('请填写手机号码');
+      return;
+    }
+    setBusy('code');
+    setPhoneError(null);
+    try {
+      const res = await api.wahaRequestCode(account.id, value, { silent: true });
+      setPair({ code: res.code, phone: value, expired: false });
+      setKickUntil(Date.now() + 30000);
+      refresh();
+    } catch (e) {
+      if (e?.status === 401) return;
+      // 号码格式不对：回到输入框，错误显示在下面；其余弹 Toast
+      const fieldError = mapServerError(e, {}, { bad_phone: { field: 'phone', text: e?.message } });
+      if (fieldError) {
+        setPair(null);
+        setPhoneError(fieldError.text);
+      } else {
+        toast.error(e?.message || '获取配对码失败');
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const start = async () => {
     setBusy('start');
@@ -414,8 +466,14 @@ function WahaPanel({ account, setAccount, isAdmin }) {
 
       {status.error && (
         <div className="numbers-block">
-          <Callout tone="danger">{status.error}</Callout>
+          <Callout tone="danger">{mode === 'code' ? codeModeError(status.error) : status.error}</Callout>
         </div>
+      )}
+
+      {state !== 'working' && (
+        <SettingsRow inline label="关联方式">
+          <Segmented label="关联方式" options={LINK_MODES} value={mode} onChange={setMode} />
+        </SettingsRow>
       )}
 
       {state === 'working' ? (
@@ -432,6 +490,85 @@ function WahaPanel({ account, setAccount, isAdmin }) {
               退出登录
             </button>
           </div>
+        </SettingsRow>
+      ) : mode === 'code' && pair ? (
+        <div className="numbers-block">
+          <div className="numbers-qr">
+            <div className="card numbers-qr__card numbers-code" aria-live="polite">
+              {pair.expired ? (
+                <div className="numbers-code__expired">配对码已失效，请重新获取</div>
+              ) : (
+                <div className="numbers-code__value">{pair.code}</div>
+              )}
+              <div className="numbers-code__phone">
+                关联号码 <span className="mono">{pair.phone}</span>
+              </div>
+              <div className="numbers-code__actions">
+                {!pair.expired && <CopyButton text={pair.code} />}
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => requestCode(pair.phone)}
+                  disabled={busy === 'code'}
+                >
+                  {busy === 'code' ? <Spinner /> : <RefreshCw />}
+                  重新获取
+                </button>
+              </div>
+              <button type="button" className="btn btn--link btn--sm" onClick={() => setPair(null)}>
+                换号码
+              </button>
+            </div>
+            <div className="numbers-qr__steps">
+              <h3>用手机号码关联</h3>
+              <ol className="numbers-qr__list">
+                <li>打开手机上的 WhatsApp</li>
+                <li>
+                  进入 <strong>设置</strong>（iPhone）或右上角 <strong>⋮ 菜单</strong>（安卓）→ <strong>已关联设备</strong>
+                </li>
+                <li>
+                  点 <strong>关联新设备</strong>，再点 <strong>改用手机号码关联</strong>
+                </li>
+                <li>输入这里显示的配对码</li>
+              </ol>
+              <div className="field__hint">配对码约 2 分钟内有效，过期请重新获取。关联成功后这里会自动变为"已连接"。</div>
+            </div>
+          </div>
+        </div>
+      ) : mode === 'code' ? (
+        <SettingsRow label="手机号码" htmlFor={`pair-phone-${account.id}`} hint="带国家码，例如 +86 138 0000 0000">
+          <form
+            className="numbers-phone"
+            onSubmit={(e) => {
+              e.preventDefault();
+              requestCode();
+            }}
+          >
+            <input
+              id={`pair-phone-${account.id}`}
+              className="input input--mono"
+              type="tel"
+              inputMode="tel"
+              autoComplete="off"
+              placeholder="+86 138 0000 0000"
+              value={phone}
+              onChange={(e) => {
+                setPhoneError(null);
+                setPhone(e.target.value);
+              }}
+              aria-invalid={phoneError ? true : undefined}
+              aria-describedby={phoneError ? `pair-phone-${account.id}-err` : undefined}
+            />
+            <button type="submit" className="btn btn--primary" disabled={busy === 'code'}>
+              {busy === 'code' ? <Spinner /> : <KeyRound />}
+              {busy === 'code' ? '正在获取…' : '获取配对码'}
+            </button>
+          </form>
+          {phoneError && (
+            <div className="field__error" id={`pair-phone-${account.id}-err`}>
+              {phoneError}
+            </div>
+          )}
         </SettingsRow>
       ) : state === 'scan_qr' || state === 'starting' ? (
         <div className="numbers-block">
@@ -484,7 +621,11 @@ function WahaPanel({ account, setAccount, isAdmin }) {
               <HintIcon label="扫码说明">{`${PRIVATE_OK}${PRIVATE_TIP}`}</HintIcon>
             </span>
           }
-          hint={state === 'failed' ? '连接出了问题，可以尝试重新连接。' : '点击按钮生成二维码，然后用手机 WhatsApp 扫码关联。'}
+          hint={
+            state === 'failed'
+              ? '连接出了问题，可以尝试重新连接；还连不上才会退出登录重来，那时需要重新扫码。'
+              : '点击按钮生成二维码，然后用手机 WhatsApp 扫码关联。'
+          }
         >
           <button type="button" className="btn btn--primary" onClick={start} disabled={busy === 'start'}>
             {busy === 'start' ? <Spinner /> : state === 'failed' ? <RefreshCw /> : <PlayCircle />}

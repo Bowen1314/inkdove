@@ -47,6 +47,7 @@ export async function startApp({ env = {}, options = {} } = {}) {
     relayBindHost: '127.0.0.1',
     humanize: ZERO_HUMANIZE,
     notifyRetryDelayMs: 10,
+    wahaPollMs: 20,
     ...options,
   });
   const { app, ctx, close } = created;
@@ -199,6 +200,11 @@ export const TINY_PNG = Buffer.from(
  * 以及 F15 的 sendImage / sendFile（file.url 时按真 WAHA 的做法去拉这个地址，拉的时候把主机换成 state.fetchBase）
  * 和 F4 的 /api/files/...（state.files 里放 路径 → {buffer, mime}，要求带 X-Api-Key 时设 state.requireKey）。
  * maskSecrets=true 时 GET session 返回的配置把代理密码和 HMAC key 打码（模拟 WAHA 读回来的配置不可比）。
+ * 手机号配对码：POST /api/<session>/auth/request-code 只在 SCAN_QR_CODE 时给码（否则 422，文案同 GOWS），state.codeError
+ * 设成 {status, message} 时强制出错。给过码的 session 记 halfCreds（残留的半截登录凭证）：之后 start 直接 FAILED，
+ * 只有 logout 能清掉。登录态还在（有 me）的 session，start 回到 WORKING。
+ * 以下两点按 GOWS 2026.9.2 实测：start 一个已经在运行的 session 什么也不做，照常返回会话；logout 后 session
+ * 自己重启（先 STARTING，几十毫秒后 SCAN_QR_CODE，中间被 stop 了就不再变）。
  * @param {{initialStatus?: string, lids?: Record<string,string|null>, maskSecrets?: boolean}} [opts]
  */
 export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, maskSecrets = false } = {}) {
@@ -223,6 +229,10 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     /** F4：/api/files/<路径> → {buffer, mime} */
     files: new Map(),
     requireKey: null,
+    /** 配对码申请 {session, phoneNumber} */
+    codeRequests: [],
+    /** 设成 {status, message} 时 request-code 返回这个错误 */
+    codeError: null,
   };
   const masked = (cfg) => {
     if (!maskSecrets || !cfg) return cfg;
@@ -269,7 +279,9 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
       }
       const action = parts[3];
       if (req.method === 'POST' && action === 'start') {
-        s.status = state.initialStatus;
+        if (s.status === 'STOPPED' || s.status === 'FAILED') {
+          s.status = s.halfCreds ? 'FAILED' : s.me ? 'WORKING' : state.initialStatus;
+        }
         return json(201, s);
       }
       if (req.method === 'POST' && action === 'stop') {
@@ -277,10 +289,25 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
         return json(201, s);
       }
       if (req.method === 'POST' && action === 'logout') {
-        s.status = 'SCAN_QR_CODE';
+        s.status = 'STARTING';
         s.me = null;
+        s.halfCreds = false;
+        setTimeout(() => {
+          if (s.status === 'STARTING') s.status = 'SCAN_QR_CODE';
+        }, 30);
         return json(201, s);
       }
+    }
+    if (req.method === 'POST' && parts[0] === 'api' && parts[2] === 'auth' && parts[3] === 'request-code') {
+      state.codeRequests.push({ session: parts[1], phoneNumber: body?.phoneNumber });
+      if (state.codeError) return json(state.codeError.status, { message: state.codeError.message });
+      const s = state.sessions.get(parts[1]);
+      if (!s) return json(404, { message: 'Session not found' });
+      if (s.status !== 'SCAN_QR_CODE') {
+        return json(422, { message: `Can request code only in SCAN_QR_CODE status. The current status is ${s.status}` });
+      }
+      s.halfCreds = true;
+      return json(201, { code: 'LDYW-LWV8' });
     }
     if (req.method === 'GET' && parts[0] === 'api' && parts[2] === 'auth' && parts[3] === 'qr') {
       res.writeHead(200, { 'content-type': 'image/png' });

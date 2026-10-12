@@ -234,6 +234,90 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady }) {
   return a;
 }
 
+// 号码配置导出 / 导入（规格外新增，只有 admin）。文件里是密钥明文。
+export const ACCOUNTS_EXPORT_FORMAT = 'inkdove-accounts';
+export const ACCOUNTS_EXPORT_VERSION = 1;
+
+/** 导出一个号的配置（含密钥明文）。不含 id、WAHA session 名、状态、时间、会话消息和成员分配 */
+export function exportAccount(acc) {
+  const px = acc.waha?.proxy;
+  const m = acc.meta;
+  return {
+    name: acc.name,
+    channel: acc.channel,
+    autoReply: acc.autoReply,
+    persona: acc.persona,
+    scope: acc.scope,
+    allowlist: [...acc.allowlist],
+    blocklist: [...acc.blocklist],
+    waha: px
+      ? {
+          proxy: {
+            enabled: px.enabled,
+            protocol: px.protocol,
+            host: px.host,
+            port: px.port,
+            username: px.username,
+            password: px.password,
+          },
+        }
+      : null,
+    meta: m
+      ? {
+          phoneNumberId: m.phoneNumberId,
+          apiVersion: m.apiVersion,
+          verifyToken: m.verifyToken,
+          accessToken: m.accessToken,
+          appSecret: m.appSecret,
+        }
+      : null,
+    notify: {
+      email: { enabled: acc.notify.email.enabled, to: [...acc.notify.email.to] },
+      whatsapp: { enabled: acc.notify.whatsapp.enabled, number: acc.notify.whatsapp.number },
+    },
+  };
+}
+
+/**
+ * 校验导入文件。全部合法才返回要新建的号；有一个不合法就抛 400（说明第几个号、哪个字段），一个都不建。
+ * 每个号的校验和新建、更新共用（applyAccountPatch），缺的字段按新建号的默认值。
+ * @param {any} doc 解析后的 JSON
+ * @param {{emailReady:boolean}} o
+ * @returns {{name:string, channel:'waha'|'meta', config:any}[]}
+ */
+export function parseAccountsExport(doc, { emailReady }) {
+  if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
+    throw badRequest('这不是墨鸽导出的号码配置文件（format 应为 inkdove-accounts）', 'bad_format');
+  }
+  if (doc.version !== ACCOUNTS_EXPORT_VERSION) {
+    throw badRequest(`不支持这个文件版本（version: ${JSON.stringify(doc.version ?? null)}），只能导入 version 1`, 'unsupported_version');
+  }
+  if (!Array.isArray(doc.accounts)) throw badRequest('accounts 必须是数组', 'bad_format');
+  return doc.accounts.map((item, i) => {
+    let label = `第 ${i + 1} 个号`;
+    try {
+      if (!isPlainObject(item)) throw badRequest('必须是对象');
+      const name = str(item.name ?? '', 'name', 100).trim();
+      if (!name) throw badRequest('name 不能为空');
+      label += `（${name}）`;
+      if (!CHANNELS.includes(item.channel)) throw badRequest('channel 只能是 waha 或 meta');
+      // applyAccountPatch 在这两种情况下的提示不带字段名，先拦下来
+      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，Meta 号应为 null');
+      if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，扫码号应为 null');
+      const draft = { name, channel: item.channel, ...defaultConfig(item.channel) };
+      const { name: n, channel, ...config } = applyAccountPatch(draft, item, { isAdmin: true, emailReady });
+      return { name: n, channel, config };
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      const msg =
+        err.code === 'email_not_configured'
+          ? 'notify.email.enabled 为 true，但这里还没有配置发信方式。请先在「设置」里配置发信方式，或把它改成 false 再导入'
+          : err.message;
+      throw new HttpError(err.status, err.code, `${label}：${msg}`);
+    }
+  });
+}
+
 /**
  * @param {import('better-sqlite3').Database} db
  * @param {import('./config.js').Config} config
@@ -279,6 +363,39 @@ export function createAccountStore(db, config) {
         nowIso(),
       );
       return store.get(id);
+    },
+    /**
+     * 导入：在一个事务里逐个新建（新 id、新 session 名，不启动 WAHA）。名称可以重复；
+     * Meta 号的 phoneNumberId 和已有的号、或文件里前面的号重复时跳过（空的不算重复）。
+     * @param {{name:string, channel:'waha'|'meta', config:any}[]} items 已经过 parseAccountsExport 校验
+     */
+    importMany(items) {
+      return db.transaction(() => {
+        /** @type {Map<string, {name:string, inFile:boolean}>} */
+        const pnids = new Map();
+        for (const a of store.list()) {
+          if (a.channel === 'meta' && a.meta.phoneNumberId) pnids.set(a.meta.phoneNumberId, { name: a.name, inFile: false });
+        }
+        const created = [];
+        const skipped = [];
+        for (const it of items) {
+          const pnid = it.channel === 'meta' ? it.config.meta.phoneNumberId : '';
+          const dup = pnid && pnids.get(pnid);
+          if (dup) {
+            skipped.push({
+              name: it.name,
+              reason: dup.inFile
+                ? `phoneNumberId ${pnid} 和文件里前面的号「${dup.name}」重复，只导入了前面那个`
+                : `phoneNumberId ${pnid} 已经被号「${dup.name}」使用，同一个 Meta 号码不重复导入`,
+            });
+            continue;
+          }
+          const acc = store.create(it);
+          if (pnid) pnids.set(pnid, { name: acc.name, inFile: true });
+          created.push({ id: acc.id, name: acc.name });
+        }
+        return { created, skipped };
+      })();
     },
     save(acc) {
       db.prepare('UPDATE accounts SET name = ?, config = ? WHERE id = ?').run(acc.name, storedConfig(acc), acc.id);

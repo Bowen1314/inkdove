@@ -27,6 +27,7 @@ Dockerfile、docker-compose.yml、.env.example
   - 在 WhatsApp 里**引用通知直接回复**，内容就会转发给客户；`/d` 发送草稿（文字和文件），`/resume` 恢复机器人。
 - **多人账号**：管理员邀请业务员（邮件链接），给每人分配能看的号。业务员只看得到、只操作得了分给自己的号和会话；后台人工发的每条消息都记下是谁发的。
 - **IP 代理**：每个号可以单独走 http、https、socks4、socks5 代理。
+- **号码配置导出 / 导入**（管理员）：「号码」页右上角的更多菜单里，可以把所有号的配置（名称、接入方式、人设、自动回复、回复范围和名单、通知、代理、Meta 凭证）导出成一个 JSON 文件，再导入到别的部署或同一个部署里，用来迁移或备份。**文件里有 Meta token、app secret、代理密码等密钥的明文**，请当密码一样保管，用完删掉。导入时会新建号（新 id），扫码号要重新扫码或用配对码连接；Meta 号的回调地址会变，要到 Meta 开发者后台改成新地址；phoneNumberId 和已有号重复的 Meta 号会跳过。会话、消息和成员分配不在文件里。
 
 ## 截图
 
@@ -59,7 +60,7 @@ docker compose pull && docker compose up -d
 2. **文件 → 知识库资料**：上传资料或填网址，点"整理"，等它生成条目。
 3. **知识库 → 测试对话**：问几个客户常问的问题，看回答对不对。
 4. **WhatsApp → 号码 → 新建**：
-   - 扫码号：点"启动"，用手机 WhatsApp 的"已关联的设备"扫二维码；
+   - 扫码号：点"启动"，用手机 WhatsApp 的"已关联的设备"扫二维码。不方便扫码时（比如只有这一部手机），把「关联方式」切到"手机号配对码"，填这个号的手机号（带国家码）获取 8 位配对码，在手机上"关联新设备 → 改用手机号码关联"里输入，配对码约 2 分钟内有效；
    - Meta 号：填 phone number id、verify token、access token、app secret，把页面上显示的 webhook 地址（`<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta/<号的 id>`）填进 Meta 后台，订阅 `messages`。
 5. 在号详情里打开**自动回复**，并配好"拿不准时通知我"。要发邮件通知的话，先在**设置 → 发信方式**里配 SMTP 或 Resend。
 
@@ -253,7 +254,7 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 3. **https 上游的中继没有自动化测试**。测试用自签名证书时 TLS 校验会失败；socks4、socks5 两条路径有完整测试（假上游 + 假目标服务）。中继的随机凭证明文存在 SQLite 里。
 4. **只用于测试的覆盖项**：
    - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
-   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址只能通过 `createApp` 的选项覆盖。
+   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）只能通过 `createApp` 的选项覆盖。
 5. **LLM 参数**：
    - openai 格式不发 `max_tokens`，因为 OpenAI 的新模型只认 `max_completion_tokens`，而很多兼容接口只认 `max_tokens`；
    - anthropic 格式的 `max_tokens` 是：回复 2048、审核 512、蒸馏 8192；
@@ -327,6 +328,19 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
     - 错误码：人工发送停用的文件返回 400 `file_disabled`；签名地址不对返回 403 `bad_token`；重新生成描述时，图片没开识别返回 400 `image_disabled`，模型没配置返回 400 `llm_not_configured`。
 32. **产品资料库不分号**：agent 能浏览和下载全部文件，只能把文件发到自己有权限的会话。
 33. **WAHA 内联 base64 的上限 15MB** 是常量，测试通过 `createApp` 的选项 `wahaInlineMaxBytes` 改小。签名地址的主机名用 `INKDOVE_PROXY_RELAY_HOST`，默认 `inkdove`。
+34. **手机号配对码（规格外新增）**：扫码号除了扫码，还能用手机号获取配对码关联（WhatsApp 的"改用手机号码关联"）。号详情「连接」里的「关联方式」切换，默认扫码，两种方式共用同一轮等待关联和状态轮询。
+    - 接口：`POST /api/accounts/:id/waha/request-code` `{phoneNumber}` → `{code}`，权限同 `/waha/start`。服务端先确保 session 已启动（同 start），等它进入 SCAN_QR_CODE（最多 15 秒），再向 WAHA 申请；
+    - 号码：去掉空格、横线、括号，开头可以是 `+` 或 `00`，剩下必须是 8–15 位、不以 0 开头的数字（国家码没有 0 开头的，这样能挡住忘了填国家码的本地号码），否则 400 `bad_phone`；
+    - 同一个号 20 秒内只能申请一次，否则 429 `too_frequent`，防止连点让 WhatsApp 风控这个号。只有已经发给 WAHA 的申请才计数（不论成败），号码不对、会话没就绪这类没发出去的不算。计时在内存里，重启后清零；
+    - 错误码：已连接的号 409 `already_connected`（不会登出）；WAHA 的 422（会话不在 SCAN_QR_CODE）转成 409 `not_scan_qr`；等满 15 秒会话还没进入等待关联，或 WAHA 返回其他错误，502 `waha_error`；
+    - **FAILED 的会话先普通重启，还是 FAILED 才登出重来**，申请配对码和「开始扫码连接」都这样。先 stop 再 start（不登出），等结果：回到 WORKING 就算恢复了（网络抖动造成的 FAILED 多半这样，不用重新扫码；申请配对码时这种情况返回 409 `already_connected`）；进入 SCAN_QR_CODE 就照常出码或申请配对码；又落回 FAILED，才 logout 再 start。这是为了对付申请过配对码却没输入时留下的半截登录凭证，这种会话普通重启永远回不到 SCAN_QR_CODE（见下文「已核实的外部接口」）。只有走到登出这一步，这个号才要重新扫码或输码。普通重启用 stop + start 而不是只 start，因为 start 对没停的会话什么都不做，FAILED 算不算"没停"还没实测；WORKING 的号一律不动；
+    - 日志里的手机号只留后 4 位。
+35. **号码配置导出 / 导入（规格外新增，只有 admin，agent 403）**：
+    - 导出：`GET /api/accounts/export`，附件 `inkdove-accounts-YYYYMMDD.json`（按导出时间的 UTC 日期），`cache-control: no-store`。内容是 `{format: "inkdove-accounts", version: 1, exportedAt, accounts: [...]}`，每个号是 `{name, channel, autoReply, persona, scope, allowlist, blocklist, waha: {proxy: {enabled, protocol, host, port, username, password}} | null, meta: {phoneNumberId, apiVersion, verifyToken, accessToken, appSecret} | null, notify}`，结构和号详情接口一致，只是**密钥是明文**，不是 `passwordSet` 这类标记。不导出 id、WAHA session 名、状态、时间、会话和消息、成员分配。日志只记谁导出了几个号，不记内容；
+    - 导入：`POST /api/accounts/import`，multipart，字段 `file`（和其他上传接口一样），最大 2MB，可以带 UTF-8 BOM。返回 `{created: [{id, name}], skipped: [{name, reason}]}`；
+    - 校验：先整份校验再建号，有一个号不合法就整体 400，一个都不建。不是 JSON、`format` 不对、`accounts` 不是数组返回 `bad_format`，`version` 不是 1 返回 `unsupported_version`。每个号的校验和新建、更新共用，错误信息形如「第 2 个号（销售一号）：proxy.port 必须是 1–65535 的整数或 null」，错误码沿用原来的；缺的字段按新建号的默认值；
+    - 开了邮件通知的号，在还没配置发信方式的部署里导入会 400 `email_not_configured`（和更新号时一样严），要先在设置里配置发信方式，或者把文件里的 `notify.email.enabled` 改成 false；
+    - 新建：在一个事务里逐个建，新 id、新 session 名，WAHA session 不自动建也不启动。名称可以重复。Meta 号的 phoneNumberId 和已有的号、或文件里前面的号重复时跳过并写明原因，空的不算重复。
 
 ## 已核实的外部接口
 
@@ -341,6 +355,9 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
   - 会话存储，见 [storages](https://waha.devlike.pro/docs/how-to/storages/)；
   - lid 转手机号，见 [contacts](https://waha.devlike.pro/docs/how-to/contacts/)；
   - 代理，见 [proxy](https://waha.devlike.pro/docs/how-to/proxy/)；
+  - 手机号配对码：`POST /api/{session}/auth/request-code`，体 `{phoneNumber: "<纯数字国际号码>"}`（`method` 可省），返回 `{code: "LDYW-LWV8"}`。GOWS 支持，见镜像 `devlikeapro/waha:gows` 2026.9.2 里 `dist/core/engines/gows/session.gows.core.js` 的 `requestCode`：只能在会话状态为 `SCAN_QR_CODE` 时调用，`STARTING` 时最多等 2 秒，否则返回 422 `Can request code only in SCAN_QR_CODE status. The current status is X`。配对码只在这一轮等待扫码期间有效：没人扫码或输码时，WAHA 两分多钟后把会话停掉（FAILED），码随之作废。申请过配对码却没输入，会话里会留下半截登录凭证，之后再 start 或 restart，会话直接去"登录"然后 FAILED（`Connection Failure`），不再回到 `SCAN_QR_CODE`，要先 `POST /api/sessions/{name}/logout` 清掉凭证再 start 才能重新出码。这一条是在 NOWEB 引擎上实测的，GOWS 按同样的情况防；
+  - 对已经在跑的会话再 `POST /api/sessions/{name}/start`（10-12 实测，GOWS 2026.9.2，会话在 `SCAN_QR_CODE`）：不报 422，正常返回会话 JSON，状态不变。所以"开始扫码连接"对等待关联中的号重复点不会出错，也不会让二维码重来；
+  - `POST /api/sessions/{name}/logout`（10-12 实测，GOWS 2026.9.2）：返回 201，会话自己重启，1 秒内进入 `SCAN_QR_CODE` 并一直停在那里等关联，不用再 start。这里登出后照样补一次 start：会话已经到 SCAN_QR_CODE 时按上一条是无害的；还在 STARTING 时 start 的结果没实测，代码容忍 422；
   - 发文件和图片：`POST /api/sendFile`、`POST /api/sendImage`，体是 `{session, chatId, file: {mimetype, filename, data} | {mimetype, filename, url}, caption?}`。data 是不带 `data:` 前缀的 base64，返回体顶层有 `id`。见 [send-messages](https://waha.devlike.pro/docs/how-to/send-messages/) 和 [files.dto.ts](https://github.com/devlikeapro/waha/blob/core/src/structures/files.dto.ts)；
   - GOWS 支持 sendImage 和 sendFile，见 [engines](https://waha.devlike.pro/docs/how-to/engines/) 和 [session.gows.core.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/core/engines/gows/session.gows.core.ts)。按 [changelog](https://waha.devlike.pro/docs/overview/changelog/) 和 [waha-plus](https://waha.devlike.pro/docs/how-to/waha-plus/)，从 2026.6.1 起原来 Plus 的功能并入了 Core；
   - 收媒体：入站消息带 `hasMedia` 和 `media: {url, mimetype, filename, error}`。url 指向 WAHA 的 `/api/files/...`，主机名按 `WAHA_BASE_URL` 拼，下载要带 `X-Api-Key`。`WAHA_EVENTS_DOWNLOAD_MEDIA` 默认是 true，文件默认保留 180 秒（`WHATSAPP_FILES_LIFETIME`）。见 [receive-messages](https://waha.devlike.pro/docs/how-to/receive-messages/) 和 [config](https://waha.devlike.pro/docs/how-to/config/)。

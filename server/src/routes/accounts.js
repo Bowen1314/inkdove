@@ -1,11 +1,23 @@
-// F7 号码接口。新建、删除、改名、IP 代理、Meta 凭证只有 admin 能做；其余（扫码连接和登出、自动回复、persona、
+// F7 号码接口。新建、删除、改名、IP 代理、Meta 凭证、配置导出导入只有 admin 能做；其余（扫码连接和登出、自动回复、persona、
 // 回复范围、名单、通知）分到这个号的 agent 也能做。所有判断都在服务端。
 import express from 'express';
-import { applyAccountPatch, CHANNELS, proxyFingerprint, publicAccount } from '../accounts.js';
+import multer from 'multer';
+import {
+  ACCOUNTS_EXPORT_FORMAT,
+  ACCOUNTS_EXPORT_VERSION,
+  applyAccountPatch,
+  CHANNELS,
+  exportAccount,
+  parseAccountsExport,
+  proxyFingerprint,
+  publicAccount,
+} from '../accounts.js';
 import { canAccessAccount, forbidden } from '../auth.js';
 import { emailConfigured, str } from '../settings.js';
-import { badRequest, HttpError, isPlainObject, notFound } from '../util.js';
+import { badRequest, HttpError, isPlainObject, notFound, nowIso } from '../util.js';
 import { testProxy } from '../wa/proxy-test.js';
+
+const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
 /**
  * @param {any} ctx
@@ -42,6 +54,60 @@ export function accountsRouter(ctx, auth) {
     res.json(await view(acc, { timeoutMs: 2000 }));
   });
 
+  // 号码配置导出 / 导入（规格外新增，只有 admin）。要注册在 /:id 前面，不然 export 会被当成号 id。
+  // 导出文件含密钥明文；导入是 multipart，字段 file，校验全过才建，Meta phoneNumberId 重复的跳过
+  router.get('/export', auth.requireAdmin, (req, res) => {
+    const list = accounts.list();
+    const doc = {
+      format: ACCOUNTS_EXPORT_FORMAT,
+      version: ACCOUNTS_EXPORT_VERSION,
+      exportedAt: nowIso(),
+      accounts: list.map(exportAccount),
+    };
+    ctx.log.info(`[accounts] ${req.user.email} 导出了号码配置（${list.length} 个号，含密钥明文）`);
+    const filename = `inkdove-accounts-${doc.exportedAt.slice(0, 10).replace(/-/g, '')}.json`;
+    res.set({ 'content-disposition': `attachment; filename="${filename}"`, 'cache-control': 'no-store' });
+    res.type('json').send(JSON.stringify(doc, null, 2));
+  });
+
+  const importUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_IMPORT_BYTES, files: 1 },
+    defParamCharset: 'utf8',
+  });
+  router.post(
+    '/import',
+    auth.requireAdmin,
+    (req, res, next) => {
+      importUpload.single('file')(req, res, (err) => {
+        if (!err) return next();
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '配置文件不能超过 2MB'));
+          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('一次只能上传 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 file，且只能有 1 个文件', 'upload_error'));
+          return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
+        }
+        next(err);
+      });
+    },
+    (req, res) => {
+      const f = /** @type {Express.Multer.File|undefined} */ (req.file);
+      if (!f) throw badRequest('没有收到文件（字段名 file）');
+      let doc;
+      try {
+        doc = JSON.parse(f.buffer.toString('utf8').replace(/^\uFEFF/, ''));
+      } catch {
+        throw badRequest('文件不是有效的 JSON', 'bad_format');
+      }
+      const items = parseAccountsExport(doc, { emailReady: emailConfigured(ctx.getSettings()) });
+      const result = accounts.importMany(items);
+      ctx.log.info(
+        `[accounts] ${req.user.email} 导入了号码配置：新建 ${result.created.length} 个，跳过 ${result.skipped.length} 个`,
+      );
+      res.json(result);
+    },
+  );
+
   router.get('/:id', async (req, res) => res.json(await view(load(req))));
 
   router.put('/:id', async (req, res) => {
@@ -76,6 +142,12 @@ export function accountsRouter(ctx, auth) {
     res.set('cache-control', 'no-store').type('image/png').send(png);
   });
   router.post('/:id/waha/logout', async (req, res) => res.json(await wa.wahaLogout(load(req))));
+  // 手机号配对码（规格外新增）：{phoneNumber} → {code}，权限同扫码
+  router.post('/:id/waha/request-code', async (req, res) => {
+    const acc = load(req);
+    if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
+    res.json(await wa.wahaRequestCode(acc, req.body.phoneNumber));
+  });
 
   // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）
   router.post('/:id/proxy/test', auth.requireAdmin, async (req, res) => {

@@ -168,9 +168,19 @@ export const api = {
   getAccount: (id, o) => get(`/api/accounts/${enc(id)}`, o),
   putAccount: (id, patch, o) => put(`/api/accounts/${enc(id)}`, patch, o),
   deleteAccount: (id) => del(`/api/accounts/${enc(id)}`),
+  /** 号码配置导出（admin）→ {format, version, exportedAt, accounts}，含密钥明文 */
+  exportAccounts: () => get('/api/accounts/export'),
+  /** 号码配置导入（admin，multipart 字段 file）→ {created:[{id,name}], skipped:[{name,reason}]} */
+  importAccounts: (file, o) => {
+    const form = new FormData();
+    form.append('file', file, file.name);
+    return request('POST', '/api/accounts/import', { ...o, form });
+  },
   wahaStart: (id) => post(`/api/accounts/${enc(id)}/waha/start`, {}),
   wahaLogout: (id) => post(`/api/accounts/${enc(id)}/waha/logout`, {}),
   wahaQrUrl: (id, t = Date.now()) => `/api/accounts/${enc(id)}/waha/qr?t=${t}`,
+  /** 手机号配对码 → {code}。phoneNumber 原样提交（带国家码），由服务端规范化和校验 */
+  wahaRequestCode: (id, phoneNumber, o) => post(`/api/accounts/${enc(id)}/waha/request-code`, { phoneNumber }, o),
   testProxy: (id, o) => post(`/api/accounts/${enc(id)}/proxy/test`, {}, o),
   testNotify: (id) => post(`/api/accounts/${enc(id)}/notify/test`, {}),
 

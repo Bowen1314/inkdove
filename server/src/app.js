@@ -46,6 +46,8 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   humanize?: {preMs?: Function, typingMs?: Function, betweenMs?: Function, fileGapMs?: Function},
  *   onDecision?: (row:any) => void,
  *   wahaInlineMaxBytes?: number,
+ *   wahaPairWaitMs?: number,
+ *   wahaPollMs?: number,
  *   relayBindHost?: string,
  *   canary?: string,
  *   proxyTestUrl?: string,
@@ -104,6 +106,8 @@ export function createApp(config, options = {}) {
     notifyRetryDelayMs: options.notifyRetryDelayMs,
     onDecision: options.onDecision,
     wahaInlineMaxBytes: options.wahaInlineMaxBytes,
+    wahaPairWaitMs: options.wahaPairWaitMs,
+    wahaPollMs: options.wahaPollMs,
   });
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
