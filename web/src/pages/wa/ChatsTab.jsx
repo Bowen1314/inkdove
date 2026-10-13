@@ -823,8 +823,9 @@ function DraftBox({
  * 输入框。showSuggest：没有可填的草稿时，底栏多一个「推荐回复」按钮手动要一条。
  * 文字里还有【待你确认：…】时底栏提示还有几处（点一下选中下一处），发送前再用确认框拦一次。
  * manual：人工回复的号没有机器人可暂停，不提示"手动发送后机器人会暂停这个会话"。
+ * compliance：开着屏蔽词或 AI 发言检查，输入框下面提示一句「发出的消息会做合规检查」。
  */
-function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, onSuggest, suggesting, suggestBlocked }) {
+function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, onSuggest, suggesting, suggestBlocked, compliance }) {
   const confirm = useConfirm();
   const [sending, setSending] = useState(false);
   const [translating, setTranslating] = useState(false);
@@ -981,6 +982,7 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
           发送
         </button>
       </div>
+      {compliance && <p className="composer__notice">发出的消息会做合规检查</p>}
     </div>
   );
 }
@@ -1118,6 +1120,7 @@ function ChatPane({
   replyMode,
   onToggleInfo,
   infoShown,
+  compliance,
 }) {
   const [toggling, setToggling] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -1443,6 +1446,7 @@ function ChatPane({
             onSuggest={requestSuggest}
             suggesting={suggesting}
             suggestBlocked={noCustomerMsg ? '客户还没发过消息' : ''}
+            compliance={compliance}
           />
         </div>
       )}
@@ -1482,6 +1486,7 @@ export default function ChatsTab() {
   const [messages, setMessages] = useState(null);
   const [msgError, setMsgError] = useState(null);
   const [users, setUsers] = useState(null); // 负责人选项（admin）
+  const [compliance, setCompliance] = useState(false); // 开着屏蔽词或 AI 发言检查（输入框下面提示一句），进页面时取一次
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
   const filterRef = useRef(null);
@@ -1532,6 +1537,14 @@ export default function ChatsTab() {
       .then((list) => setUsers(Array.isArray(list) ? list : []))
       .catch(() => setUsers([]));
   }, [isAdmin]);
+
+  // 要不要提示「发出的消息会做合规检查」：业务员看不到设置，只从 health 拿这一个是非；取不到就不提示
+  useEffect(() => {
+    api
+      .health({ silent: true })
+      .then((h) => setCompliance(!!h?.complianceNotice))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     setMessages(null);
@@ -1696,6 +1709,7 @@ export default function ChatsTab() {
               replyMode={conv ? modeOfConv(conv) : null}
               onToggleInfo={toggleInfo}
               infoShown={infoShown}
+              compliance={compliance}
             />
           ) : (
             <section className="inbox__chat inbox__chat--empty">

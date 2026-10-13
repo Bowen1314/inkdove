@@ -11,6 +11,8 @@
 //   3. 出错时：开着「翻译接口出错时改用 AI 翻译」而且回复模型配好了的，这次改用 AI 翻译并说明原因（fallbackReason）；
 //      否则报错，说清楚是哪家、什么问题。
 // 返回 {text, language（中文名）, via（ai 或服务 id）, fallbackReason?}。
+// 开着 AI 发言检查时，ai 方式的这一次调用顺带看原文有没有不当的说法（blockwords/conduct.js 的 afterTranslate），不多调模型；
+// 翻译的结果不受影响，模型没给或给坏了检查结果就当没查。api 方式（包括出错后改用 AI 翻译的那次）不顺带查，发出后照常查。
 //
 // 另有两处译成简体中文，方式同上（ai 用回复模型的 translateToChinese，api 用选的服务、自动判断源语言），出错时的处理也一样：
 // - 消息的「翻译」：POST …/messages/:messageId/translation，译文存进 messages.translation，再请求直接返回；
@@ -75,12 +77,14 @@ export function detectionSample(texts) {
   return picked.reverse().join('\n');
 }
 
-/** 用回复模型翻译（原来的做法） */
-async function aiTranslate(ctx, conv, source, customerMessages) {
+/**
+ * 用回复模型翻译（原来的做法）。conduct=true 时顺带做 AI 发言检查（user 是点翻译的人，记录里当发送人）
+ */
+async function aiTranslate(ctx, conv, source, customerMessages, { conduct = false, user = null } = {}) {
   let out;
   try {
     out = await llmScope({ accountId: conv.accountId ?? null, conversationId: conv.id, purpose: 'translate' }, () =>
-      ctx.ai.translate({ text: source, customerMessages }),
+      ctx.ai.translate(conduct ? { text: source, customerMessages, conduct: true } : { text: source, customerMessages }),
     );
   } catch (err) {
     throw new HttpError(502, 'llm_error', `翻译失败：${err?.message || err}`);
@@ -88,7 +92,18 @@ async function aiTranslate(ctx, conv, source, customerMessages) {
   const language = typeof out?.language === 'string' ? out.language.trim() : '';
   const translation = typeof out?.translation === 'string' ? out.translation.trim() : '';
   if (!language || !translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回的结果不完整，请重试');
-  return { text: clip(translation, MAX_TRANSLATION), language: clip(language, 20) };
+  const result = { text: clip(translation, MAX_TRANSLATION), language: clip(language, 20) };
+  if (conduct) {
+    // 检查结果只用来提醒，出什么错都不影响这次翻译
+    try {
+      // 译文超过发送上限时，发出去的是截断的那段：两种都记进查重表，原样发出去后不再查
+      const translations = [result.text, clip(result.text, MAX_TRANSLATE_TEXT)];
+      ctx.conduct.afterTranslate({ conversationId: conv.id, accountId: conv.accountId ?? null, user, text: source, translations, raw: out.conduct });
+    } catch (err) {
+      ctx.log.warn(`[conduct] 记录翻译时的发言检查结果失败：${err?.message || err}`);
+    }
+  }
+  return result;
 }
 
 /**
@@ -198,7 +213,8 @@ export async function translateForConversation(ctx, conv, text, user = null) {
     if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
     const customer = recentCustomerTexts(ctx.db, conv.id);
     if (!customer.texts.length) throw badRequest('客户还没发过文字消息，判断不了用什么语言', 'language_unknown');
-    return { ...(await aiTranslate(ctx, conv, source, customer.texts)), via: 'ai' };
+    const conduct = !!ctx.conduct?.enabled();
+    return { ...(await aiTranslate(ctx, conv, source, customer.texts, { conduct, user })), via: 'ai' };
   }
 
   const customer = recentCustomerTexts(ctx.db, conv.id);

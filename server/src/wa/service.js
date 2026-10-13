@@ -1454,6 +1454,8 @@ export function createWaService(ctx, opts = {}) {
       persona: acc.persona,
       llmBudget: DAILY_LLM_LIMIT - usedToday,
       fileQuota: Math.max(0, DAILY_FILE_LIMIT - filesToday),
+      // AI 发言检查：审核那一次顺带看回复，不多调模型、不多算次数（结果在 deliverReply 发完后处理）
+      conductCheck: ctx.conduct.enabled(),
     });
 
     conv = getConvRow(convId);
@@ -1820,6 +1822,8 @@ export function createWaService(ctx, opts = {}) {
     const { signal } = ac;
     let sent = 0;
     const sentFileIds = [];
+    /** 发出去了的几段（AI 发言检查标已查用） */
+    const sentMessageIds = [];
     const stillOn = () => {
       if (signal.aborted || closed) return null;
       const conv = getConvRow(convId);
@@ -1843,7 +1847,8 @@ export function createWaService(ctx, opts = {}) {
         const conv = stillOn();
         if (!conv) break;
         if (i === 0) settleMessages(convId, lastSeq, 'replied', null, result.code);
-        await sendAndRecord(acc, conv, parts[i], { ...opts, partIndex: parts.length > 1 ? i : null });
+        const msg = await sendAndRecord(acc, conv, parts[i], { ...opts, partIndex: parts.length > 1 ? i : null });
+        if (msg.status === 'sent') sentMessageIds.push(msg.id);
         sent++;
       }
       if (sent === parts.length && files.length) {
@@ -1861,6 +1866,14 @@ export function createWaService(ctx, opts = {}) {
       if (sending.get(convId) === ac) sending.delete(convId);
     }
     if (sent > 0) recordDecision(acc.id, convId, { ...result, sentFileIds });
+    // AI 发言检查：审核时顺带查过、几段全发出去了的，标成已查，有问题的记一条（只提醒）；只发了一部分的留给发出后的检查一段一段查
+    if (result.conduct !== undefined && sent === parts.length) {
+      try {
+        ctx.conduct.afterBotReply({ conversationId: convId, accountId: acc.id, reply: result.reply, parts, messageIds: sentMessageIds, raw: result.conduct });
+      } catch (err) {
+        log.warn(`[conduct] 记录自动回复的发言检查结果失败：${err?.message || err}`);
+      }
+    }
     if (sent < parts.length) {
       log.info(`[wa] 会话 ${convId} 拟真发送被取消：已发 ${sent}/${parts.length} 条`);
       // 一条都没发出：客户消息还没处理，重新从防抖开始（新消息已在库里，会一起合并）

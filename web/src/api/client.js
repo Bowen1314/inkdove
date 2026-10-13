@@ -420,12 +420,15 @@ export const api = {
   getBlockwordAlerts: (o) => get('/api/blockwords/alerts', o),
   /** 「知道了」→ 这条 Hit（别人已经处理过的照样返回，处理人不变） */
   ackBlockwordHit: (id, o) => post(`/api/blockwords/hits/${enc(id)}/ack`, {}, o),
+  /** 「误报」（只有 AI 发言检查发现的能标，同时算已处理，不能撤销）→ 这条 Hit */
+  falsePositiveBlockwordHit: (id, o) => post(`/api/blockwords/hits/${enc(id)}/false-positive`, {}, o),
   /**
-   * 命中记录，新到旧，page 从 1 开始。status：pending | acked，空为全部；who：成员 id，或 bot、phone、relay；
+   * 命中记录（含 AI 发言检查发现的），新到旧，page 从 1 开始。status：pending | acked | false_positive，空为全部；
+   * detector：word | ai；severity：severe | mild；who：成员 id，或 bot、phone、relay；
    * from、to：ISO 时间 → {total, page, pageSize, items: Hit[], senders: [{id, name}]}
    */
-  listBlockwordHits: ({ status, who, from, to, page, pageSize } = {}, o) =>
-    get('/api/blockwords/hits', { ...o, query: { status, who, from, to, page, pageSize } }),
+  listBlockwordHits: ({ status, detector, severity, who, from, to, page, pageSize } = {}, o) =>
+    get('/api/blockwords/hits', { ...o, query: { status, detector, severity, who, from, to, page, pageSize } }),
   /**
    * AI 扩充：{seeds, languages, existing} → {candidates: [{word, language, seed, risk, reason, forced}]}，不存。
    * 默认不弹 toast，由弹窗自己显示错误

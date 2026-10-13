@@ -8,6 +8,8 @@
 // - 一键翻译的原文（translate）：wa/translate.js 的 translateForConversation，命中不翻译；
 // - 机主在手机上发的（phone）：wa/service.js 的 archiveOwner，已经发出去了拦不住，只记下来提醒管理员。
 // 发给管理员自己的通知和 F3 回执不查（不是发给客户的）。
+// AI 发言检查（blockwords/conduct.js）发现的也记在这里（detector=ai），只提醒、不拦；弹窗只弹屏蔽词命中和 AI 发现的严重问题，
+// 轻微的只进列表。AI 发现的管理员可以标「误报」。
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse } from '../util.js';
 import { checkExpandRequest, parseExpandOutput } from './expand.js';
@@ -21,7 +23,12 @@ const MAX_TEXT = 10000;
 /** 弹窗一次最多带几条没处理的（先弹最早的） */
 export const ALERT_LIMIT = 20;
 const MAX_PAGE_SIZE = 200;
-const HIT_STATUSES = ['', 'pending', 'acked'];
+/** 列表的处理状态：pending 没处理、acked 已处理（不含误报）、false_positive 标了误报的 */
+const HIT_STATUSES = ['', 'pending', 'acked', 'false_positive'];
+export const DETECTORS = ['word', 'ai'];
+export const SEVERITIES = ['severe', 'mild'];
+/** 弹窗要的：屏蔽词命中和 AI 发现的严重问题（和 db.js 的 blockword_hits_alert 索引条件一字不差，才用得上索引） */
+const ALERT_WHERE = "acked_at IS NULL AND (detector = 'word' OR severity = 'severe')";
 
 /** 「a」「b」，多于 5 个只写前 5 个 */
 export function quoteWords(words) {
@@ -57,6 +64,17 @@ function rowToHit(r) {
     ackedAt: r.acked_at ?? null,
     ackedById: r.acked_by_id ?? null,
     ackedByName: r.acked_by_name || '',
+    // AI 发言检查的几项（屏蔽词命中的为 null / 空）
+    detector: r.detector || 'word',
+    severity: r.severity ?? null,
+    category: r.category ?? null,
+    reason: r.reason || '',
+    quote: r.quote || '',
+    stage: r.stage ?? null,
+    messageId: r.message_id ?? null,
+    falsePositiveAt: r.false_positive_at ?? null,
+    falsePositiveById: r.false_positive_by_id ?? null,
+    falsePositiveByName: r.false_positive_by_name || '',
   };
 }
 
@@ -86,37 +104,68 @@ export function createBlockwords(ctx) {
    *   hits:{word:string, ranges:[number, number][]}[]}} p accountName：不是一个号时（建外联任务选了几个号）直接给名字
    */
   function record({ source, blocked = true, accountId = null, accountName = '', conversationId = null, campaign = null, user = null, text, hits }) {
+    const body = clip(text, MAX_TEXT);
+    const ranges = hits.flatMap((h) => h.ranges).filter(([, e]) => e <= body.length);
+    return insert(
+      { source, accountId, accountName, conversationId, campaign, user, text: body },
+      { blocked: blocked ? 1 : 0, words: JSON.stringify(hits.map((h) => h.word)), ranges: JSON.stringify(ranges) },
+    );
+  }
+
+  /** 写一行（record、recordAi 共用）：号名、联系人名、发送人名按当时的存一份；extra 是各自的列 */
+  function insert({ source, accountId = null, accountName = '', conversationId = null, campaign = null, user = null, text }, extra) {
     const conv = conversationId
       ? db.prepare('SELECT account_id, contact_name, contact_number, chat_id FROM conversations WHERE id = ?').get(conversationId)
       : null;
     const accId = accountId || conv?.account_id || null;
     const acc = accId ? ctx.accounts.get(accId) : null;
     const contact = conv ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.chat_id || '') : '';
-    const body = clip(text, MAX_TEXT);
-    const ranges = hits.flatMap((h) => h.ranges).filter(([, e]) => e <= body.length);
     const id = newId();
-    db.prepare(
-      `INSERT INTO blockword_hits(id, ts, source, blocked, account_id, account_name, conversation_id, contact_name, campaign_id, campaign_name,
-                                  user_id, user_name, words, ranges, text)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
+    const row = {
       id,
-      nowIso(),
+      ts: nowIso(),
       source,
-      blocked ? 1 : 0,
-      accId,
-      clip(accountName || acc?.name || '', 200),
-      conversationId,
-      clip(contact, 100),
-      campaign?.id ?? null,
-      clip(campaign?.name || '', 100),
-      user?.id ?? null,
-      clip(user ? user.name || user.email || '' : '', 100),
-      JSON.stringify(hits.map((h) => h.word)),
-      JSON.stringify(ranges),
-      body,
-    );
+      account_id: accId,
+      account_name: clip(accountName || acc?.name || '', 200),
+      conversation_id: conversationId,
+      contact_name: clip(contact, 100),
+      campaign_id: campaign?.id ?? null,
+      campaign_name: clip(campaign?.name || '', 100),
+      user_id: user?.id ?? null,
+      user_name: clip(user ? user.name || user.email || '' : '', 100),
+      text,
+      ...extra,
+    };
+    const cols = Object.keys(row);
+    db.prepare(`INSERT INTO blockword_hits(${cols.join(', ')}) VALUES(${cols.map((c) => `@${c}`).join(', ')})`).run(row);
     return id;
+  }
+
+  /**
+   * 记一条 AI 发言检查发现的问题（只提醒，blocked 记 0）。verdict 是 conduct-prompts.js 的 normalizeConduct 校验过的
+   * {level:'mild'|'severe', category, reason, quote}；stage：pre 一键翻译时发现、还没发出，post 发出后检查发现的。
+   * 原文里找得到 quote 时记下它的位置，前端标出来。
+   * @param {{source:string, stage:'pre'|'post', accountId?:string|null, conversationId?:string|null, campaign?:{id:string|null, name:string}|null,
+   *   user?:{id:string, name?:string, email?:string}|null, text:string, messageId?:string|null, verdict:{level:string, category:string, reason:string, quote:string}}} p
+   */
+  function recordAi({ source, stage, accountId = null, conversationId = null, campaign = null, user = null, text, messageId = null, verdict }) {
+    const body = clip(text, MAX_TEXT);
+    const at = verdict.quote ? body.indexOf(verdict.quote) : -1;
+    return insert(
+      { source, accountId, conversationId, campaign, user, text: body },
+      {
+        blocked: 0,
+        words: '[]',
+        ranges: JSON.stringify(at >= 0 ? [[at, at + verdict.quote.length]] : []),
+        detector: 'ai',
+        severity: verdict.level,
+        category: verdict.category || 'other',
+        reason: verdict.reason || '',
+        quote: verdict.quote || '',
+        stage,
+        message_id: messageId,
+      },
+    );
   }
 
   /**
@@ -141,12 +190,13 @@ export function createBlockwords(ctx) {
   return {
     check,
     guard,
+    recordAi,
 
-    /** 弹窗用：还没处理的，最早的在前，最多 ALERT_LIMIT 条，另给总数 */
+    /** 弹窗用：还没处理的屏蔽词命中和 AI 发现的严重问题（轻微的不弹），最早的在前，最多 ALERT_LIMIT 条，另给总数 */
     alerts() {
-      const total = db.prepare('SELECT COUNT(*) n FROM blockword_hits WHERE acked_at IS NULL').get().n;
+      const total = db.prepare(`SELECT COUNT(*) n FROM blockword_hits WHERE ${ALERT_WHERE}`).get().n;
       const items = total
-        ? db.prepare('SELECT * FROM blockword_hits WHERE acked_at IS NULL ORDER BY ts, rowid LIMIT ?').all(ALERT_LIMIT).map(rowToHit)
+        ? db.prepare(`SELECT * FROM blockword_hits WHERE ${ALERT_WHERE} ORDER BY ts, rowid LIMIT ?`).all(ALERT_LIMIT).map(rowToHit)
         : [];
       return { total, items };
     },
@@ -165,12 +215,38 @@ export function createBlockwords(ctx) {
     },
 
     /**
-     * 历史记录，新到旧，服务端分页。status：pending 没处理 / acked 已处理；who：成员 id，或 bot、phone、relay；
+     * 「误报」：只有 AI 发现的能标。同时算已处理（还没人点「知道了」的，记成这位管理员处理的）；标了不能撤销，
+     * 重复标照样返回这条
+     */
+    falsePositive(id, user) {
+      const row = db.prepare('SELECT detector FROM blockword_hits WHERE id = ?').get(id);
+      if (!row) throw notFound('这条记录不存在');
+      if (row.detector !== 'ai') throw badRequest('只有 AI 发言检查发现的才能标误报', 'not_ai_hit');
+      const now = nowIso();
+      const by = user?.id ?? null;
+      const name = clip(user ? user.name || user.email || '' : '', 100);
+      db.prepare(
+        `UPDATE blockword_hits SET false_positive_at = ?, false_positive_by_id = ?, false_positive_by_name = ?,
+           acked_by_id = CASE WHEN acked_at IS NULL THEN ? ELSE acked_by_id END,
+           acked_by_name = CASE WHEN acked_at IS NULL THEN ? ELSE acked_by_name END,
+           acked_at = COALESCE(acked_at, ?)
+         WHERE id = ? AND false_positive_at IS NULL`,
+      ).run(now, by, name, by, name, now, id);
+      return rowToHit(db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id));
+    },
+
+    /**
+     * 历史记录，新到旧，服务端分页。status：pending 没处理 / acked 已处理（不含误报）/ false_positive 标了误报的；
+     * detector：word 屏蔽词 / ai AI 发言检查；severity：severe / mild（只对 AI 发现的有意义）；who：成员 id，或 bot、phone、relay；
      * from、to：ISO 时间（含 from，不含 to）。另给 senders（记录里出现过的成员，筛选用）。
      */
     list(q = {}) {
       const status = String(q.status ?? '');
-      if (!HIT_STATUSES.includes(status)) throw badRequest('status 只能是 pending 或 acked');
+      if (!HIT_STATUSES.includes(status)) throw badRequest('status 只能是 pending、acked 或 false_positive');
+      const detector = String(q.detector ?? '');
+      if (detector && !DETECTORS.includes(detector)) throw badRequest('detector 只能是 word 或 ai');
+      const severity = String(q.severity ?? '');
+      if (severity && !SEVERITIES.includes(severity)) throw badRequest('severity 只能是 severe 或 mild');
       const who = String(q.who ?? '');
       if (who.length > 100) throw badRequest('who 不对');
       const from = isoParam(q.from, 'from');
@@ -182,7 +258,16 @@ export function createBlockwords(ctx) {
       const where = [];
       const params = [];
       if (status === 'pending') where.push('acked_at IS NULL');
-      if (status === 'acked') where.push('acked_at IS NOT NULL');
+      if (status === 'acked') where.push('acked_at IS NOT NULL AND false_positive_at IS NULL');
+      if (status === 'false_positive') where.push('false_positive_at IS NOT NULL');
+      if (detector) {
+        where.push('detector = ?');
+        params.push(detector);
+      }
+      if (severity) {
+        where.push('severity = ?');
+        params.push(severity);
+      }
       if (WHO_SOURCES.includes(who)) {
         where.push('source = ?');
         params.push(who);

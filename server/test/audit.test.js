@@ -700,6 +700,88 @@ proxies:
   });
 });
 
+describe('操作日志：屏蔽词', () => {
+  let t;
+  let agent;
+  const last = (action) => t.ctx.db.prepare('SELECT * FROM audit_logs WHERE action = ? ORDER BY seq DESC LIMIT 1').get(action);
+  const dump = () => JSON.stringify(t.ctx.db.prepare('SELECT * FROM audit_logs').all());
+
+  before(async () => {
+    t = await startApp();
+    await t.login();
+    agent = await t.addMember({ email: 'audit-bw-agent@example.com', name: '小李' });
+  });
+  after(async () => {
+    await t.close();
+  });
+
+  it('设置：屏蔽词开关、词表、AI 发言检查都有中文名，AI 发言检查的开启时间不记', async () => {
+    const r = await t.req('PUT', '/api/settings', { body: { blockwords: { enabled: true, words: ['zorp', 'blarg'], aiCheck: true } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const changes = JSON.parse(last('settings.update').changes);
+    assert.deepEqual(changes, [
+      { field: 'blockwords.enabled', label: '屏蔽词', from: '关', to: '开' },
+      { field: 'blockwords.words', label: '屏蔽词 · 词表', from: '（空）', to: 'zorp、blarg', note: '新增 2 个' },
+      { field: 'blockwords.aiCheck', label: 'AI 发言检查', from: '关', to: '开' },
+    ]);
+    assert.ok(!dump().includes('aiCheckSince'));
+  });
+
+  it('「知道了」（屏蔽词和 AI 发现的说法不同）、误报、AI 扩充都记；不记原文和种子词；业务员 403 记成失败', async () => {
+    const word = t.ctx.blockwords.check('message-text-not-stored zorp', { source: 'operator' });
+    const ai = t.ctx.blockwords.recordAi({
+      source: 'operator',
+      stage: 'post',
+      text: 'ai-text-not-stored',
+      verdict: { level: 'severe', category: 'insult', reason: '辱骂客户', quote: 'stored' },
+    });
+    let r = await t.req('POST', `/api/blockwords/hits/${word.id}/ack`);
+    assert.equal(r.status, 200);
+    let row = last('blockword.ack');
+    assert.equal(row.summary, '对一条屏蔽词提醒点了「知道了」');
+    assert.equal(row.category, 'blockword');
+    assert.equal(row.target_type, 'blockword_hit');
+    assert.equal(row.target_id, word.id);
+    r = await t.req('POST', `/api/blockwords/hits/${ai}/ack`);
+    assert.equal(last('blockword.ack').summary, '对一条 AI 发言检查提醒点了「知道了」');
+    r = await t.req('POST', `/api/blockwords/hits/${ai}/false-positive`);
+    assert.equal(r.status, 200);
+    row = last('blockword.false_positive');
+    assert.equal(row.summary, '把一条 AI 发言检查提醒标了误报');
+    assert.equal(row.target_id, ai);
+    // 屏蔽词命中标误报：400，记成失败
+    r = await t.req('POST', `/api/blockwords/hits/${word.id}/false-positive`);
+    assert.equal(r.status, 400);
+    row = last('blockword.false_positive');
+    assert.equal(row.ok, 0);
+    assert.equal(row.summary, '把一条 AI 发言检查提醒标误报');
+
+    r = await t.req('POST', '/api/blockwords/expand', { body: { seeds: ['seedalpha', 'seedbeta'], languages: ['en'] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    row = last('blockword.expand');
+    assert.equal(row.summary, '用 AI 扩充了屏蔽词（2 个种子词）');
+    assert.equal(row.changes, '[]');
+    const all = dump();
+    for (const p of ['seedalpha', 'message-text-not-stored', 'ai-text-not-stored']) assert.ok(!all.includes(p), `${p} 不落库`);
+
+    for (const [p, action] of [
+      [`/api/blockwords/hits/${word.id}/ack`, 'blockword.ack'],
+      [`/api/blockwords/hits/${ai}/false-positive`, 'blockword.false_positive'],
+      ['/api/blockwords/expand', 'blockword.expand'],
+    ]) {
+      r = await t.req('POST', p, { cookie: agent.cookie, body: { seeds: ['seedgamma'] } });
+      assert.equal(r.status, 403, p);
+      row = last(action);
+      assert.equal(row.ok, 0);
+      assert.equal(row.status, 403);
+      assert.equal(row.actor_id, agent.user.id);
+      assert.equal(row.error, '没有权限');
+    }
+    const types = (await t.req('GET', '/api/audit-logs/types')).body;
+    assert.ok(types.some((x) => x.value === 'blockword' && x.label === '屏蔽词'));
+  });
+});
+
 describe('操作日志过期清理', () => {
   it('超过 INKDOVE_AUDIT_RETENTION_DAYS 天的每天清掉；没到期的保留', async () => {
     let now = Date.parse('2026-06-01T00:00:00.000Z');

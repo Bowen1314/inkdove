@@ -495,6 +495,38 @@ CREATE INDEX IF NOT EXISTS blockword_hits_user ON blockword_hits(user_id, ts);
 CREATE INDEX IF NOT EXISTS blockword_hits_source ON blockword_hits(source, ts);
 `);
 
+  // ---- AI 发言检查（blockwords/conduct.js）：AI 发现的不当说法和屏蔽词命中记在同一张表里 ----
+  // detector：word 屏蔽词命中（老记录都是）、ai AI 发言检查发现的。AI 发现的只提醒、从不拦（blocked 都是 0），words 是 []，
+  //   ranges 是 quote 在原文里的位置（找不到为 []）
+  // severity：severe 严重（会弹窗）、mild 轻微（只进列表）；category：insult、threat、discrimination、harassment、rude、profanity、other；
+  //   reason：模型给的一句中文说明；quote：有问题的那一小段（≤100 字）。屏蔽词命中的这几列为 NULL
+  // stage：pre 一键翻译时发现、还没发出，post 发出后检查发现的；message_id：发出后检查的那条消息
+  // false_positive_*：管理员标的「误报」（同时算已处理，标了不能撤销）
+  // blockword_hits_alert：弹窗只要屏蔽词命中和 AI 发现的严重问题，只索引还没处理的这部分
+  ensureColumn(db, 'blockword_hits', 'detector', "TEXT NOT NULL DEFAULT 'word'");
+  ensureColumn(db, 'blockword_hits', 'severity', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'category', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'reason', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'quote', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'stage', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'message_id', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'false_positive_at', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'false_positive_by_id', 'TEXT');
+  ensureColumn(db, 'blockword_hits', 'false_positive_by_name', 'TEXT');
+  db.exec(`CREATE INDEX IF NOT EXISTS blockword_hits_alert ON blockword_hits(ts) WHERE acked_at IS NULL AND (detector = 'word' OR severity = 'severe');`);
+  // messages.conduct_checked_at：这条我方消息 AI 发言检查过了（或者不用查：撤回了、没发出去、没有文字）。NULL 是还没查；
+  //   开启 AI 发言检查之前发的一直是 NULL，也不会再查。后台按 messages_direction_ts 只扫最近 24 小时的
+  ensureColumn(db, 'messages', 'conduct_checked_at', 'TEXT');
+  // conduct_cache：24 小时内查过的文字（哈希）和结果，一样的文字（外联的同一段开场消息、常用话术、一键翻译后原样发出的译文）不再查、
+  //   也不重复提醒。hash：去掉首尾空白后的 sha256；level：none / mild / severe。过期的由 blockwords/conduct.js 定时清掉
+  db.exec(`CREATE TABLE IF NOT EXISTS conduct_cache (
+  hash TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  level TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS conduct_cache_ts ON conduct_cache(ts);
+`);
+
   // ---- 操作日志（写入、查询、过期清理见 audit/store.js，哪些接口记、怎么描述见 audit/actions.js） ----
   // 人做的每个改动类操作一行，只增不改，过期（INKDOVE_AUDIT_RETENTION_DAYS，默认 365 天）的每天清一次。
   // actor_*：操作人当时的 id、名字、邮箱、角色（人删了也看得懂）；登录失败时 actor_id 是这个邮箱对应的成员，邮箱不存在时为 NULL、

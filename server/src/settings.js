@@ -69,8 +69,10 @@ function defaults(config) {
     // 一键翻译：mode 是 ai（用回复模型）或 api（用 provider 这家翻译接口）；每家的配置分开存，换来换去不丢；
     // fallbackToAi：翻译接口出错时改用 AI 翻译（回复模型配好了才行）
     translation: { mode: 'ai', provider: DEFAULT_TRANSLATION_PROVIDER, fallbackToAi: true, providers: providerDefaults() },
-    // 屏蔽词：发出去的消息里有这些词就不发（规则见 blockwords/match.js），默认关、词表为空
-    blockwords: { enabled: false, words: [] },
+    // 屏蔽词：发出去的消息里有这些词就不发（规则见 blockwords/match.js），默认关、词表为空。
+    // aiCheck：AI 发言检查（blockwords/conduct.js，只提醒、不拦），默认关，和词表的开关互不相干；
+    // aiCheckSince：最近一次打开 AI 发言检查的时间，这之前发的消息不查（不对外，只由开关带出来）
+    blockwords: { enabled: false, words: [], aiCheck: false, aiCheckSince: null },
     // 全局代理（默认关）：订阅地址是密钥（带机场账号的 token）；粘贴的配置不存原文，只存解析出的节点（proxy/index.js）。
     // node 是手动选的节点名，空串是自动选最快的；bypass 是不走代理的地址，每项一个
     proxy: { ...PROXY_DEFAULTS, bypass: [] },
@@ -233,6 +235,11 @@ export function loadSettings(db, config) {
   }
   // 存坏了的屏蔽词设置：开关回到关，词表只留能用的词（不是字符串、超长、没有字的去掉），最多 MAX_BLOCKWORDS 个
   if (typeof s.blockwords.enabled !== 'boolean') s.blockwords.enabled = false;
+  if (typeof s.blockwords.aiCheck !== 'boolean') s.blockwords.aiCheck = false;
+  if (typeof s.blockwords.aiCheckSince !== 'string' || !Number.isFinite(Date.parse(s.blockwords.aiCheckSince))) {
+    // 开着却没有开启时间：从现在起算（宁可少查以前的）
+    s.blockwords.aiCheckSince = s.blockwords.aiCheck ? new Date().toISOString() : null;
+  }
   try {
     s.blockwords.words = normalizeWordList(s.blockwords.words);
   } catch {
@@ -345,7 +352,7 @@ export function publicSettings(s, config) {
       fallbackToAi: s.translation.fallbackToAi,
       providers: publicProviders(s.translation.providers),
     },
-    blockwords: { enabled: s.blockwords.enabled, words: [...s.blockwords.words] },
+    blockwords: { enabled: s.blockwords.enabled, words: [...s.blockwords.words], aiCheck: s.blockwords.aiCheck },
     // 订阅地址不回传，只说填没填；节点名和粘贴的配置在 GET /settings/proxy/status 里
     proxy: {
       enabled: s.proxy.enabled,
@@ -698,12 +705,17 @@ export function applySettingsPatch(current, patch) {
       }
     }
   }
-  // 屏蔽词：开关和词表（词表整体替换）
+  // 屏蔽词：开关和词表（词表整体替换）；AI 发言检查的开关从关到开时记下开启时间（要配好回复模型，由接口层检查）
   if (patch.blockwords !== undefined) {
     const p = patch.blockwords;
     if (!isPlainObject(p)) throw badRequest('blockwords 必须是对象');
     if (p.enabled !== undefined) s.blockwords.enabled = boolField(p.enabled, 'blockwords.enabled');
     if (p.words !== undefined) s.blockwords.words = normalizeWordList(p.words);
+    if (p.aiCheck !== undefined) {
+      const on = boolField(p.aiCheck, 'blockwords.aiCheck');
+      if (on && !s.blockwords.aiCheck) s.blockwords.aiCheckSince = new Date().toISOString();
+      s.blockwords.aiCheck = on;
+    }
   }
   // 全局代理：字段校验在这里；要联网、看号的检查由接口层调 ctx.globalProxy.prepare
   if (patch.proxy !== undefined) s.proxy = checkProxyPatch(s.proxy, patch.proxy);

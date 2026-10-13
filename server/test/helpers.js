@@ -64,6 +64,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     githubApiUrl: 'http://127.0.0.1:9',
     // 操作日志：不起过期清理的定时器（要测时手动调 ctx.audit.cleanup()）
     auditCleanupIntervalMs: 0,
+    // AI 发言检查：不起定时扫描（要测时手动调 ctx.conduct.run()）
+    conductIntervalMs: 0,
     ...options,
   });
   const { app, ctx, close } = created;

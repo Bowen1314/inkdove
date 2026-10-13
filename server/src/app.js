@@ -9,6 +9,7 @@ import { createAssistant } from './assistant/store.js';
 import { auditMiddleware } from './audit/middleware.js';
 import { AUDIT_CLEANUP_INTERVAL_MS, createAuditLog } from './audit/store.js';
 import { canAccessAccount, createAuth } from './auth.js';
+import { CONDUCT_DEBOUNCE_MS, CONDUCT_SWEEP_MS, createConduct } from './blockwords/conduct.js';
 import { createBlockwords } from './blockwords/store.js';
 import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
@@ -95,11 +96,16 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   auditCleanupIntervalMs?: number,
  *   assistantNow?: () => number,
  *   assistantLimits?: {maxToolCalls?: number, runTimeoutMs?: number, stepTimeoutMs?: number},
+ *   conductIntervalMs?: number,
+ *   conductDebounceMs?: number,
+ *   conductNow?: () => number,
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
  *   globalProxy：全局代理（proxy/index.js）的选项；bindHost 默认和代理中继一样
  *   auditNow：操作日志的时钟（测试过期清理用）；auditCleanupIntervalMs：多久清一次过期的操作日志，为 0 时不起定时器（测试里手动调 ctx.audit.cleanup()）
  *   assistantNow、assistantLimits：测试用，首页 AI 助手的时钟和循环上限（工具次数、总时长、每步时长）
+ *   conductIntervalMs：AI 发言检查多久扫一次，为 0 时不起定时器（测试里手动调 ctx.conduct.run()）；conductDebounceMs：会话最后一条
+ *   我方消息之后等多久再查；conductNow：测试用的时钟
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -152,6 +158,7 @@ export function createApp(config, options = {}) {
     redteam: null,
     dashboard: null,
     blockwords: null,
+    conduct: null,
     assistant: null,
   };
   // 全局代理（设置 → 代理，默认关）：开着时最先换好出口，之后各模块连外网的请求都经它（proxy/route.js）
@@ -173,6 +180,9 @@ export function createApp(config, options = {}) {
   ctx.distill = createDistillRunner(ctx);
   // 屏蔽词：发出前检查、命中记录和给管理员的提醒（blockwords/store.js），发送的地方都要用，先建
   ctx.blockwords = createBlockwords(ctx);
+  // AI 发言检查（只提醒、不拦，默认关）：一键翻译和自动回复审核时顺带查，其余发出后在后台按会话一批一批查（blockwords/conduct.js）
+  ctx.conduct = createConduct(ctx, { debounceMs: options.conductDebounceMs ?? CONDUCT_DEBOUNCE_MS, now: options.conductNow });
+  ctx.conduct.start(options.conductIntervalMs ?? CONDUCT_SWEEP_MS);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
   ctx.wa = createWaService(ctx, {
@@ -252,12 +262,16 @@ export function createApp(config, options = {}) {
         }),
       );
     }
+    const s = ctx.getSettings();
     res.json({
       ok: true,
       version: VERSION,
       mock: config.llmMock,
-      llmConfigured: llmConfigured(ctx.getSettings(), config),
+      llmConfigured: llmConfigured(s, config),
       accounts: list,
+      // 登录了才给（没登录时没有这个字段）：屏蔽词（开着且有词）或 AI 发言检查开着时，会话页输入框下面提示「发出的消息会做合规检查」。
+      // 业务员看不到设置，只给这一个是非
+      ...(who ? { complianceNotice: (s.blockwords.enabled && s.blockwords.words.length > 0) || ctx.conduct.enabled() } : {}),
     });
   });
 
@@ -335,6 +349,7 @@ export function createApp(config, options = {}) {
     ready,
     async close() {
       await ctx.assistant.close();
+      await ctx.conduct.close();
       await ctx.vectors.close();
       ctx.leads.stop();
       await ctx.outreach.stop();

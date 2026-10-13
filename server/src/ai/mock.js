@@ -32,6 +32,9 @@ export const MOCK_QUESTIONS = [
   ['可以用哪些语言沟通？', ['语言', '英语', '中文', 'english']],
 ];
 
+/** 发言检查 mock 的结果：没问题 */
+const CONDUCT_NONE = { level: 'none', category: '', reason: '', quote: '' };
+
 const classify = (line) => {
   if (/[?？]/.test(line)) return 'faq';
   if (/退|换货|保修|质保|售后|付款|支付|物流|运费|政策|refund|return|shipping|payment|policy|warranty/i.test(line)) return 'policy';
@@ -167,10 +170,10 @@ export function createMockAi(opts = {}) {
       return { ...base, reply: reply.replace(/^[\s，,。.!！]+/, '').trim() || base.reply };
     },
 
-    /** mock 审核：回复含 ``` 给 offtopic，其余给 ok */
-    async review({ reply }) {
-      if (reply.includes('```')) return { verdict: 'offtopic', reason: '回复里有代码块（mock 审核）' };
-      return { verdict: 'ok', reason: 'mock 审核通过' };
+    /** mock 审核：回复含 ``` 给 offtopic，其余给 ok。顺带发言检查（conduct）时一律没问题 */
+    async review({ reply, conduct = false }) {
+      const out = reply.includes('```') ? { verdict: 'offtopic', reason: '回复里有代码块（mock 审核）' } : { verdict: 'ok', reason: 'mock 审核通过' };
+      return conduct ? { ...out, conduct: { ...CONDUCT_NONE } } : out;
     },
 
     /**
@@ -224,11 +227,17 @@ export function createMockAi(opts = {}) {
     },
 
     /** 一键翻译 mock：按客户消息里的字符判断语言（见 mockLanguage）；和原文同一种语言时原样返回，否则返回"[译成 X] 原文" */
-    async translate({ text, customerMessages = [] }) {
+    async translate({ text, customerMessages = [], conduct = false }) {
       await wait();
       const language = mockLanguage(customerMessages.join('\n'));
       const translation = mockLanguage(text) === language ? text : `[译成 ${language}] ${text}`;
-      return { language, translation };
+      return conduct ? { language, translation, conduct: { ...CONDUCT_NONE } } : { language, translation };
+    },
+
+    /** AI 发言检查 mock：要查的每条都没问题 */
+    async assessConduct({ messages }) {
+      await wait();
+      return { results: messages.filter((m) => m.checkId).map((m) => ({ id: m.checkId, ...CONDUCT_NONE })) };
     },
 
     /** 译成中文 mock：去掉【待你确认：…】后按 mockLanguage 判断是中文的原样返回，否则返回"[译成中文] 原文" */

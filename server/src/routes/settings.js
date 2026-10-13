@@ -125,6 +125,10 @@ export function settingsRouter(ctx) {
 
   router.put('/', async (req, res) => {
     let next = applySettingsPatch(ctx.getSettings(), req.body);
+    // AI 发言检查要用回复模型：没配好不让打开（已经开着的不管，模型没配好时它什么都不做）
+    if (next.blockwords.aiCheck && !ctx.getSettings().blockwords.aiCheck && !llmConfigured(next, ctx.config)) {
+      throw new HttpError(400, 'llm_not_configured', 'blockwords.aiCheck 要先配好回复模型：请先到「设置 → AI 模型」填写');
+    }
     if (req.body.proxy === undefined) {
       ctx.setSettings(next);
       res.json(view());

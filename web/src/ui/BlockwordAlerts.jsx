@@ -4,7 +4,7 @@ import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
 import { hitSegments, notifyBlockwordAck, onBlockwordAck } from '../lib/blockwords.js';
 import { fmtFull } from '../lib/format.js';
-import { blockwordResult, blockwordSourceLabel, blockwordWho } from '../lib/labels.js';
+import { blockwordResult, blockwordSourceLabel, blockwordWho, conductLabel } from '../lib/labels.js';
 import { Spinner } from './common.jsx';
 import { Modal } from './Modal.jsx';
 import { StatusDot } from './StatusDot.jsx';
@@ -52,6 +52,7 @@ const hidden = new Set();
 /**
  * 屏蔽词提醒（只给管理员，Layout 里挂一个）：每 5 秒取一次还没处理的命中，有就弹窗，一次显示一条（最早的）。
  * 「知道了」记成已处理，别的管理员就不再弹；「打开会话」先记成已处理再跳到会话。登录后进来先取一次，没处理的照样弹。
+ * AI 发言检查发现的严重问题也走这里（轻微的服务端不给，只在设置页的记录里）：写问题和说明，不写屏蔽词，多一个「误报」。
  */
 export function BlockwordAlerts() {
   const navigate = useNavigate();
@@ -72,12 +73,15 @@ export function BlockwordAlerts() {
   if (!hit) return null;
   const more = Math.max(0, (data.total || 0) - 1);
   const result = blockwordResult(hit);
+  const isAi = hit.detector === 'ai';
 
-  const ack = async (thenOpen) => {
+  /** 「知道了」（falsePositive 时是「误报」，同时算处理了）；thenOpen：处理完打开会话 */
+  const ack = async (thenOpen, falsePositive = false) => {
     if (busy) return;
     setBusy(true);
     try {
-      await api.ackBlockwordHit(hit.id, { silent: true });
+      if (falsePositive) await api.falsePositiveBlockwordHit(hit.id, { silent: true });
+      else await api.ackBlockwordHit(hit.id, { silent: true });
     } catch (e) {
       // 记录已经不在了（404）也当作处理过；别的错误提示一下，弹窗留着
       if (e?.status !== 404) {
@@ -100,12 +104,17 @@ export function BlockwordAlerts() {
   return (
     <Modal
       open
-      title="发现屏蔽词"
+      title={isAi ? 'AI 发言检查：发现严重问题' : '发现屏蔽词'}
       onClose={close}
       width={560}
       footer={
         <>
           {more > 0 && <span className="blockword-alert__more muted">还有 {more} 条</span>}
+          {isAi && (
+            <button type="button" className="btn" onClick={() => ack(false, true)} disabled={busy}>
+              误报
+            </button>
+          )}
           {hit.conversationId && (
             <button type="button" className="btn" onClick={() => ack(true)} disabled={busy}>
               打开会话
@@ -128,10 +137,21 @@ export function BlockwordAlerts() {
         <dd>{blockwordWhere(hit)}</dd>
         <dt>时间</dt>
         <dd className="num">{fmtFull(hit.ts)}</dd>
-        <dt>屏蔽词</dt>
-        <dd>
-          <BlockwordWords words={hit.words} />
-        </dd>
+        {isAi ? (
+          <>
+            <dt>问题</dt>
+            <dd>{conductLabel(hit)}</dd>
+            <dt>说明</dt>
+            <dd>{hit.reason || '—'}</dd>
+          </>
+        ) : (
+          <>
+            <dt>屏蔽词</dt>
+            <dd>
+              <BlockwordWords words={hit.words} />
+            </dd>
+          </>
+        )}
         <dt>结果</dt>
         <dd>
           <StatusDot tone={result.tone} wrap>

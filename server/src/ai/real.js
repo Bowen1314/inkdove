@@ -25,6 +25,7 @@ import {
 import { buildTranslateUserPrompt, buildTranslateZhUserPrompt, TRANSLATE_SYSTEM_PROMPT, TRANSLATE_ZH_SYSTEM_PROMPT } from '../reply/translate.js';
 import { buildLeadUserPrompt, LEAD_SYSTEM_PROMPT } from '../leads/prompts.js';
 import { BLOCKLIST_SYSTEM_PROMPT, buildBlocklistUserPrompt } from '../blockwords/expand.js';
+import { buildConductUserPrompt, CONDUCT_SYSTEM_PROMPT, REVIEW_CONDUCT_SECTION, TRANSLATE_CONDUCT_SECTION } from '../blockwords/conduct-prompts.js';
 
 const REPLY_TIMEOUT = 60_000;
 const DISTILL_TIMEOUT = 180_000;
@@ -42,7 +43,7 @@ const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、blocklist、media、file_describe、distill、assistant、test。F12 的 llm_calls
+ * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、blocklist、conduct、media、file_describe、distill、assistant、test。F12 的 llm_calls
  * 由 records.js 的 withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
  * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number,
@@ -62,13 +63,14 @@ export function createRealAi(getSettings, opts = {}) {
     translate: replyTimeout,
     leads: replyTimeout,
     blocklist: replyTimeout,
+    conduct: replyTimeout,
     test: replyTimeout,
     distill: distillTimeout,
     file_describe: distillTimeout,
     media: mediaTimeout,
     assistant: opts.assistantTimeoutMs ?? ASSISTANT_STEP_TIMEOUT,
   };
-  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, blocklist: 4096, media: 1024, file_describe: 1024, test: 64 };
+  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, blocklist: 4096, conduct: 2048, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
   const modelFor = (purpose, s, withAttachments) => {
     if (purpose === 'media' || (purpose === 'file_describe' && withAttachments)) return s.media.mediaModel || s.llm.model;
@@ -201,16 +203,20 @@ export function createRealAi(getSettings, opts = {}) {
 
     /**
      * 审核待发送的回复（带要发送的文件）。返回 {verdict, reason}；解析不了返回 null。调用失败直接抛错。
+     * conduct=true（开了 AI 发言检查的自动回复）时审核的提示词后面另接一段发言检查，结果里多一个 conduct（模型给的原样，
+     * 由调用方校验；没给或给坏了不影响 verdict）。多要一个字段，输出上限放宽到 1024，免得 JSON 被截断
      */
-    async review({ profile, entries, files = [], customerMessages, reply }) {
+    async review({ profile, entries, files = [], customerMessages, reply, conduct = false }) {
       const { text } = await call(
         'review',
-        buildReviewSystemPrompt({ profile }),
+        buildReviewSystemPrompt({ profile }) + (conduct ? REVIEW_CONDUCT_SECTION : ''),
         buildReviewUserPrompt({ profile, entries, files, customerMessages, reply }),
+        conduct ? { maxTokens: 1024 } : {},
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || typeof data.verdict !== 'string') return null;
-      return { verdict: data.verdict.trim().toLowerCase(), reason: typeof data.reason === 'string' ? data.reason : '' };
+      const out = { verdict: data.verdict.trim().toLowerCase(), reason: typeof data.reason === 'string' ? data.reason : '' };
+      return conduct ? { ...out, conduct: data.conduct ?? null } : out;
     },
 
     /**
@@ -296,10 +302,13 @@ export function createRealAi(getSettings, opts = {}) {
     },
 
     /** 会话输入框的一键翻译（用回复模型）：按客户最近的文字消息判断语言，直译业务员写的话。返回 {language, translation} */
-    async translate({ text, customerMessages }) {
-      const data = await callJson('translate', TRANSLATE_SYSTEM_PROMPT, buildTranslateUserPrompt({ text, customerMessages }));
+    async translate({ text, customerMessages, conduct = false }) {
+      // conduct=true（开了 AI 发言检查）：翻译的提示词原样不动，后面另接一段发言检查，结果里多一个 conduct（模型给的原样，由调用方校验）
+      const system = conduct ? TRANSLATE_SYSTEM_PROMPT + TRANSLATE_CONDUCT_SECTION : TRANSLATE_SYSTEM_PROMPT;
+      const data = await callJson('translate', system, buildTranslateUserPrompt({ text, customerMessages }));
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('翻译结果无法解析');
-      return { language: str(data.language, 20), translation: typeof data.translation === 'string' ? data.translation : '' };
+      const out = { language: str(data.language, 20), translation: typeof data.translation === 'string' ? data.translation : '' };
+      return conduct ? { ...out, conduct: data.conduct ?? null } : out;
     },
 
     /** 译成简体中文（会话里点「翻译」的消息、推荐回复的中文意思，用回复模型）：只直译。返回 {translation} */
@@ -322,6 +331,14 @@ export function createRealAi(getSettings, opts = {}) {
      */
     async expandBlockwords({ seeds, languages, existing = [] }) {
       return callJson('blocklist', BLOCKLIST_SYSTEM_PROMPT, buildBlocklistUserPrompt({ seeds, languages, existing }));
+    },
+
+    /**
+     * AI 发言检查（发出后，用回复模型）：一个会话里一批我方消息一起查。messages 是聊天记录（从早到晚），checkId 有值的是要查的。
+     * 返回模型给的对象，由 blockwords/conduct-prompts.js 的 parseConductResults 校验；不是 JSON 时抛错
+     */
+    async assessConduct({ messages }) {
+      return callJson('conduct', CONDUCT_SYSTEM_PROMPT, buildConductUserPrompt({ messages }));
     },
 
     /** F4：描述客户发来的图片，返回描述文本 */

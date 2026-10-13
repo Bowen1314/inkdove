@@ -291,7 +291,8 @@ describe('屏蔽词（mock）', () => {
     try {
       await fresh.login();
       const s = (await fresh.req('GET', '/api/settings')).body;
-      assert.deepEqual(s.blockwords, { enabled: false, words: [] });
+      // AI 发言检查也默认关；开启时间不对外
+      assert.deepEqual(s.blockwords, { enabled: false, words: [], aiCheck: false });
     } finally {
       await fresh.close();
     }

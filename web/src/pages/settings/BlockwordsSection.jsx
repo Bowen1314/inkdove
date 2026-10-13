@@ -11,6 +11,8 @@ import {
   blockwordResult,
   blockwordSourceLabel,
   blockwordWho,
+  CONDUCT_SEVERITY,
+  conductLabel,
 } from '../../lib/labels.js';
 import { BlockwordText, BlockwordWords, blockwordWhere } from '../../ui/BlockwordAlerts.jsx';
 import { CellText, DataTable, TableToolbar } from '../../ui/DataTable.jsx';
@@ -25,8 +27,8 @@ import { SaveBar, SettingsRow, SettingsSection } from '../../ui/Settings.jsx';
 import { FieldError, ResetButton, putSlice, sameDraft, useRevealInvalid, useSliceDraft } from './shared.jsx';
 
 /**
- * 屏蔽词（admin）：开关、词表、AI 扩充，下面是命中记录。开关和词表走 PUT /api/settings 的 blockwords，
- * 命中记录和 AI 扩充走 /api/blockwords/*。上限和服务端 server/src/blockwords/ 下的一致。
+ * 屏蔽词（admin）：开关、词表、AI 扩充、AI 发言检查的开关，下面是命中记录（含 AI 发言检查发现的）。
+ * 开关和词表走 PUT /api/settings 的 blockwords，命中记录、误报和 AI 扩充走 /api/blockwords/*。上限和服务端 server/src/blockwords/ 下的一致。
  */
 
 const MAX_WORDS = 500;
@@ -36,11 +38,11 @@ const MAX_LANGUAGES = 8;
 const DEFAULT_LANGUAGES = ['zh', 'en'];
 const PAGE_SIZE = 50;
 
-const FIELDS = { 'blockwords.words': 'words', 'blockwords.enabled': 'enabled' };
-const LABELS = { words: '屏蔽词', enabled: '发出前检查屏蔽词' };
-const DEFAULTS = { enabled: false, text: '' };
+const FIELDS = { 'blockwords.words': 'words', 'blockwords.enabled': 'enabled', 'blockwords.aiCheck': 'aiCheck' };
+const LABELS = { words: '屏蔽词', enabled: '发出前检查屏蔽词', aiCheck: 'AI 发言检查' };
+const DEFAULTS = { enabled: false, text: '', aiCheck: false };
 
-const toDraft = (b) => ({ enabled: !!b?.enabled, text: (b?.words || []).join('\n') });
+const toDraft = (b) => ({ enabled: !!b?.enabled, text: (b?.words || []).join('\n'), aiCheck: !!b?.aiCheck });
 
 /** 输入框里的词：去掉首尾空白、跳过空行（服务端还会按大小写、全角半角去重） */
 const wordsOf = (text) =>
@@ -60,6 +62,12 @@ function validate(text) {
   return '';
 }
 
+const AI_CHECK_HELP =
+  '查哪些：后台发的消息和文件说明、通知号码上转发的话、外联开场消息、机器人的自动回复、机主在手机上发的。' +
+  '一键翻译（AI 翻译）和自动回复在翻译、审核的那一次模型调用里顺带查，不多调模型；其余的发出后再查：同一个会话停下来 30 秒后，把这一阵发的一起查，' +
+  '每个会话这一阵多一次模型调用（不算进会话每天的模型次数）。24 小时内查过一模一样的话不再查。撤回的、没发出去的、没有文字的不查，打开之前发的也不查。' +
+  '要查的消息和它前面的几条（包括客户的话）会发给「AI 模型」里设置的回复模型，所以要先配好回复模型才能打开。';
+
 const RULES_HELP =
   '不分大小写和全角半角。中文、日文、韩文、泰文按字面匹配，夹在别的字中间也算（「坏词」会命中「这个坏词啊」），所以单个字容易误拦；' +
   '英文等用空格分词的文字按整词匹配（cat 不会命中 category），夹着符号接数字的型号（SB-200）也不算。' +
@@ -76,6 +84,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
   const dirty = !sameDraft(base, draft);
   const localErr = validate(draft.text);
   const wordsErr = (touched && localErr) || (serverErr?.field === 'words' ? serverErr.text : '');
+  const aiCheckErr = serverErr?.field === 'aiCheck' ? serverErr.text : '';
   const count = wordsOf(draft.text).length;
 
   const setText = (text) => {
@@ -95,7 +104,10 @@ export default function BlockwordsSection({ settings, onSaved }) {
     setSaving(true);
     setServerErr(null);
     // 空行也带上，服务端报的「第 N 行」才和输入框对得上
-    const r = await putSlice({ blockwords: { enabled: draft.enabled, words: draft.text.split('\n') } }, { fields: FIELDS, labels: LABELS });
+    const r = await putSlice(
+      { blockwords: { enabled: draft.enabled, words: draft.text.split('\n'), aiCheck: draft.aiCheck } },
+      { fields: FIELDS, labels: LABELS },
+    );
     setSaving(false);
     if (!r.res) {
       if (r.fieldError) {
@@ -131,7 +143,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="屏蔽词"
-        desc="防止骂人之类的话发给客户。只查我方发出去的文字，客户发来的不查。"
+        desc="防止骂人之类的话发给客户。只查我方发出去的文字，客户发来的不查。开着屏蔽词或 AI 发言检查时，业务员的输入框下面会提示「发出的消息会做合规检查」。"
         onSubmit={onSubmit}
         actions={<ResetButton onClick={() => setDraft({ ...DEFAULTS })} disabled={sameDraft(draft, DEFAULTS)} />}
       >
@@ -174,6 +186,25 @@ export default function BlockwordsSection({ settings, onSaved }) {
                 {count} / {MAX_WORDS}
               </span>
             </div>
+          </SettingsRow>
+
+          <SettingsRow
+            inline
+            label="AI 发言检查"
+            htmlFor="bw-ai-check"
+            hint="用 AI 看发给客户的话里有没有辱骂、威胁、歧视、骚扰、粗鲁这类说法。只提醒管理员，从不拦、不改任何消息：严重的弹窗，轻微的只记在下面的命中记录里。和上面的屏蔽词互不相干，可以只开一个。"
+            help={AI_CHECK_HELP}
+          >
+            <Switch
+              id="bw-ai-check"
+              checked={draft.aiCheck}
+              onChange={(v) => {
+                if (serverErr?.field === 'aiCheck') setServerErr(null);
+                setDraft((d) => ({ ...d, aiCheck: v }));
+              }}
+              label="AI 发言检查"
+            />
+            <FieldError id="bw-ai-check">{aiCheckErr}</FieldError>
           </SettingsRow>
         </div>
 
@@ -388,6 +419,17 @@ const STATUS_FILTERS = [
   { value: '', label: '全部' },
   { value: 'pending', label: '未处理' },
   { value: 'acked', label: '已处理' },
+  { value: 'false_positive', label: '误报' },
+];
+const DETECTOR_FILTERS = [
+  { value: '', label: '所有方式' },
+  { value: 'word', label: '屏蔽词' },
+  { value: 'ai', label: 'AI 发言检查' },
+];
+const SEVERITY_FILTERS = [
+  { value: '', label: '所有程度' },
+  { value: 'severe', label: CONDUCT_SEVERITY.severe.label },
+  { value: 'mild', label: CONDUCT_SEVERITY.mild.label },
 ];
 const RANGE_FILTERS = [
   { value: '', label: '全部时间' },
@@ -412,9 +454,11 @@ function rangeFrom(range) {
   return days ? new Date(Date.now() - days * 86400_000).toISOString() : undefined;
 }
 
-/** 历史：按状态、人、时间筛选，服务端分页（每页 50）；点一行展开原文 */
+/** 历史：按状态、检测方式（AI 的再按严重程度）、人、时间筛选，服务端分页（每页 50）；点一行展开原文 */
 function HitHistory() {
   const [status, setStatus] = useState('');
+  const [detector, setDetector] = useState('');
+  const [severity, setSeverity] = useState('');
   const [who, setWho] = useState('');
   const [range, setRange] = useState('');
   const [page, setPage] = useState(1);
@@ -432,7 +476,7 @@ function HitHistory() {
       if (!quiet) setLoading(true);
       try {
         const res = await api.listBlockwordHits(
-          { status, who, from: rangeFrom(range), page, pageSize: PAGE_SIZE },
+          { status, detector, severity: detector === 'ai' ? severity : '', who, from: rangeFrom(range), page, pageSize: PAGE_SIZE },
           { silent: true },
         );
         if (my !== seq.current) return;
@@ -446,7 +490,7 @@ function HitHistory() {
         if (my === seq.current) setLoading(false);
       }
     },
-    [status, who, range, page],
+    [status, detector, severity, who, range, page],
   );
 
   // 换筛选或翻页：先清空再取（显示骨架）
@@ -469,11 +513,13 @@ function HitHistory() {
     setPage(1);
   };
 
-  const ack = async (h) => {
+  /** 「知道了」；falsePositive 时标「误报」（只有 AI 发现的，同时算处理了，不能撤销） */
+  const ack = async (h, falsePositive = false) => {
     if (acking) return;
-    setAcking(h.id);
+    setAcking(`${h.id}:${falsePositive ? 'fp' : 'ack'}`);
     try {
-      await api.ackBlockwordHit(h.id);
+      if (falsePositive) await api.falsePositiveBlockwordHit(h.id);
+      else await api.ackBlockwordHit(h.id);
       notifyBlockwordAck();
     } catch {
       // 已提示
@@ -481,6 +527,12 @@ function HitHistory() {
       setAcking(null);
     }
   };
+  const fpButton = (h) => (
+    <button type="button" className="btn btn--sm btn--ghost" onClick={() => ack(h, true)} disabled={!!acking}>
+      {acking === `${h.id}:fp` && <Spinner />}
+      误报
+    </button>
+  );
 
   const whoOptions = [
     { value: '', label: '所有人' },
@@ -497,7 +549,19 @@ function HitHistory() {
       render: (h) => <CellText primary={blockwordWho(h)} secondary={blockwordSourceLabel(h.source)} />,
     },
     { key: 'where', header: '号和会话', hide: 'md', render: (h) => <span className="ellipsis">{blockwordWhere(h)}</span> },
-    { key: 'words', header: '屏蔽词', render: (h) => <BlockwordWords words={h.words} /> },
+    {
+      key: 'words',
+      header: '屏蔽词 / 问题',
+      render: (h) =>
+        h.detector === 'ai' ? (
+          <StatusDot tone={CONDUCT_SEVERITY[h.severity]?.tone || 'warning'} wrap>
+            {conductLabel(h)}
+            {h.reason && <span className="muted"> · {h.reason}</span>}
+          </StatusDot>
+        ) : (
+          <BlockwordWords words={h.words} />
+        ),
+    },
     {
       key: 'result',
       header: '结果',
@@ -511,27 +575,66 @@ function HitHistory() {
       key: 'ack',
       header: '处理',
       shrink: true,
-      render: (h) =>
-        h.ackedAt ? (
-          <Tooltip content={fmtFull(h.ackedAt)}>
-            <span className="muted nowrap">{h.ackedByName || '已处理'}</span>
-          </Tooltip>
-        ) : (
-          <button type="button" className="btn btn--sm" onClick={() => ack(h)} disabled={!!acking}>
-            {acking === h.id && <Spinner />}
-            知道了
-          </button>
-        ),
+      render: (h) => {
+        if (h.falsePositiveAt) {
+          return (
+            <Tooltip content={`${h.falsePositiveByName || '管理员'} · ${fmtFull(h.falsePositiveAt)}`}>
+              <span className="muted nowrap">误报</span>
+            </Tooltip>
+          );
+        }
+        const isAi = h.detector === 'ai';
+        if (h.ackedAt) {
+          return (
+            <span className="hstack nowrap">
+              <Tooltip content={fmtFull(h.ackedAt)}>
+                <span className="muted nowrap">{h.ackedByName || '已处理'}</span>
+              </Tooltip>
+              {isAi && fpButton(h)}
+            </span>
+          );
+        }
+        return (
+          <span className="hstack nowrap">
+            <button type="button" className="btn btn--sm" onClick={() => ack(h)} disabled={!!acking}>
+              {acking === `${h.id}:ack` && <Spinner />}
+              知道了
+            </button>
+            {isAi && fpButton(h)}
+          </span>
+        );
+      },
     },
   ];
 
-  const emptyTitle = status || who || range ? '没有符合条件的记录' : '还没有命中记录';
+  const emptyTitle = status || detector || who || range ? '没有符合条件的记录' : '还没有命中记录';
 
   return (
-    <SettingsSection title="命中记录" desc="谁在什么时候发了带屏蔽词的话。原文只有管理员能看到；点一行看原文。">
+    <SettingsSection
+      title="命中记录"
+      desc="谁在什么时候发了带屏蔽词的话，以及 AI 发言检查发现的问题（AI 看错了可以标「误报」）。原文只有管理员能看到；点一行看原文。"
+    >
       <div className="blockword-table">
         <TableToolbar count={data && !error ? total : undefined} end={loading && data ? <Spinner /> : null}>
           <Segmented label="按处理状态筛选" options={STATUS_FILTERS} value={status} onChange={filter(setStatus)} />
+          <Select
+            size="sm"
+            className="select--auto"
+            value={detector}
+            onChange={filter(setDetector)}
+            options={DETECTOR_FILTERS}
+            aria-label="按检测方式筛选"
+          />
+          {detector === 'ai' && (
+            <Select
+              size="sm"
+              className="select--auto"
+              value={severity}
+              onChange={filter(setSeverity)}
+              options={SEVERITY_FILTERS}
+              aria-label="按严重程度筛选"
+            />
+          )}
           <Select size="sm" className="select--auto" value={who} onChange={filter(setWho)} options={whoOptions} aria-label="按人筛选" />
           <Select size="sm" className="select--auto" value={range} onChange={filter(setRange)} options={RANGE_FILTERS} aria-label="按时间筛选" />
         </TableToolbar>

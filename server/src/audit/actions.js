@@ -30,6 +30,7 @@ export const CATEGORIES = {
   lead: '客户线索',
   campaign: '主动外联',
   assistant: 'AI 助手',
+  blockword: '屏蔽词',
   settings: '设置',
   system: '在线更新',
   other: '其他',
@@ -49,6 +50,7 @@ export const TARGET_TYPES = {
   file: '产品资料',
   lead: '客户线索',
   campaign: '外联任务',
+  blockword_hit: '屏蔽词提醒',
   settings: '设置',
   update: '版本',
 };
@@ -179,9 +181,12 @@ const SETTINGS_SPECS = {
   'proxy.subscriptionUrl': { label: '全局代理 · 订阅地址', kind: 'secret' },
   'proxy.node': { label: '全局代理 · 节点', empty: '自动（选最快的）' },
   'proxy.bypass': { label: '全局代理 · 不走代理的地址', kind: 'list' },
+  'blockwords.enabled': { label: '屏蔽词' },
+  'blockwords.words': { label: '屏蔽词 · 词表', kind: 'list' },
+  'blockwords.aiCheck': { label: 'AI 发言检查' },
 };
-/** Logo 只由上传接口改（单独记），这里不比 */
-const SETTINGS_SKIP = ['branding.logo'];
+/** Logo 只由上传接口改（单独记），这里不比；AI 发言检查的开启时间跟着开关变，开关已经记了 */
+const SETTINGS_SKIP = ['branding.logo', 'blockwords.aiCheckSince'];
 
 const PROXY_NODE_LABELS = { subscription: '全局代理 · 订阅的节点', config: '全局代理 · 粘贴的 Clash 配置' };
 
@@ -765,6 +770,34 @@ export const RULES = [
   { m: 'POST', p: '/assistant/ask', a: 'assistant.ask', run: () => ({ summary: '向 AI 助手提问{了}' }) },
   { m: 'POST', p: '/assistant/chats/:id/retry', a: 'assistant.retry', run: () => ({ summary: '重新问{了} AI 助手' }) },
   { m: 'DELETE', p: '/assistant/chats/:id', a: 'assistant.chat_delete', run: () => ({ summary: '删除{了}一个 AI 助手对话' }) },
+
+  /* ---------- 屏蔽词 ---------- */
+  // 提醒里的原文、AI 扩充的种子词都不记：只记点了哪条提醒（id）、扩充用了几个种子词
+  {
+    m: 'POST',
+    p: '/blockwords/hits/:id/ack',
+    a: 'blockword.ack',
+    before: ({ ctx, params }) => ctx.db.prepare('SELECT detector FROM blockword_hits WHERE id = ?').get(params.id)?.detector ?? null,
+    run: (x) => ({
+      summary: `对一条${x.before === 'ai' ? ' AI 发言检查' : '屏蔽词'}提醒点{了}「知道了」`,
+      target: { type: 'blockword_hit', id: x.params.id, name: null },
+    }),
+  },
+  {
+    m: 'POST',
+    p: '/blockwords/hits/:id/false-positive',
+    a: 'blockword.false_positive',
+    run: (x) => ({ summary: '把一条 AI 发言检查提醒标{了}误报', target: { type: 'blockword_hit', id: x.params.id, name: null } }),
+  },
+  {
+    m: 'POST',
+    p: '/blockwords/expand',
+    a: 'blockword.expand',
+    run: (x) => {
+      const n = Array.isArray(x.req.body?.seeds) ? x.req.body.seeds.length : 0;
+      return { summary: `用 AI 扩充{了}屏蔽词（${n} 个种子词）` };
+    },
+  },
 
   /* ---------- 设置 ---------- */
   {

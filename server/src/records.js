@@ -59,6 +59,9 @@ export const AI_METHOD_PURPOSE = {
   embed: 'embedding',
   // 设置 → 屏蔽词的「AI 扩充」（blockwords/expand.js），管理员手动点，不在会话里
   expandBlockwords: 'blocklist',
+  // AI 发言检查（blockwords/conduct.js）：发出后在后台一批一批查，不计入会话每日模型次数。一键翻译和自动回复审核
+  // 顺带做的检查不多调模型，不另记
+  assessConduct: 'conduct',
   // 首页的 AI 助手（assistant/agent.js）：每一步、以及第一次用时检查支不支持工具调用，都记 assistant；不带号和会话，
   // 不计入会话每日模型次数，按人按天另算（assistant/store.js）
   assistantStep: 'assistant',

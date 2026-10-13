@@ -97,11 +97,16 @@ export async function buildReplyContext(ctx, { message, history = [], extraQuery
  *   fileQuota：这个会话今天还能自动发几个文件（F15，每天 5 个；/api/kb/ask 不限）；
  *   llmBudget：这个会话今天还能调几次模型（/api/kb/ask、红线体检不限）。生成 + 审核要 2 次；检索改写（kb/retrieve.js）
  *   要剩 3 次以上才做（改写 + 生成 + 审核）；套话重写要在用掉前面的之后还剩 2 次以上（重写 + 审核）
+ *   conductCheck：审核时顺带做 AI 发言检查（只有真实的自动回复、而且开着 AI 发言检查时由 wa/service.js 传 true；/api/kb/ask、
+ *   红线体检不传）。只多要一个 conduct 字段，不影响 verdict 和这一轮的结果；审核通过时原样放在结果的 conduct 里，由调用方校验
  * @returns {Promise<{decision:'replied'|'offtopic'|'handoff'|'blocked'|'declined', code:string, reply:string, usedEntryIds:string[],
  *   sendFileIds:string[], handoffType:string|null, offtopicType:string|null, questionZh:string, reason:string, latencyMs:number,
- *   llmCalls:number, rewritten:boolean}>}
+ *   llmCalls:number, rewritten:boolean, conduct?:any}>}
  */
-export async function decideReply(ctx, { message, history = [], persona, allowRewrite = true, fileQuota = Infinity, llmBudget = Infinity }) {
+export async function decideReply(
+  ctx,
+  { message, history = [], persona, allowRewrite = true, fileQuota = Infinity, llmBudget = Infinity, conductCheck = false },
+) {
   const started = Date.now();
   let llmCalls = 0;
   let rewritten = false;
@@ -118,6 +123,7 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
     latencyMs: Date.now() - started,
     llmCalls,
     rewritten,
+    ...(extra.conduct !== undefined ? { conduct: extra.conduct } : {}),
   });
 
   const settings = ctx.getSettings();
@@ -238,7 +244,8 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
   let verdict;
   try {
     llmCalls++;
-    verdict = await ctx.ai.review({ profile, entries: cited, files, customerMessages: [...recentCustomer, msg], reply });
+    const input = { profile, entries: cited, files, customerMessages: [...recentCustomer, msg], reply };
+    verdict = await ctx.ai.review(conductCheck ? { ...input, conduct: true } : input);
   } catch (err) {
     return done('handoff', 'review_failed', `审核调用失败，未发送：${err?.message || err}`);
   }
@@ -253,7 +260,7 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
         'replied',
         category,
         category === 'business' ? `已回复：${parts.join('，')}，审核通过` : '已回复：寒暄，审核通过',
-        { reply, usedEntryIds, sendFileIds },
+        { reply, usedEntryIds, sendFileIds, ...(conductCheck ? { conduct: verdict.conduct ?? null } : {}) },
       );
     }
     case 'offtopic':

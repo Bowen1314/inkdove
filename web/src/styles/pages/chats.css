@@ -855,6 +855,14 @@ a.msg__file:hover {
 .composer__hint--todo:hover {
   text-decoration: underline;
 }
+/* 开着屏蔽词或 AI 发言检查时的一行提示，手机上也显示 */
+.composer__notice {
+  margin: 0;
+  padding: 0 var(--sp-3) 6px;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
 
 /* ---- 客户信息 ---- */
 .inbox__info {

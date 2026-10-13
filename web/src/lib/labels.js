@@ -327,6 +327,7 @@ export const LLM_PURPOSES = {
   kb_search: '知识库检索改写',
   embedding: '向量检索',
   blocklist: '屏蔽词扩充',
+  conduct: '发言检查',
   assistant: '助手',
   test: '测试连接',
 };
@@ -386,14 +387,36 @@ export function blockwordWho(h) {
   return '—';
 }
 
-/** 命中之后怎么样了 → {label, tone} */
+/** 命中之后怎么样了 → {label, tone}。AI 发言检查发现的只提醒、不拦：翻译时发现的还没发出，其余都已经发出去了 */
 export function blockwordResult(h) {
+  if (h.detector === 'ai') {
+    if (h.stage === 'pre') return { label: '翻译时发现，还没发出', tone: 'warning' };
+    return { label: h.source === 'phone' ? '在手机上发出，已经发出去了' : '已经发出去了', tone: 'warning' };
+  }
   if (!h.blocked) return { label: '在手机上发出，已经发出去了', tone: 'warning' };
   if (h.source === 'bot') return { label: '没有发出，已转人工', tone: 'danger' };
   if (h.source === 'translate') return { label: '没有翻译', tone: 'danger' };
   if (h.source === 'campaign') return { label: h.campaignId ? '没有发出，任务已暂停' : '没有发出，任务没有建', tone: 'danger' };
   return { label: '没有发出去', tone: 'danger' };
 }
+
+// AI 发言检查：问题类型（和 server/src/blockwords/conduct-prompts.js 的 CONDUCT_CATEGORIES 一致）和严重程度
+export const CONDUCT_CATEGORIES = {
+  insult: '辱骂',
+  threat: '威胁恐吓',
+  discrimination: '歧视',
+  harassment: '性骚扰',
+  rude: '粗鲁不专业',
+  profanity: '脏话',
+  other: '其他',
+};
+export const CONDUCT_SEVERITY = {
+  severe: { label: '严重', tone: 'danger' },
+  mild: { label: '轻微', tone: 'warning' },
+};
+/** AI 发现的问题：「严重 · 辱骂」 */
+export const conductLabel = (h) =>
+  [CONDUCT_SEVERITY[h.severity]?.label || h.severity, CONDUCT_CATEGORIES[h.category] || h.category].filter(Boolean).join(' · ');
 
 // 屏蔽词 AI 扩充能选的语言（和 server/src/blockwords/expand.js 的 EXPAND_LANGUAGES 一致，默认中文和英语）
 export const BLOCKWORD_LANGUAGES = [
