@@ -182,6 +182,8 @@ export const MEDIA_LABEL = {
 
 /** 人工回复的号收到客户消息时后端记的跳过原因（和 server/src/wa/service.js 一致）。人工回复的号会话页不显示这句 */
 export const SKIP_NO_AUTO_REPLY = '这个号没开自动回复';
+/** 客户撤回了还没处理的消息时记的跳过原因（同 service.js 的 REVOKED_SKIP_REASON）。消息上已经标了「客户已撤回」，不再重复显示 */
+export const SKIP_REVOKED = '客户撤回了这条消息';
 /** 号的回复方式不是自动回复（人工回复）。不知道（号已删除、还没拿到号列表）时返回 false，按自动回复的样子显示 */
 export const isManualMode = (mode) => mode != null && mode !== 'auto';
 

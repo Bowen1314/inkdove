@@ -443,6 +443,27 @@
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
 }
+/* 撤回过的消息（双方）：气泡和文件变淡，不划线，原文照样看得清；下面一行写谁、什么时候撤回的 */
+.msg--revoked .msg__bubble,
+.msg--revoked .msg__file,
+.msg--revoked .msg__image,
+.msg--revoked .msg__video,
+.msg--revoked .msg__audio {
+  opacity: 0.7;
+}
+.msg__revoked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.msg__revoked > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
 .msg__file {
   display: flex;
   align-items: center;

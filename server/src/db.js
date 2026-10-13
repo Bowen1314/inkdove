@@ -427,6 +427,15 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
   // 存一次大家都看得到、不再调接口。老库启动时自动加列，没译过的为 NULL ----
   ensureColumn(db, 'messages', 'translation', 'TEXT');
 
+  // ---- 消息撤回（wa/service.js 的 revokeMessage、handleRevoked）：撤回过的消息原文保留，只记什么时候、谁撤回的。
+  // revoked_by：member（业务员在墨鸽里点「撤回」，revoked_by_user_id / revoked_by_name 记成员 id 和当时的名字）、
+  //   customer（客户撤回了他发的消息）、phone（在同一个号的手机等其他设备上撤回了我方消息）。
+  // 撤回过的消息不再进模型的上下文（自动回复、推荐回复、转人工草稿、线索提取、判断客户语言）。老库启动时自动加列，没撤回过的为 NULL ----
+  ensureColumn(db, 'messages', 'revoked_at', 'TEXT');
+  ensureColumn(db, 'messages', 'revoked_by', 'TEXT');
+  ensureColumn(db, 'messages', 'revoked_by_user_id', 'TEXT');
+  ensureColumn(db, 'messages', 'revoked_by_name', 'TEXT');
+
   // ---- 可选的向量检索（后台计算和检索见 kb/vectors.js） ----
   // 每个条目按 kb/vectors.js 的 entrySegments 分成一段或几段，每段一行（chunk 从 0 起）。kind 现在只有 entry。
   // model_key：格式 + 接口地址 + 模型名的哈希（ai/embed.js 的 embedModelKey），只用和当前设置一样的行；换了模型，新的算完一行

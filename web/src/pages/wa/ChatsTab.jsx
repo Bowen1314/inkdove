@@ -15,6 +15,7 @@ import {
   Search,
   SendHorizontal,
   Sparkles,
+  Undo2,
   X,
 } from 'lucide-react';
 import { api } from '../../api/client.js';
@@ -38,6 +39,7 @@ import {
   LEAD_STAGES,
   MEDIA_LABEL,
   SKIP_NO_AUTO_REPLY,
+  SKIP_REVOKED,
   isManualMode,
   leadStageLabel,
   replyModeOf,
@@ -444,20 +446,32 @@ function KnowledgeRefs({ ids }) {
   );
 }
 
+/** 撤回标记：已撤回 · 谁 · 什么时候（墨鸽里撤回的）、客户已撤回 · 什么时候、已在手机上撤回 · 什么时候 */
+function revokedText(r) {
+  const head = r.by === 'customer' ? '客户已撤回' : r.by === 'phone' ? '已在手机上撤回' : '已撤回';
+  return [head, r.by === 'member' ? r.name : '', fmtTime(r.at)].filter(Boolean).join(' · ');
+}
+
 /**
  * manual：这个号是人工回复，"未处理 · 这个号没开自动回复"和"未处理 · 非文字消息[…]，已通知人工"不显示（每条客户消息都会有，没有信息量）。
  * 客户发来的媒体存了盘的（media.stored 有值）显示在气泡上方；没有说明文字时不再显示 [图片] 这样的标签气泡。
- * 有外文的消息（客户、我方、机器人发的都算）可以「翻译」成中文，译文显示在气泡下面；服务端存过的（自己或同事译过）默认展开
+ * 有外文的消息（客户、我方、机器人发的都算）可以「翻译」成中文，译文显示在气泡下面；服务端存过的（自己或同事译过）默认展开。
+ * 我方消息在时限内（msg.revocableUntil）可以「撤回」，撤回成功后 onRevoked(更新后的消息)；撤回过的消息（双方）气泡变淡，原文照样显示，
+ * 下面写谁什么时候撤回的
  */
-function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLoad }) {
+function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked, onMediaLoad }) {
   const { kind, label, campaign } = bubbleKind(msg);
   const [showActions, setShowActions] = useState(false);
   const pressRef = useRef(null);
   const mediaBlock = kind === 'customer' && hasMediaBlock(msg.media);
   const MediaIcon = kind === 'customer' && msg.media && !mediaBlock ? MEDIA_ICON[msg.media.type] : null;
   const showText = (!msg.attachment || !!msg.text) && !(mediaBlock && isBareMediaLabel(msg.text));
-  // 只发了文件、没有文字的人工消息不能存进知识库（后端会报 empty_message）
-  const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed' && !!msg.text?.trim();
+  // 只发了文件、没有文字的人工消息不能存进知识库（后端会报 empty_message）；撤回过的也不能存
+  const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed' && !msg.revoked && !!msg.text?.trim();
+  // 撤回：rv 是这次点「撤回」的请求状态，失败原因显示在消息下面，按钮留着可以再试
+  const confirm = useConfirm();
+  const [rv, setRv] = useState({ busy: false, error: '' });
+  const canRevoke = !msg.revoked && !!msg.revocableUntil && Date.parse(msg.revocableUntil) > Date.now();
   const fromUs = kind !== 'customer';
   // 译成中文：zh 是这次点「翻译」的请求状态；zhOpen 是自己点过「翻译 / 收起译文」后的展开状态，没点过时跟着服务端有没有译文走
   // （原文本来就是中文的那种不自动展开）
@@ -469,8 +483,8 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
   const zhSource = showText ? translatableText(msg) : '';
   const canTranslate = !!zhSource && (hasForeignText(zhSource) || !!msg.translation);
 
-  // 人工消息：悬停（桌面）或长按（手机）时出现"存进知识库"
-  const touchProps = actionable
+  // 人工消息：悬停（桌面）或长按（手机）时出现"存进知识库"；我方消息同样这样出现"撤回"
+  const touchProps = actionable || canRevoke
     ? {
         onTouchStart: () => {
           clearTimeout(pressRef.current);
@@ -506,6 +520,29 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
       if (aliveRef.current) setZh({ loading: false, error: e?.status === 401 ? null : e, data: null });
     }
   };
+  /** 「撤回」：确认后调接口。不收起操作区，手机上撤回中、失败时按钮还在 */
+  const revoke = async () => {
+    const ok = await confirm({
+      title: '撤回这条消息？',
+      message: '对所有人撤回，客户那边会显示「此消息已删除」，墨鸽里保留原文。',
+      confirmText: '撤回',
+      danger: true,
+    });
+    if (!ok || !aliveRef.current) return;
+    setRv({ busy: true, error: '' });
+    try {
+      const next = await api.revokeMessage(convId, msg.id);
+      if (!aliveRef.current) return;
+      setRv({ busy: false, error: '' });
+      onRevoked?.(next);
+    } catch (e) {
+      // 401 已经跳登录页
+      if (!aliveRef.current || e?.status === 401) return;
+      const reason = e?.message || '未知原因';
+      setRv({ busy: false, error: reason.includes('撤回') ? reason : `撤回失败：${reason}` });
+    }
+  };
+
   /** 「翻译」展开（还没有译文就去翻译）/「收起译文」 */
   const toggleTranslation = () => {
     setShowActions(false);
@@ -519,16 +556,18 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
 
   // 人工回复的号本来没有机器人处理，"这个号没开自动回复"和"非文字消息[视频]，已通知人工"都没有信息量（媒体已经直接显示了）。
   // 只看 skipped：识别失败、转人工等其他原因照旧显示
+  // 客户撤回了还没处理的消息：下面已经写了「客户已撤回」，不再显示"未处理 · 客户撤回了这条消息"
   const hideNote =
-    manual &&
-    msg.botDecision === 'skipped' &&
-    (msg.decisionReason === SKIP_NO_AUTO_REPLY || !!msg.decisionReason?.startsWith('非文字消息'));
+    (manual &&
+      msg.botDecision === 'skipped' &&
+      (msg.decisionReason === SKIP_NO_AUTO_REPLY || !!msg.decisionReason?.startsWith('非文字消息'))) ||
+    (!!msg.revoked && msg.botDecision === 'skipped' && msg.decisionReason === SKIP_REVOKED);
   const note = hideNote ? null : BOT_DECISION_NOTE[msg.botDecision];
   const ids = msg.usedEntryIds || [];
 
   return (
     <div
-      className={`msg msg--${kind}${fromUs ? ' msg--out' : ''}${msg.status === 'failed' ? ' msg--failed' : ''}${showActions ? ' show-actions' : ''}`}
+      className={`msg msg--${kind}${fromUs ? ' msg--out' : ''}${msg.status === 'failed' ? ' msg--failed' : ''}${msg.revoked ? ' msg--revoked' : ''}${showActions ? ' show-actions' : ''}`}
       {...touchProps}
     >
       {/* F15：发出的文件显示成文件卡片；带说明文字（caption）时文字另起一个气泡 */}
@@ -583,13 +622,36 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
             存进知识库
           </button>
         )}
+        {canRevoke && (
+          <button
+            type="button"
+            className={`msg__link msg__action${rv.busy || rv.error ? ' is-on' : ''}`}
+            onClick={revoke}
+            disabled={rv.busy}
+            aria-busy={rv.busy || undefined}
+          >
+            {rv.busy ? <Spinner size={13} /> : <Undo2 aria-hidden="true" />}
+            {rv.busy ? '撤回中…' : '撤回'}
+          </button>
+        )}
       </div>
       {msg.status === 'failed' && <div className="msg__error">发送失败{msg.error ? `：${msg.error}` : ''}</div>}
+      {msg.revoked && (
+        <div className="msg__revoked">
+          <Undo2 aria-hidden="true" />
+          {revokedText(msg.revoked)}
+        </div>
+      )}
+      {rv.error && !msg.revoked && (
+        <div className="msg__error" role="alert">
+          {rv.error}
+        </div>
+      )}
     </div>
   );
 }
 
-function MessageStream({ messages, convId, manual, canSaveToKb, onSaveToKb }) {
+function MessageStream({ messages, convId, manual, canSaveToKb, onSaveToKb, onRevoked }) {
   const ref = useRef(null);
   const stickRef = useRef(true);
   const lastConvRef = useRef(null);
@@ -649,6 +711,7 @@ function MessageStream({ messages, convId, manual, canSaveToKb, onSaveToKb }) {
               manual={manual}
               canSaveToKb={canSaveToKb}
               onSaveToKb={onSaveToKb}
+              onRevoked={onRevoked}
               onMediaLoad={onMediaLoad}
             />
           </div>
@@ -1047,6 +1110,7 @@ function ChatPane({
   onBack,
   onConvUpdate,
   onSent,
+  onMessageUpdate,
   onRetry,
   canSaveToKb,
   isAdmin,
@@ -1274,14 +1338,16 @@ function ChatPane({
     const list = messages || [];
     const idx = list.findIndex((m) => m.id === msg.id);
     for (let i = idx - 1; i >= 0; i -= 1) {
+      // 撤回过的消息当没有（和服务端改写时一样）
+      if (list[i].revoked) continue;
       if ((list[i].author || (list[i].direction === 'in' ? 'customer' : '')) === 'customer') return list[i].text;
     }
     return '';
   };
 
   const name = conv ? convName(conv) : convId;
-  // 会话里一条客户消息都没有时，服务端会回 no_customer_message，按钮先置灰
-  const noCustomerMsg = Array.isArray(messages) && !messages.some((m) => m.direction === 'in');
+  // 会话里一条客户消息都没有（撤回了的不算）时，服务端会回 no_customer_message，按钮先置灰
+  const noCustomerMsg = Array.isArray(messages) && !messages.some((m) => m.direction === 'in' && !m.revoked);
 
   return (
     <section className="inbox__chat" aria-label={`和 ${name} 的会话`}>
@@ -1341,7 +1407,14 @@ function ChatPane({
           />
         </div>
       ) : (
-        <MessageStream messages={messages} convId={convId} manual={manualMode} canSaveToKb={canSaveToKb} onSaveToKb={setKbMsg} />
+        <MessageStream
+          messages={messages}
+          convId={convId}
+          manual={manualMode}
+          canSaveToKb={canSaveToKb}
+          onSaveToKb={setKbMsg}
+          onRevoked={onMessageUpdate}
+        />
       )}
 
       {conv && (
@@ -1537,6 +1610,11 @@ export default function ChatsTab() {
     }
   };
 
+  /** 撤回成功：换成接口返回的消息（下次轮询前就显示已撤回） */
+  const onMessageUpdate = (msg) => {
+    if (msg && msg.id) setMessages((prev) => (prev ? prev.map((m) => (m.id === msg.id ? msg : m)) : prev));
+  };
+
   const infoShown = wide ? infoPinned : infoDrawer;
   const toggleInfo = () => (wide ? setInfoPinned((v) => !v) : setInfoDrawer((v) => !v));
   const showColumn = wide && infoPinned && !!conv;
@@ -1610,6 +1688,7 @@ export default function ChatsTab() {
               onBack={back}
               onConvUpdate={onConvUpdate}
               onSent={onSent}
+              onMessageUpdate={onMessageUpdate}
               onRetry={() => loadMessages(selectedId)}
               canSaveToKb={isAdmin}
               isAdmin={isAdmin}
