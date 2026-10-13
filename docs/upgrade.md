@@ -96,3 +96,12 @@
   - `assistant_messages(id, chat_id, question, answer, status, steps, refs, error, error_code, llm_calls, tool_calls, created_at, finished_at)`：每一问。`steps` 是查询进度的 JSON，`refs` 是回答里引用的会话、条目、文件（编号、id 和当时的名字）的 JSON；工具调用的原始结果不存；
   - `assistant_usage(user_id, day, questions)`：每人每天问了几次。
 - 回滚到旧版本不影响：旧版本不认这三张表，照常运行；再升级回来时对话记录还在。
+
+## 升级到屏蔽词
+
+- 新增「设置 → 屏蔽词」，**默认关闭、词表为空**，不开就和以前完全一样，发消息不多做任何检查，也不多调任何接口。打开后我方发给客户的文字发出前在本机比对词表，命中就不发并弹窗提醒管理员。规则见[屏蔽词](features.md#屏蔽词)。
+- 数据库不用手动迁移：启动时自动建 `blockword_hits` 表（命中记录）和它的索引；设置里多一块 `blockwords: {enabled, words}`，读设置时自动补上默认值。
+- 管理员打开后台时每 5 秒取一次没处理的命中（`GET /api/blockwords/alerts`，只查没处理的那部分索引），很轻。
+- 行为变化只在打开以后：后台发消息、发文件说明、一键翻译命中时返回 400 `blockword_hit`；自动回复命中时转人工，处理结果是 `blocked`、code `blockword`（看板「转人工原因」里显示「回复里有屏蔽词」）；外联任务发送前命中会自动暂停任务。
+- 「AI 扩充」是管理员手动点的，每点一次「生成」调一次回复模型，`llm_calls` 记 `blocklist`，看板里叫「屏蔽词扩充」。不点不调。
+- 回滚到旧版本不影响：旧版本不认这张表和 `blockwords` 这块设置，照常运行（也就不再检查屏蔽词）。再升级回来时命中记录还在；词表也在，除非回滚期间在旧版本里保存过设置（旧版本保存时只写它认识的那几块），那样要重新填一遍。

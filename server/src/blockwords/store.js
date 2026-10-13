@@ -1,0 +1,235 @@
+// 屏蔽词：发出前检查、命中记录、给管理员的提醒和历史、AI 扩充（接口见 routes/blockwords.js，表见 db.js 的 blockword_hits）。
+// 只管我方发出去的文字，客户发来的不查。开关和词表在设置的 blockwords 里，关着或词表为空时什么都不做。
+// 在哪里查（每处的调用在各自的文件里，找 ctx.blockwords）：
+// - 后台发消息（operator）、发文件的说明文字（file）：wa/service.js 的 operatorSend / operatorSendFile，命中返回 400，不发；
+// - 通知号码上转发、/d 发草稿（relay）：wa/service.js 的 handleNotifyReply，命中不发，回执里说明；
+// - 自动回复（bot）：wa/service.js 的 processPending，命中不发，按「回复被拦截」转人工；
+// - 外联开场消息（campaign）：outreach/store.js 建任务时查（命中 400），发之前再查一次（建任务后才加的词，命中就暂停任务）；
+// - 一键翻译的原文（translate）：wa/translate.js 的 translateForConversation，命中不翻译；
+// - 机主在手机上发的（phone）：wa/service.js 的 archiveOwner，已经发出去了拦不住，只记下来提醒管理员。
+// 发给管理员自己的通知和 F3 回执不查（不是发给客户的）。
+import { llmConfigured } from '../settings.js';
+import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse } from '../util.js';
+import { checkExpandRequest, parseExpandOutput } from './expand.js';
+import { compileList, findHits } from './match.js';
+
+export const HIT_SOURCES = ['operator', 'file', 'translate', 'bot', 'relay', 'campaign', 'phone'];
+/** 「谁」的筛选里不对应具体成员的三种 */
+export const WHO_SOURCES = ['bot', 'phone', 'relay'];
+/** 记录里的原文最多存多少字（和消息表一样） */
+const MAX_TEXT = 10000;
+/** 弹窗一次最多带几条没处理的（先弹最早的） */
+export const ALERT_LIMIT = 20;
+const MAX_PAGE_SIZE = 200;
+const HIT_STATUSES = ['', 'pending', 'acked'];
+
+/** 「a」「b」，多于 5 个只写前 5 个 */
+export function quoteWords(words) {
+  const shown = words.slice(0, 5).map((w) => `「${w}」`).join('');
+  return words.length > 5 ? `${shown}等 ${words.length} 个` : shown;
+}
+
+const SUBJECT = { operator: '这条消息', file: '文件说明', translate: '这段话', relay: '这条消息', campaign: '开场消息', bot: '回复' };
+const RESULT = { file: '文件没有发出去', translate: '没有翻译', campaign: '任务没有建' };
+
+/** 给发送人看的提示：「这条消息里有屏蔽词「xxx」，没有发出去，管理员会收到提醒」 */
+export function hitMessage(source, words) {
+  return `${SUBJECT[source] || '这条消息'}里有屏蔽词${quoteWords(words)}，${RESULT[source] || '没有发出去'}，管理员会收到提醒`;
+}
+
+function rowToHit(r) {
+  return {
+    id: r.id,
+    ts: r.ts,
+    source: r.source,
+    blocked: !!r.blocked,
+    accountId: r.account_id ?? null,
+    accountName: r.account_name || '',
+    conversationId: r.conversation_id ?? null,
+    contactName: r.contact_name || '',
+    campaignId: r.campaign_id ?? null,
+    campaignName: r.campaign_name || '',
+    userId: r.user_id ?? null,
+    userName: r.user_name || '',
+    words: safeJsonParse(r.words, []),
+    ranges: safeJsonParse(r.ranges, []),
+    text: r.text,
+    ackedAt: r.acked_at ?? null,
+    ackedById: r.acked_by_id ?? null,
+    ackedByName: r.acked_by_name || '',
+  };
+}
+
+/** 查询参数里的时间：ISO 时间字符串，转成库里的格式；空的返回 '' */
+function isoParam(v, field) {
+  if (v === undefined || v === null || v === '') return '';
+  const t = Date.parse(String(v));
+  if (!Number.isFinite(t)) throw badRequest(`${field} 必须是时间（ISO 格式）`);
+  return new Date(t).toISOString();
+}
+
+/** @param {any} ctx */
+export function createBlockwords(ctx) {
+  const { db } = ctx;
+
+  /** 开着而且有词时返回编译好的词表，否则 null */
+  function compiled() {
+    const b = ctx.getSettings().blockwords;
+    if (!b?.enabled || !b.words?.length) return null;
+    return compileList(b.words);
+  }
+
+  /**
+   * 记一条命中。号名、联系人名、发送人名按当时的存一份。
+   * @param {{source:string, blocked?:boolean, accountId?:string|null, accountName?:string, conversationId?:string|null,
+   *   campaign?:{id:string|null, name:string}|null, user?:{id:string, name?:string, email?:string}|null, text:string,
+   *   hits:{word:string, ranges:[number, number][]}[]}} p accountName：不是一个号时（建外联任务选了几个号）直接给名字
+   */
+  function record({ source, blocked = true, accountId = null, accountName = '', conversationId = null, campaign = null, user = null, text, hits }) {
+    const conv = conversationId
+      ? db.prepare('SELECT account_id, contact_name, contact_number, chat_id FROM conversations WHERE id = ?').get(conversationId)
+      : null;
+    const accId = accountId || conv?.account_id || null;
+    const acc = accId ? ctx.accounts.get(accId) : null;
+    const contact = conv ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.chat_id || '') : '';
+    const body = clip(text, MAX_TEXT);
+    const ranges = hits.flatMap((h) => h.ranges).filter(([, e]) => e <= body.length);
+    const id = newId();
+    db.prepare(
+      `INSERT INTO blockword_hits(id, ts, source, blocked, account_id, account_name, conversation_id, contact_name, campaign_id, campaign_name,
+                                  user_id, user_name, words, ranges, text)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      nowIso(),
+      source,
+      blocked ? 1 : 0,
+      accId,
+      clip(accountName || acc?.name || '', 200),
+      conversationId,
+      clip(contact, 100),
+      campaign?.id ?? null,
+      clip(campaign?.name || '', 100),
+      user?.id ?? null,
+      clip(user ? user.name || user.email || '' : '', 100),
+      JSON.stringify(hits.map((h) => h.word)),
+      JSON.stringify(ranges),
+      body,
+    );
+    return id;
+  }
+
+  /**
+   * 检查一段要发出的文字。开着、命中了就记一条，返回 {id, words}；没开、没命中返回 null。
+   * blocked=false 用于已经发出去的（手机上发的），只提醒。
+   */
+  function check(text, info) {
+    const list = compiled();
+    if (!list || typeof text !== 'string' || !text) return null;
+    const hits = findHits(list, text);
+    if (!hits.length) return null;
+    const id = record({ ...info, text, hits });
+    return { id, words: hits.map((h) => h.word) };
+  }
+
+  /** 检查并在命中时抛 400（code blockword_hit），提示按 info.source 写 */
+  function guard(text, info) {
+    const h = check(text, info);
+    if (h) throw new HttpError(400, 'blockword_hit', hitMessage(info.source, h.words));
+  }
+
+  return {
+    check,
+    guard,
+
+    /** 弹窗用：还没处理的，最早的在前，最多 ALERT_LIMIT 条，另给总数 */
+    alerts() {
+      const total = db.prepare('SELECT COUNT(*) n FROM blockword_hits WHERE acked_at IS NULL').get().n;
+      const items = total
+        ? db.prepare('SELECT * FROM blockword_hits WHERE acked_at IS NULL ORDER BY ts, rowid LIMIT ?').all(ALERT_LIMIT).map(rowToHit)
+        : [];
+      return { total, items };
+    },
+
+    /** 「知道了」：记下是谁处理的；别人已经处理过的不改，照样返回这条 */
+    ack(id, user) {
+      db.prepare('UPDATE blockword_hits SET acked_at = ?, acked_by_id = ?, acked_by_name = ? WHERE id = ? AND acked_at IS NULL').run(
+        nowIso(),
+        user?.id ?? null,
+        clip(user ? user.name || user.email || '' : '', 100),
+        id,
+      );
+      const row = db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id);
+      if (!row) throw notFound('这条记录不存在');
+      return rowToHit(row);
+    },
+
+    /**
+     * 历史记录，新到旧，服务端分页。status：pending 没处理 / acked 已处理；who：成员 id，或 bot、phone、relay；
+     * from、to：ISO 时间（含 from，不含 to）。另给 senders（记录里出现过的成员，筛选用）。
+     */
+    list(q = {}) {
+      const status = String(q.status ?? '');
+      if (!HIT_STATUSES.includes(status)) throw badRequest('status 只能是 pending 或 acked');
+      const who = String(q.who ?? '');
+      if (who.length > 100) throw badRequest('who 不对');
+      const from = isoParam(q.from, 'from');
+      const to = isoParam(q.to, 'to');
+      const page = Number(q.page ?? 1);
+      const size = Number(q.pageSize ?? 50);
+      if (!Number.isInteger(page) || page < 1) throw badRequest('page 必须是从 1 开始的整数');
+      if (!Number.isInteger(size) || size < 1 || size > MAX_PAGE_SIZE) throw badRequest(`pageSize 必须是 1–${MAX_PAGE_SIZE} 的整数`);
+      const where = [];
+      const params = [];
+      if (status === 'pending') where.push('acked_at IS NULL');
+      if (status === 'acked') where.push('acked_at IS NOT NULL');
+      if (WHO_SOURCES.includes(who)) {
+        where.push('source = ?');
+        params.push(who);
+      } else if (who) {
+        where.push('user_id = ?');
+        params.push(who);
+      }
+      if (from) {
+        where.push('ts >= ?');
+        params.push(from);
+      }
+      if (to) {
+        where.push('ts < ?');
+        params.push(to);
+      }
+      const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
+      const total = db.prepare(`SELECT COUNT(*) n FROM blockword_hits ${w}`).get(...params).n;
+      const items = db
+        .prepare(`SELECT * FROM blockword_hits ${w} ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?`)
+        .all(...params, size, (page - 1) * size)
+        .map(rowToHit);
+      const senders = db
+        .prepare('SELECT user_id id, MAX(user_name) name FROM blockword_hits WHERE user_id IS NOT NULL GROUP BY user_id ORDER BY name')
+        .all();
+      return { total, page, pageSize: size, items, senders };
+    },
+
+    /**
+     * AI 扩充：用回复模型按种子词生成候选（不存）。返回 {candidates}，每个 {word, language, seed, risk, reason, forced}。
+     * 已有的词 = 这次带来的（设置页里还没保存的）+ 已保存的，去重用。
+     */
+    async expand(body) {
+      const req = checkExpandRequest(body);
+      const s = ctx.getSettings();
+      if (!llmConfigured(s, ctx.config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到「设置 → AI 模型」填写');
+      const existing = [...new Set([...req.existing, ...(s.blockwords?.words || [])])];
+      let data;
+      try {
+        data = await ctx.ai.expandBlockwords({ seeds: req.seeds, languages: req.languages, existing });
+      } catch (err) {
+        throw new HttpError(502, 'llm_error', `扩充失败：${err?.message || err}`);
+      }
+      try {
+        return { candidates: parseExpandOutput(data, { ...req, existing }) };
+      } catch (err) {
+        throw new HttpError(502, 'llm_bad_output', `扩充失败：${err?.message || err}。请重试，或者换个模型`);
+      }
+    },
+  };
+}

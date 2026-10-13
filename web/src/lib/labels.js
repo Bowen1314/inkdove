@@ -294,6 +294,7 @@ export const DECISION_CODES = {
     code_block: '回复里有代码块',
     canary: '疑似提示词泄露',
     bad_file: '要发的文件不存在或超量',
+    blockword: '回复里有屏蔽词',
   },
   offtopic: {
     task: '让机器人干别的活',
@@ -325,6 +326,7 @@ export const LLM_PURPOSES = {
   suggest: '推荐回复',
   kb_search: '知识库检索改写',
   embedding: '向量检索',
+  blocklist: '屏蔽词扩充',
   assistant: '助手',
   test: '测试连接',
 };
@@ -361,4 +363,64 @@ export const ASSIGN_SKIP = {
   not_found: '会话已不存在',
   assignee_no_account_access: '对方没有号的权限',
   unchanged: '负责人没变',
+};
+
+// 屏蔽词：命中记录的来源（和 server/src/blockwords/store.js 的 HIT_SOURCES 一致）
+export const BLOCKWORD_SOURCE = {
+  operator: '后台发消息',
+  file: '发文件的说明',
+  translate: '一键翻译',
+  bot: '自动回复',
+  relay: 'WhatsApp 转发',
+  campaign: '外联开场消息',
+  phone: '手机上发出',
+};
+export const blockwordSourceLabel = (s) => BLOCKWORD_SOURCE[s] || s || '—';
+
+/** 命中记录是谁发的：成员名；机器人、机主手机、通知号码上转发的按来源写 */
+export function blockwordWho(h) {
+  if (h.userName) return h.userName;
+  if (h.source === 'bot') return '机器人';
+  if (h.source === 'phone') return '机主手机';
+  if (h.source === 'relay') return '通知号码';
+  return '—';
+}
+
+/** 命中之后怎么样了 → {label, tone} */
+export function blockwordResult(h) {
+  if (!h.blocked) return { label: '在手机上发出，已经发出去了', tone: 'warning' };
+  if (h.source === 'bot') return { label: '没有发出，已转人工', tone: 'danger' };
+  if (h.source === 'translate') return { label: '没有翻译', tone: 'danger' };
+  if (h.source === 'campaign') return { label: h.campaignId ? '没有发出，任务已暂停' : '没有发出，任务没有建', tone: 'danger' };
+  return { label: '没有发出去', tone: 'danger' };
+}
+
+// 屏蔽词 AI 扩充能选的语言（和 server/src/blockwords/expand.js 的 EXPAND_LANGUAGES 一致，默认中文和英语）
+export const BLOCKWORD_LANGUAGES = [
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: '英语' },
+  { value: 'es', label: '西班牙语' },
+  { value: 'pt', label: '葡萄牙语' },
+  { value: 'ar', label: '阿拉伯语' },
+  { value: 'ru', label: '俄语' },
+  { value: 'fr', label: '法语' },
+  { value: 'de', label: '德语' },
+  { value: 'it', label: '意大利语' },
+  { value: 'tr', label: '土耳其语' },
+  { value: 'id', label: '印尼语' },
+  { value: 'vi', label: '越南语' },
+  { value: 'th', label: '泰语' },
+  { value: 'hi', label: '印地语' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'ms', label: '马来语' },
+  { value: 'fa', label: '波斯语' },
+];
+export const blockwordLanguageLabel = (c) => BLOCKWORD_LANGUAGES.find((x) => x.value === c)?.label || c || '未知';
+
+/** AI 扩充候选的误判风险 */
+export const BLOCKWORD_RISK = {
+  low: { label: '低', tone: 'success' },
+  medium: { label: '中', tone: 'warning' },
+  high: { label: '高', tone: 'danger' },
 };

@@ -31,6 +31,7 @@ import { usePolling } from './hooks/usePolling.js';
 import { ChangePasswordModal } from './ui/ChangePasswordModal.jsx';
 import { ProfileModal } from './ui/ProfileModal.jsx';
 import { Avatar } from './ui/Avatar.jsx';
+import { BlockwordAlerts } from './ui/BlockwordAlerts.jsx';
 import { BrandMark } from './ui/BrandMark.jsx';
 import { Menu, Tooltip } from './ui/Popover.jsx';
 import { StatusDot } from './ui/StatusDot.jsx';
@@ -258,6 +259,8 @@ export function Layout() {
       <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
       <ProfileModal open={profileOpen} onClose={() => setProfileOpen(false)} />
       {isAdmin && <UpdateModal />}
+      {/* 屏蔽词提醒：只给管理员，几秒取一次没处理的，有就弹窗 */}
+      {isAdmin && <BlockwordAlerts />}
     </div>
   );
 }

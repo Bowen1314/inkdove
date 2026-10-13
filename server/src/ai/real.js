@@ -24,6 +24,7 @@ import {
 } from '../reply/prompts.js';
 import { buildTranslateUserPrompt, buildTranslateZhUserPrompt, TRANSLATE_SYSTEM_PROMPT, TRANSLATE_ZH_SYSTEM_PROMPT } from '../reply/translate.js';
 import { buildLeadUserPrompt, LEAD_SYSTEM_PROMPT } from '../leads/prompts.js';
+import { BLOCKLIST_SYSTEM_PROMPT, buildBlocklistUserPrompt } from '../blockwords/expand.js';
 
 const REPLY_TIMEOUT = 60_000;
 const DISTILL_TIMEOUT = 180_000;
@@ -41,7 +42,7 @@ const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、media、file_describe、distill、assistant、test。F12 的 llm_calls
+ * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、blocklist、media、file_describe、distill、assistant、test。F12 的 llm_calls
  * 由 records.js 的 withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
  * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number,
@@ -60,13 +61,14 @@ export function createRealAi(getSettings, opts = {}) {
     kb_search: opts.searchTimeoutMs ?? SEARCH_TIMEOUT,
     translate: replyTimeout,
     leads: replyTimeout,
+    blocklist: replyTimeout,
     test: replyTimeout,
     distill: distillTimeout,
     file_describe: distillTimeout,
     media: mediaTimeout,
     assistant: opts.assistantTimeoutMs ?? ASSISTANT_STEP_TIMEOUT,
   };
-  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
+  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, blocklist: 4096, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
   const modelFor = (purpose, s, withAttachments) => {
     if (purpose === 'media' || (purpose === 'file_describe' && withAttachments)) return s.media.mediaModel || s.llm.model;
@@ -312,6 +314,14 @@ export function createRealAi(getSettings, opts = {}) {
       const data = await callJson('leads', LEAD_SYSTEM_PROMPT, buildLeadUserPrompt({ contactName, messages }));
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('线索提取结果无法解析');
       return data;
+    },
+
+    /**
+     * 屏蔽词 AI 扩充（用回复模型）：按种子词生成相关的屏蔽词候选。返回模型给的对象，由 blockwords/expand.js 的
+     * parseExpandOutput 校验、去重、按规则调风险
+     */
+    async expandBlockwords({ seeds, languages, existing = [] }) {
+      return callJson('blocklist', BLOCKLIST_SYSTEM_PROMPT, buildBlocklistUserPrompt({ seeds, languages, existing }));
     },
 
     /** F4：描述客户发来的图片，返回描述文本 */

@@ -1,4 +1,5 @@
-// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation、proxy。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation、proxy、blockwords。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+import { MAX_BLOCKWORDS, normalizeWordList } from './blockwords/match.js';
 import { kvGet, kvSet } from './db.js';
 import { checkBypassList } from './proxy/bypass.js';
 import {
@@ -68,6 +69,8 @@ function defaults(config) {
     // 一键翻译：mode 是 ai（用回复模型）或 api（用 provider 这家翻译接口）；每家的配置分开存，换来换去不丢；
     // fallbackToAi：翻译接口出错时改用 AI 翻译（回复模型配好了才行）
     translation: { mode: 'ai', provider: DEFAULT_TRANSLATION_PROVIDER, fallbackToAi: true, providers: providerDefaults() },
+    // 屏蔽词：发出去的消息里有这些词就不发（规则见 blockwords/match.js），默认关、词表为空
+    blockwords: { enabled: false, words: [] },
     // 全局代理（默认关）：订阅地址是密钥（带机场账号的 token）；粘贴的配置不存原文，只存解析出的节点（proxy/index.js）。
     // node 是手动选的节点名，空串是自动选最快的；bypass 是不走代理的地址，每项一个
     proxy: { ...PROXY_DEFAULTS, bypass: [] },
@@ -228,6 +231,21 @@ export function loadSettings(db, config) {
   for (const [id, fields] of Object.entries(pd)) {
     for (const [k, v] of Object.entries(fields)) if (typeof tr.providers[id][k] !== 'string') tr.providers[id][k] = v;
   }
+  // 存坏了的屏蔽词设置：开关回到关，词表只留能用的词（不是字符串、超长、没有字的去掉），最多 MAX_BLOCKWORDS 个
+  if (typeof s.blockwords.enabled !== 'boolean') s.blockwords.enabled = false;
+  try {
+    s.blockwords.words = normalizeWordList(s.blockwords.words);
+  } catch {
+    const usable = (w) => {
+      try {
+        return normalizeWordList([w]).length === 1;
+      } catch {
+        return false;
+      }
+    };
+    const words = Array.isArray(s.blockwords.words) ? s.blockwords.words.filter(usable) : [];
+    s.blockwords.words = normalizeWordList(words.slice(0, MAX_BLOCKWORDS));
+  }
   // 存坏了的全局代理设置：字段逐个回到默认值（数组 shapeLike 不管，单独校验）
   const px = s.proxy;
   if (typeof px.enabled !== 'boolean') px.enabled = false;
@@ -327,6 +345,7 @@ export function publicSettings(s, config) {
       fallbackToAi: s.translation.fallbackToAi,
       providers: publicProviders(s.translation.providers),
     },
+    blockwords: { enabled: s.blockwords.enabled, words: [...s.blockwords.words] },
     // 订阅地址不回传，只说填没填；节点名和粘贴的配置在 GET /settings/proxy/status 里
     proxy: {
       enabled: s.proxy.enabled,
@@ -678,6 +697,13 @@ export function applySettingsPatch(current, patch) {
         throw badRequest(`${at} 选「翻译 API」时要先填好：${problem.message}`, 'translation_provider_not_configured');
       }
     }
+  }
+  // 屏蔽词：开关和词表（词表整体替换）
+  if (patch.blockwords !== undefined) {
+    const p = patch.blockwords;
+    if (!isPlainObject(p)) throw badRequest('blockwords 必须是对象');
+    if (p.enabled !== undefined) s.blockwords.enabled = boolField(p.enabled, 'blockwords.enabled');
+    if (p.words !== undefined) s.blockwords.words = normalizeWordList(p.words);
   }
   // 全局代理：字段校验在这里；要联网、看号的检查由接口层调 ctx.globalProxy.prepare
   if (patch.proxy !== undefined) s.proxy = checkProxyPatch(s.proxy, patch.proxy);

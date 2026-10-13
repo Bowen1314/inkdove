@@ -396,6 +396,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
           libretranslate: { ready: false, url: '', apiKeySet: false, apiKeyLast4: null },
         },
       },
+      blockwords: { enabled: false, words: [] },
       proxy: { enabled: false, source: 'subscription', node: '', bypass: [], subscriptionUrlSet: false },
       webhookBase: 'https://kb.example.com',
     });

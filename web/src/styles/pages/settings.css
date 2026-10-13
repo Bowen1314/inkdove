@@ -90,6 +90,54 @@
   margin-top: var(--sp-1);
 }
 
+/* 屏蔽词：输入框下面一行，左边「AI 扩充」，右边词数 */
+.blockwords__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+/* 命中记录和 AI 扩充的候选表：不贴页面边距 */
+.blockword-table {
+  --gutter: 0;
+}
+.blockword-history__detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+}
+/* AI 扩充弹窗：种子词多时在框里滚动，语言排成几列 */
+.blockwords-expand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.blockwords-expand__seeds {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+  max-height: 168px;
+  overflow-y: auto;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.blockwords-expand__langs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: var(--sp-2) var(--sp-3);
+}
+.blockwords-expand__seeds .choice,
+.blockwords-expand__langs .choice {
+  align-items: center;
+  min-width: 0;
+}
+.blockwords-expand__seeds .checkbox,
+.blockwords-expand__langs .checkbox {
+  margin-top: 0;
+}
+
 /* 模型单价表：单元格直接是输入框（DESIGN 第 5 节「行内编辑」）。不贴页面边距，数字列定宽 */
 .pricing-table {
   --gutter: 0;

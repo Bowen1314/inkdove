@@ -9,6 +9,7 @@ import { createAssistant } from './assistant/store.js';
 import { auditMiddleware } from './audit/middleware.js';
 import { AUDIT_CLEANUP_INTERVAL_MS, createAuditLog } from './audit/store.js';
 import { canAccessAccount, createAuth } from './auth.js';
+import { createBlockwords } from './blockwords/store.js';
 import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
 import { createMailer } from './email.js';
@@ -27,6 +28,7 @@ import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
 import { assistantRouter } from './routes/assistant.js';
 import { auditRouter } from './routes/audit.js';
+import { blockwordsRouter } from './routes/blockwords.js';
 import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { distillRouter } from './routes/distill.js';
@@ -149,6 +151,7 @@ export function createApp(config, options = {}) {
     outreach: null,
     redteam: null,
     dashboard: null,
+    blockwords: null,
     assistant: null,
   };
   // 全局代理（设置 → 代理，默认关）：开着时最先换好出口，之后各模块连外网的请求都经它（proxy/route.js）
@@ -168,6 +171,8 @@ export function createApp(config, options = {}) {
   ctx.vectors = createVectorIndexer(ctx, { debounceMs: options.vectorDebounceMs ?? VECTOR_DEBOUNCE_MS, now: options.vectorNow });
   ctx.vectors.start();
   ctx.distill = createDistillRunner(ctx);
+  // 屏蔽词：发出前检查、命中记录和给管理员的提醒（blockwords/store.js），发送的地方都要用，先建
+  ctx.blockwords = createBlockwords(ctx);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
   ctx.wa = createWaService(ctx, {
@@ -278,6 +283,7 @@ export function createApp(config, options = {}) {
   api.use('/redteam', auth.requireAdmin, redteamRouter(ctx));
   api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
   api.use('/update', auth.requireAdmin, updateRouter(ctx));
+  api.use('/blockwords', auth.requireAdmin, blockwordsRouter(ctx));
   api.use('/audit-logs', auth.requireAdmin, auditRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));

@@ -2146,3 +2146,48 @@
 .schedule-fields__sep {
   color: var(--text-muted);
 }
+
+/* ============ 屏蔽词提醒（弹窗和设置页的命中记录共用） ============ */
+/* 原文：保留换行，命中的地方标红 */
+.blockword-text {
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.blockword-mark {
+  padding: 0 1px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 500;
+}
+.blockword-words {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+/* 弹窗里的「谁 / 号和会话 / 时间 / 屏蔽词 / 结果」：左边小标签，右边值 */
+.blockword-alert {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: var(--sp-2) var(--sp-3);
+  margin: 0 0 var(--sp-4);
+}
+.blockword-alert dt {
+  color: var(--text-muted);
+}
+.blockword-alert dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-word;
+}
+/* 「还有 N 条」靠左，按钮靠右 */
+.blockword-alert__more {
+  margin-right: auto;
+  align-self: center;
+}
