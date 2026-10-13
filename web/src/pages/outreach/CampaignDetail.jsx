@@ -304,8 +304,9 @@ export default function CampaignDetail() {
   const confirm = useConfirm();
   const { isAdmin } = useAuth();
   const { accounts } = useAccounts();
-  const settings = useOutreachSettings();
   const [campaign, setCampaign] = useState(null);
+  // 确认文案优先用任务里带的生效参数（campaign.outreach）
+  const settings = useOutreachSettings(campaign);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(null); // start | pause | resume | cancel | delete
   const [refreshKey, setRefreshKey] = useState(0);

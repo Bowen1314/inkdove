@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAccountStore, migrateLegacy } from './accounts.js';
 import { canAccessAccount, createAuth } from './auth.js';
+import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
 import { createMailer } from './email.js';
 import { createMockAi } from './ai/mock.js';
@@ -19,6 +20,7 @@ import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
 import { campaignsRouter } from './routes/campaigns.js';
+import { dashboardRouter } from './routes/dashboard.js';
 import { distillRouter } from './routes/distill.js';
 import { filesRouter, sendStoredFile } from './routes/files.js';
 import { kbRouter } from './routes/kb.js';
@@ -61,6 +63,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   outreachNow?: () => number,
  *   outreachIntervalMs?: () => number,
  *   outreachTickMs?: number,
+ *   dashboardNow?: () => number,
  *   relayBindHost?: string,
  *   canary?: string,
  *   proxyTestUrl?: string,
@@ -107,6 +110,7 @@ export function createApp(config, options = {}) {
     leads: null,
     outreach: null,
     redteam: null,
+    dashboard: null,
   };
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
@@ -139,6 +143,8 @@ export function createApp(config, options = {}) {
   ctx.outreach.run(options.outreachTickMs ?? OUTREACH_TICK_MS);
   // F5：红线体检（进程重启时把还在跑的标成 failed）
   ctx.redteam = createRedteamRunner(ctx);
+  // F12：管理员数据看板（只读已经记下的数据）。dashboardNow 是测试用的时钟
+  ctx.dashboard = createDashboard(ctx, { now: options.dashboardNow });
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
   const ready = ctx.wa.init().catch((err) => log.error(`[relay] 拉起代理中继出错：${err?.stack || err}`));
@@ -209,6 +215,7 @@ export function createApp(config, options = {}) {
   api.use('/sources', auth.requireAdmin, sourcesRouter(ctx));
   api.use('/distill', auth.requireAdmin, distillRouter(ctx));
   api.use('/redteam', auth.requireAdmin, redteamRouter(ctx));
+  api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));

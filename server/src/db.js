@@ -362,6 +362,14 @@ CREATE INDEX IF NOT EXISTS campaign_recipients_campaign ON campaign_recipients(c
 CREATE INDEX IF NOT EXISTS campaign_recipients_account ON campaign_recipients(account_id, status, sent_day);
 CREATE INDEX IF NOT EXISTS campaign_recipients_number ON campaign_recipients(number);
 `);
+
+  // ---- F12 看板（dashboard.js）按时间段聚合用的索引 ----
+  // 入站消息（客户消息数、新客户、热力图）和人工消息（成员表）按 direction + ts 取时间段；外联按 sent_at 取时间段。
+  // decisions、llm_calls、handoffs、gap_hits 的时间索引上面已经建了
+  db.exec(`
+CREATE INDEX IF NOT EXISTS messages_direction_ts ON messages(direction, ts);
+CREATE INDEX IF NOT EXISTS campaign_recipients_sent ON campaign_recipients(sent_at);
+`);
 }
 
 /**

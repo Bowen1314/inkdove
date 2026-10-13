@@ -30,6 +30,7 @@ Dockerfile、docker-compose.yml、.env.example
   - 会话页输入框旁的「翻译」按钮把你写的话直译成这位客户的语言（按客户最近的文字消息判断），译文替换输入框内容、不自动发送；草稿里建议的文件可以一键按顺序发出。
 - **客户线索**：后台每 2 分钟看一遍会话，机器人或人工处理过、客户停下来 10 分钟以上的会话，由 LLM 读最近 50 条消息整理成一条客户线索（名字、公司、国家、邮箱、意向产品、数量、阶段、摘要），客户又说话后自动更新。人工改过的字段不会被重新提取覆盖；可以立即重新提取、按阶段和号筛选搜索、导出成 Excel 能直接打开的 CSV。设置里可以关掉自动提取。
 - **主动外联**：上传一个 .txt 号码文件（已经同意被联系的客户），系统给每个号码发一条开场消息，可以指定一个号发，也可以在几个号之间平均分配。每个号码只发一条，不跟进；对方回复后进入正常的自动回复流程，明确拒绝的不再联系。按每号每天上限、随机间隔、收件人当地时间的发送窗口慢慢发，聊过的、在黑名单里的、没有 WhatsApp 的自动跳过。Meta 号发的是审核通过的模板消息。
+- **数据看板**（管理员）：按今天、7 天、30 天和号查看客户消息、新客户、自动回复率、转人工原因和响应时间、知识库健康度、客户阶段和漏斗、成员、模型成本、挡掉的白嫖、外联效果和时段热力图。日期和热力图按浏览器所在时区算。
 - **多人账号**：管理员邀请业务员（邮件链接），给每人分配能看的号。业务员只看得到、只操作得了分给自己的号和会话；后台人工发的每条消息都记下是谁发的。
 - **IP 代理**：每个号可以单独走 http、https、socks4、socks5 代理。
 - **号码配置导出 / 导入**（管理员）：「号码」页右上角的更多菜单里，可以把所有号的配置（名称、接入方式、人设、自动回复、回复范围和名单、通知、代理、Meta 凭证）导出成一个 JSON 文件，再导入到别的部署或同一个部署里，用来迁移或备份。**文件里有 Meta token、app secret、代理密码等密钥的明文**，请当密码一样保管，用完删掉。导入时会新建号（新 id），扫码号要重新扫码或用配对码连接；Meta 号的回调地址会变，要到 Meta 开发者后台改成新地址；phoneNumberId 和已有号重复的 Meta 号会跳过。会话、消息和成员分配不在文件里。
@@ -345,6 +346,48 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
   - `DELETE /api/campaigns/:id` → `{ok: true}`，只能删 draft、cancelled、done，否则 409 `invalid_status`；
   - Campaign 比规格多一个 `outreach` 字段，内容是生效中的外联设置。agent 读不到设置，开始发送的确认文案可以用它。
 
+## 管理员数据看板（F12）
+
+- **接口**：`GET /api/dashboard?range=today|7d|30d&accountId=&tz=`，只有 admin，agent 返回 403 `forbidden`。一次返回规格「接口」里的全部字段，加上 F15 的 `kb.topFiles`；`handoffReasons[]` 多一个 `decision`（`handoff` 或 `blocked`）。只读已经记下的表，不调模型。代码在 `server/src/dashboard.js`。
+- **参数**：
+  - `range` 不传按 `7d`；不是 `today`、`7d`、`30d` 的（包括重复传）返回 400 `invalid_range`；
+  - `tz` 是 IANA 时区，不传按 `UTC`；传了但 Node 的 Intl 不认识的返回 400 `invalid_tz`。返回的 `range.tz` 是规范写法（`asia/shanghai` → `Asia/Shanghai`）；
+  - `accountId` 不传或为空表示全部号。删掉的号也照样能筛（数据还在），不存在的号不报 404。
+- **时间段**：`today` 是 tz 当天 0 点到现在；`7d`、`30d` 是含今天在内往前 7、30 个自然日（按 tz），从第一天的 0 点到现在。`range.from`、`range.to` 是 UTC 的 ISO 时间。时间晚于现在的记录不算。
+- **按 tz 分组**：SQLite 不认识 IANA 时区，所以 SQL 先按 UTC 的 15 分钟分桶聚合，再用 Intl 把每个桶换算成当地的日期、星期和小时。时区偏移和夏令时切换都是 15 分钟的整数倍，印度这类半小时时区也对。`trend` 每天一行（`YYYY-MM-DD`，没数据的天也有）；`heatmap` 固定 7 行 × 24 列，周一在第 0 行。
+- **导入的历史消息（`via: "import"`）不计入**客户消息数、新客户和热力图：时间是旧的，也不是服务期间收到的。
+- **各字段**（"本时间段"指 range。除了 kb 和 cost，其他都按号筛）：
+  - `kpi.inboundMessages`：本时间段内的客户消息（入站，不含导入的）；
+  - `kpi.newCustomers`：本时间段内有客户消息、并且会话里最早的一条客户消息（导入的也算在内比较）落在本时间段内、不是导入的会话数。导入过历史聊天的老客户再发消息，不算新客户；
+  - `kpi.turns`、`kpi.autoReplyRate`：本时间段内的处理记录。`autoReplyRate = replied ÷ (replied + handoff + blocked)`，分母为 0 时 null。declined 不进 turns、趋势和回复率；
+  - `kpi.handoffs`：本时间段内开始的转人工记录数（`handoffs` 表；已经在待处理时再次转人工不新建），和 `turns.handoff`（处理记录数）口径不同；
+  - `kpi.openNeedsHuman`：实时数，现在 needsHuman 的会话（含已删除号的会话）；
+  - `kpi.medianResponseMinutes`：本时间段内开始、已有首次回复的转人工记录，`firstResponseAt − startedAt` 的中位数，单位分钟，偶数个取中间两个的平均，保留两位小数；没有时 null；
+  - `handoffReasons`：本时间段内 handoff 和 blocked 的处理记录，按 (decision, code) 计数，次数倒序；
+  - `kb`（不按号筛）：
+    - `topGaps`：本时间段内 `gap_hits` 按缺口计数，只列还 open 的，前 10；
+    - `topEntries`：本时间段内 replied 的 usedEntryIds 里各条目出现的次数，前 10；
+    - `unusedEntries`：最近 30 天（从现在往前，不随 range 和号变）任何一条处理记录的 usedEntryIds 都没出现过的 active 条目数；`activeEntries` 是 active 条目数；
+    - `lastRedteam`：最近一次 done 的体检（按 finishedAt），没有时 null；
+    - `topFiles`：本时间段内 decisions.sentFileIds 里各文件出现的次数，前 5；
+    - 已经删掉的条目、文件不列。
+  - `leads`：`stages`（六个阶段都列，没有的是 0）、`funnel`、`countries` 是当前的线索，不按时间段；`products` 是本时间段内 replied 引用到的 type=product 条目，前 10：
+    - `funnel`：每条线索取阶段历史和当前阶段里最靠后的漏斗阶段，到过第 k 阶段或更后的算到达第 k 阶段；
+    - `countries`：会话的联系人号码用 libphonenumber-js（max 元数据）解析国家，国名用 Intl 的中文名。号码为空（@lid 换算不出来）或解析不出国家的归"未知"（`code: null`）。按人数倒序，同数时"未知"排最后，前 10；
+  - `trend`：本时间段内的处理记录按当地日期分四类计数；
+  - `accounts`：现有的号（选了号时只列那个）。`state` 和 `/api/health` 一样取，缓存 30 秒；`inbound`、`autoReplyRate` 按本时间段；`openNeedsHuman` 实时；
+  - `members`：所有成员（含停用的）各一行。`handled` 和 `medianResponseMinutes` 按本时间段内开始、首次回复是后台发送（`admin_ui`）的转人工记录，按首次回复人统计；`manualMessages` 是本时间段内这个人在后台发送成功的人工消息（文字和文件）。已删除的成员期间有记录的也列一行，名字取消息上记的发送人，没有时是"已删除的成员"。另外两行"手机回复"（`kind: "phone"`）和"WhatsApp 转发"（`kind: "relay"`），`userId` 和 `manualMessages` 为 null；
+  - `cost`：本时间段内的模型调用按 (purpose, model) 汇总。选了号时，带号的调用只算这个号的，不带号的（整理知识库、红线体检、测试连接等）照算。费用 = 输入 token × inputPerMillion ÷ 10⁶ + 输出 token × outputPerMillion ÷ 10⁶，model 按设置里的模型名和 `pricing` 精确匹配（区分大小写）。**口径**：
+    - `estimatedCostUsd` 只算配了单价的模型，一次都对不上时为 null；
+    - `byPurpose[].costUsd`：这个用途里只要有一次调用的模型没配单价，就为 null。所以有 null 的行时，各行加起来不等于总费用；
+    - token：一个用途里全是 null 的（比如 mock、语音转写），`inputTokens`、`outputTokens` 为 null；顶层的 token 数只加有值的；
+    - `byPurpose` 按调用次数倒序；
+  - `abuse`：本时间段内 offtopic、blocked 的处理记录按 code 计数；`mutedConversations` 是实时数，现在还在静默中的会话；
+  - `heatmap`：本时间段内的客户消息（不含导入的）按当地的星期和小时计数；
+  - `outreach`：本时间段内发出（status=sent，按 sentAt）的收件人；`replied`、`declined` 是其中已经回复、已经拒绝的（不管回复在什么时候）；两个比率都是 0–1 的小数，发送数为 0 时 null。`byAccount` 按发送数倒序，已删除的号名字是"（已删除）"。
+- **比率**都是 0–1 的小数，分母为 0 时 null。
+- **索引**：新增 `messages(direction, ts)` 和 `campaign_recipients(sent_at)`；decisions、llm_calls、handoffs、gap_hits 的时间索引在记录这些数据时已经建了。每块数据都是一两条 SQL 聚合，不在 JS 里遍历消息。
+
 ## 偏离规格
 
 1. **Meta Graph API 默认版本是 `v26.0`**。规格示例写的是 v23.0，这里按 Meta 的版本变更日志用了核实时最新的版本，号详情里可以改。
@@ -352,7 +395,7 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 3. **https 上游的中继没有自动化测试**。测试用自签名证书时 TLS 校验会失败；socks4、socks5 两条路径有完整测试（假上游 + 假目标服务）。中继的随机凭证明文存在 SQLite 里。
 4. **只用于测试的覆盖项**：
    - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
-   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）、进入 WORKING 后等多久再导入已有聊天（`historyImportDelayMs`）、客户线索的扫描间隔（`leadsScanIntervalMs`，0 表示不启动定时扫描，测试里手动调 `ctx.leads.scan()`）只能通过 `createApp` 的选项覆盖。
+   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）、进入 WORKING 后等多久再导入已有聊天（`historyImportDelayMs`）、客户线索的扫描间隔（`leadsScanIntervalMs`，0 表示不启动定时扫描，测试里手动调 `ctx.leads.scan()`）、看板的时钟（`dashboardNow`）只能通过 `createApp` 的选项覆盖。
 5. **LLM 参数**：
    - openai 格式不发 `max_tokens`，因为 OpenAI 的新模型只认 `max_completion_tokens`，而很多兼容接口只认 `max_tokens`；
    - anthropic 格式的 `max_tokens` 是：回复 2048、审核 512、蒸馏 8192、客户线索提取 1024；
@@ -482,7 +525,22 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 41. **模型单价 `pricing`**（全局设置，只有 admin）：`[{model, inputPerMillion, outputPerMillion}]`，单位是美元每百万 token，PUT 时整体替换。
     - 校验：必须是数组，最多 200 行，每行是对象；model 去掉首尾空白后 1–200 字，不能重复（区分大小写）；两个单价是 0–100000 的数字。多余字段丢掉；
     - 不合法返回 400 `invalid_input`，错误信息以 `pricing` 开头；数据库里存坏了的读出来当空表。
-42. **这次没做的 F12 部分**：看板接口 `/api/dashboard`。`lead_stage_history` 已随 F6 建好（见「客户线索（F6）」）。
+42. **F12 看板接口里规格没定、按自己理解做的**（详见「管理员数据看板（F12）」）：
+    - **参数**：range 不传按 7d；tz 不传按 UTC，传了但不认识的返回 400 `invalid_tz`，不悄悄退回 UTC；
+    - **导入的历史消息**不计入客户消息、新客户和热力图。**新客户**按会话里最早的一条客户消息判断，导入的也拿来比较，所以导入过历史聊天的老客户不算新客户（否则关联号之后，每个老客户发来的第一条消息都会被算成新客户）；
+    - **`handoffReasons` 多一个 `decision` 字段**，按 (decision, code) 分组；
+    - **`kpi.handoffs`** 数的是转人工记录（`handoffs` 表），不是 handoff 处理记录数；
+    - **declined 的处理记录**不进 turns、趋势、回复率，也不进 handoffReasons；
+    - **`unusedEntries`** 的"被引用"按任何一条处理记录的 usedEntryIds 算（不只 replied），30 天从现在往前算，不随 range 和号变；
+    - **`kb.topFiles`** 只数机器人发的文件（decisions.sentFileIds 在本时间段内出现的次数）。后台人工发的文件不在 decisions 里，所以和文件页的"发送次数"（sendCount：含人工发的，不分时间段）对不上；
+    - **`kb.topGaps`** 只列还 open 的缺口，次数按本时间段内的 `gap_hits` 算；
+    - **leads 的 stages、funnel、countries 不按时间段**，是当前线索的快照；products 按时间段。countries 数的是线索的人数，"未知"的 `code` 为 null；
+    - **members** 列出所有成员，包括停用的、没有记录的；phone、relay 两行的 `manualMessages` 为 null；
+    - **cost** 部分模型没配单价时，总费用只算配了的，含没配单价模型的用途 costUsd 为 null；
+    - **`abuse.mutedConversations`** 是实时数（现在还在静默中的），因为库里只记了静默到什么时候，没有每次静默的记录；
+    - **outreach** 的回复率、拒绝率按本时间段内发出的人算，回复、拒绝可能发生在时间段之后；
+    - **`accounts[].state`** 缓存 30 秒，看板刷新时不每次都去问 WAHA；
+    - **只用于测试的覆盖项**：`createApp` 的选项 `dashboardNow`（时钟）。
 43. **F6 客户线索里规格没定、按自己理解做的**：
     - **删除后不会被旧消息再提取出来**：提取水位存在 `conversations.lead_seq` 上，删线索时把水位推到会话当前最新的消息。之后客户又发了新消息、满足三个条件时，会再提取出一条新线索（新 id）；
     - **`lastContactAt`** 是会话里最新一条消息（任何一方，含导入的）的时间，读的时候算，不存；列表按它倒序；

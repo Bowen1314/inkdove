@@ -166,7 +166,6 @@ export default function CampaignNew() {
   const confirm = useConfirm();
   const { isAdmin } = useAuth();
   const { accounts } = useAccounts();
-  const settings = useOutreachSettings();
   const fileRef = useRef(null);
 
   const [step, setStep] = useState(0);
@@ -182,6 +181,8 @@ export default function CampaignNew() {
   const [submitError, setSubmitError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [created, setCreated] = useState(null); // {campaign, preview}
+  // 确认文案优先用建好的任务里带的生效参数（campaign.outreach）
+  const settings = useOutreachSettings(created?.campaign);
   const [starting, setStarting] = useState(false);
 
   // 号列表到了以后设一次默认：勾上已连接的号；只有一个能用的号时直接用「指定一个号」

@@ -134,10 +134,12 @@ export const RECIPIENT_FILTERS = [
 ];
 
 /**
- * 当前生效的外联发送参数（开始发送的确认文案用）。设置只有 admin 读得到；
- * agent 读不到时用默认值，known=false。
+ * 当前生效的外联发送参数（开始发送的确认文案用）。
+ * 后端在 Campaign 里带了生效中的参数（campaign.outreach，agent 也拿得到），有就优先用它；
+ * 没有时 admin 读设置接口，agent 读不到设置时用默认值，known=false。
+ * @param {object} [campaign] 当前的外联任务
  */
-export function useOutreachSettings() {
+export function useOutreachSettings(campaign) {
   const { isAdmin } = useAuth();
   const [state, setState] = useState({ outreach: OUTREACH_DEFAULTS, known: false });
   useEffect(() => {
@@ -151,6 +153,8 @@ export function useOutreachSettings() {
       alive = false;
     };
   }, [isAdmin]);
+  const fromCampaign = campaign?.outreach;
+  if (fromCampaign && typeof fromCampaign === 'object') return { outreach: withOutreachDefaults(fromCampaign), known: true };
   return state;
 }
 
