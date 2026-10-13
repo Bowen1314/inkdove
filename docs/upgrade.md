@@ -62,6 +62,41 @@
 - 接口只是多了字段：消息多一个 `translation`（没译过为 null），会话的 `draft` 译过时多一个 `zh`；原来的字段不变。
 - 回滚到旧版本不影响：旧版本不认 `translation` 这一列和 `draft` 里的 `zh`，照常读写；再升级回来时已经存的译文照样能用。
 
+## 升级到全局代理
+
+- 新增「设置 → 代理」（全局代理），**默认关闭**，不开就和以前完全一样：不起 mihomo，不多发任何请求，出口不变。用法见[全局代理](features.md#全局代理)。
+- **镜像大了约 60MB**（多了 mihomo v1.19.32，GPL-3.0，见[部署说明](deploy.md#全局代理mihomo)），第一次拉新镜像多下载 20MB 左右。
+- 开了全局代理后，mihomo 作为子进程跑在 inkdove 容器里，内存算在 inkdove 的 `mem_limit` 里。新的 docker-compose.yml 把 inkdove 的 `mem_limit` 从 384m 调到了 512m；**在线更新不会改你的 docker-compose.yml**，要开全局代理的，自己把这一行改成 512m 再 `docker compose up -d`。
+- 新增两个可选的环境变量 `INKDOVE_MIHOMO_PATH`、`INKDOVE_GLOBAL_PROXY_PORT`（默认 17890），一般不用设。默认端口和已有的端口冲突时（比如 `INKDOVE_PROXY_RELAY_PORT_BASE` 设到了 17890 附近、号又很多）改一下。
+- 数据库不用手动迁移：设置里多一块 `proxy`，读设置时自动补上默认值；节点和运行信息存在 kv 表的 `proxy_nodes`、`proxy_meta` 里。号的代理设置多一个 `useGlobal`（默认 false），号码配置导出文件里也多这一项；老文件照样能导入。
+- 接口只是多了字段：`GET /api/settings` 多一块 `proxy`，号的 `waha.proxy` 多一个 `useGlobal`。原来的字段不变。
+- 回滚到旧版本：旧版本不认 `proxy` 这块设置，也不起 mihomo，墨鸽的请求恢复直连。**选了「用全局代理」的号回滚后不再经全局代理**：旧版本按这个号自己填的代理去连，没填的就不走代理、直接用服务器的 IP 连 WhatsApp。不想这样的，回滚前先把这些号的代理改成单独填的代理。
+
+## 升级到消息撤回
+
+- 会话里我方的消息可以「撤回」（只有扫码号，发出后约两天半以内），客户撤回的、在手机上撤回的消息也会标出来，撤回过的消息不再给 AI 看。规则见[消息撤回的规则](features.md#消息撤回的规则)。
+- 数据库不用手动迁移：启动时自动给 `messages` 表加 4 列 `revoked_at`、`revoked_by`、`revoked_by_user_id`、`revoked_by_name`，已有的消息都为空（当作没撤回）。升级前撤回过的消息没有记录，照旧显示。
+- **已有的扫码号要补订阅 `message.revoked`**：升级后第一次启动时，服务发现 session 配置的指纹变了（webhook 事件多了一个），就在后台给每个建过 session 的扫码号 `PUT /api/sessions/{name}` 一次新配置，和以前把事件改成 `message.any` 时一样。按 WAHA 文档，运行中的 session 会被自动 stop 再 start（不登出、不用重新扫码），所以**每个已连接的号会断开重连一次**，几秒钟；重连后按老规则再导入一次已有聊天（按 id 去重，不会重复）。推成功后记下新指纹，之后再启动不会再推、不会再重启 session。WAHA 当时连不上的只记一行日志，下次启动或「开始扫码连接」时再推；还没建 session 的号不动，建的时候直接用新配置。升级到补上订阅之间客户撤回的消息收不到通知，不会标出来。
+- 接口只是多了字段：消息多一个 `revoked`（没撤回为 null）和 `revocableUntil`（不能撤回为 null）；多了接口 `POST /api/wa/conversations/:id/messages/:messageId/revoke`。原来的字段不变。
+- 回滚到旧版本不影响数据：旧版本不认这 4 列，照常读写，撤回过的消息在旧版本里显示成普通消息、也会再进 AI 的上下文。回滚后第一次启动时，旧版本同样发现指纹对不上，会把 webhook 事件改回去、再推一次配置（每个已连接的号再重连一次）。
+
+## 升级到操作日志
+
+- 「管理」里多了「操作日志」（只有管理员能看），记下成员在后台做的改动、导出和登录，规则见[操作日志](features.md#操作日志)。升级前做过的操作不会补记。
+- 数据库不用手动迁移：启动时自动建 `audit_logs` 表和索引，不改已有的表。
+- 默认保留 365 天，想改就在 `.env` 里加 `INKDOVE_AUDIT_RETENTION_DAYS`（天数，1–36500）。不加也行。
+- 回滚到旧版本不影响：旧版本不认 `audit_logs` 表，照常运行，只是不再记；再升级回来时之前记的还在。
+
+## 升级到首页 AI 助手
+
+- 概览页上方多了「AI 助手」，**所有登录的人默认都能用**：管理员查得到全部数据，业务员只查得到分给自己的会话、线索和有权限的号（规则见[「AI 助手」](features.md#ai-助手)）。只查不改，不会发消息。没配置回复模型时提问会提示先配置，不调任何接口；登录后的首页还是概览，没有变。
+- **会产生模型费用**：用设置里的回复模型，一个问题一般调 3–4 次模型、最多 9 次，每人每天最多问 50 次（改 `server/src/assistant/store.js` 的 `ASSISTANT_DAILY_QUESTIONS`）。调用记在 `llm_calls`，`purpose` 是 `assistant`，看板「模型成本」里叫「助手」；不计入每会话每天 60 次。需要模型或中转支持工具调用（function calling），不支持时只提示、不会乱答。
+- 数据库不用手动迁移，启动时自动建三张表：
+  - `assistant_chats(id, user_id, title, created_at, updated_at)`：每人的对话，每人最多留 100 个；
+  - `assistant_messages(id, chat_id, question, answer, status, steps, refs, error, error_code, llm_calls, tool_calls, created_at, finished_at)`：每一问。`steps` 是查询进度的 JSON，`refs` 是回答里引用的会话、条目、文件（编号、id 和当时的名字）的 JSON；工具调用的原始结果不存；
+  - `assistant_usage(user_id, day, questions)`：每人每天问了几次。
+- 回滚到旧版本不影响：旧版本不认这三张表，照常运行；再升级回来时对话记录还在。
+
 ## 升级到屏蔽词
 
 - 新增「设置 → 屏蔽词」，**默认关闭、词表为空**，不开就和以前完全一样，发消息不多做任何检查，也不多调任何接口。打开后我方发给客户的文字发出前在本机比对词表，命中就不发并弹窗提醒管理员。规则见[屏蔽词](features.md#屏蔽词)。

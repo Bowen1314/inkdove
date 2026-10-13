@@ -572,7 +572,7 @@ describe('F12 记录的数据和 F11 拒绝（mock）', () => {
       const before = puts();
       await t.ctx.wa.init();
       await waitFor(() => puts() === before + 1, { message: '没有把新配置推给 WAHA' });
-      assert.deepEqual(fake.state.sessions.get(session).config.webhooks[0].events, ['message.any', 'session.status']);
+      assert.deepEqual(fake.state.sessions.get(session).config.webhooks[0].events, ['message.any', 'message.revoked', 'session.status']);
       await waitFor(() => t.ctx.accounts.get(acc.id).wahaConfigHash !== 'old-hash');
       await t.ctx.wa.init();
       await sleep(100);

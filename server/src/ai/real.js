@@ -1,5 +1,6 @@
 import { embedTexts, EmbedError } from './embed.js';
 import { chat, extractJson, LlmError, transcribe } from './llm.js';
+import { chatWithTools, probeToolSupport } from './tool-call.js';
 import { resolveEmbeddingConfig } from '../settings.js';
 import { formatEntryForContext } from '../kb/search.js';
 import { reportLlmCall } from '../records.js';
@@ -33,16 +34,19 @@ const SEARCH_TIMEOUT = 20_000;
 /** 向量：后台算条目的一批（几十段）最多等 60 秒；检索时的查询向量挡在生成回复前面，最多等 8 秒 */
 const EMBED_DOC_TIMEOUT = 60_000;
 const EMBED_QUERY_TIMEOUT = 8_000;
+/** 助手的一步（一次带工具的模型调用）最多等多久；整个问题的总时长由 assistant/agent.js 控制，每步取两者里小的 */
+const ASSISTANT_STEP_TIMEOUT = 60_000;
 
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' || typeof x === 'number').map(String) : []);
 const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、blocklist、media、file_describe、distill、test。F12 的 llm_calls
+ * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、blocklist、media、file_describe、distill、assistant、test。F12 的 llm_calls
  * 由 records.js 的 withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
- * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number}} [opts]
+ * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number,
+ *   assistantTimeoutMs?: number}} [opts]
  */
 export function createRealAi(getSettings, opts = {}) {
   const replyTimeout = opts.replyTimeoutMs ?? REPLY_TIMEOUT;
@@ -62,6 +66,7 @@ export function createRealAi(getSettings, opts = {}) {
     distill: distillTimeout,
     file_describe: distillTimeout,
     media: mediaTimeout,
+    assistant: opts.assistantTimeoutMs ?? ASSISTANT_STEP_TIMEOUT,
   };
   const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, blocklist: 4096, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
@@ -351,6 +356,47 @@ export function createRealAi(getSettings, opts = {}) {
         return text.trim();
       }
       throw new LlmError('anthropic 格式不支持语音');
+    },
+
+    /**
+     * 助手（assistant/agent.js）的一步：带工具调用一次回复模型（三种格式见 ai/tool-call.js）。
+     * messages 是中立格式的多轮消息（含上一步的工具调用和结果）；toolChoice 为 none 时要模型直接回答。
+     * 返回 {text, toolCalls:[{id, name, args, argsError?}], raw}（raw 留着下一步原样回放）。模型或中转不支持工具调用时抛
+     * ToolsUnsupportedError
+     */
+    async assistantStep({ system, messages, tools, toolChoice = 'auto', signal, timeoutMs }) {
+      const s = getSettings().llm;
+      reportLlmCall({ format: s.format, model: s.model });
+      const r = await chatWithTools({
+        format: s.format,
+        baseUrl: s.baseUrl,
+        apiKey: s.apiKey,
+        model: s.model,
+        system,
+        messages,
+        tools,
+        toolChoice,
+        signal,
+        timeoutMs: Math.min(timeoutMs ?? timeouts.assistant, timeouts.assistant),
+      });
+      reportLlmCall(r.usage);
+      return { text: r.text, toolCalls: r.toolCalls, raw: r.raw };
+    },
+
+    /** 助手：检查当前模型配置支不支持工具调用（一次很小的调用，见 ai/tool-call.js 的 probeToolSupport）→ {supported, detail?} */
+    async assistantProbe({ signal } = {}) {
+      const s = getSettings().llm;
+      reportLlmCall({ format: s.format, model: s.model });
+      const r = await probeToolSupport({
+        format: s.format,
+        baseUrl: s.baseUrl,
+        apiKey: s.apiKey,
+        model: s.model,
+        signal,
+        timeoutMs: timeouts.assistant,
+      });
+      if (r.usage) reportLlmCall(r.usage);
+      return { supported: r.supported, detail: r.detail || '' };
     },
 
     /** F15：给产品资料库的文件生成描述。文档用蒸馏模型读文字；图片用识图模型看附件 */

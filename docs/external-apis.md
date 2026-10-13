@@ -1,6 +1,6 @@
 # 已核实的外部接口
 
-代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口和翻译接口，这里记下依据的文档和实测结果。
+代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
@@ -33,6 +33,10 @@
     - 新关联的设备，WhatsApp 每个聊天只同步最后 1 条消息（实测 26 个聊天，每个 1 条，最早的是 2022 年的，不少是本人发的）。这些历史消息不会触发 webhook 的 `message` 事件；
   - 收媒体：入站消息带 `hasMedia` 和 `media: {url, mimetype, filename, error}`。url 指向 WAHA 的 `/api/files/...`，主机名按 `WAHA_BASE_URL` 拼，下载要带 `X-Api-Key`。`WAHA_EVENTS_DOWNLOAD_MEDIA` 默认是 true，文件默认保留 180 秒（`WHATSAPP_FILES_LIFETIME`）。见 [receive-messages](https://waha.devlike.pro/docs/how-to/receive-messages/) 和 [config](https://waha.devlike.pro/docs/how-to/config/)。
   - 查号（F11，**按文档写的，还没在真机上核实**）：`GET /api/contacts/check-exists?phone=<纯数字国际号码>&session=<session>`，返回 `{numberExists: boolean, chatId}`，有的话 `chatId` 是发消息要用的 chat id（文档说可能是 `@lid`，`@s.whatsapp.net` 的这里统一成 `@c.us`）。见 [contacts](https://waha.devlike.pro/docs/how-to/contacts/)。文档的引擎支持表里 WEBJS、WPP、NOWEB、GOWS 都支持这个接口。要真机确认的：GOWS 下的返回结构、没有 WhatsApp 的号码返回 `numberExists: false` 而不是报错、返回的 chatId 能直接用 sendText 发；返回体里没有布尔的 `numberExists` 时代码当成出错（计入连续失败）。
+  - 消息撤回（对所有人删除），按镜像 `devlikeapro/waha:gows` 2026.9.2 里 `dist` 的代码核对（只读查看，没在真机上调过）：
+    - `DELETE /api/{session}/chats/{chatId}/messages/{messageId}`，GOWS 的 `deleteMessage` 发 `RevokeMessageRequest`。`messageId` 要完整的序列化 id `<true|false>_<chat>_<ID>`，群里再接 `_<participant>`（`parseMessageIdSerialized` 要求 3 或 4 段），撤回用的是其中的 ID 和 participant。会话不是 `WORKING` 时回 422（`WorkingSessionPipe`）。返回体这里不用；
+    - 事件 `message.revoked`，要在 webhook 的 events 里订阅才推。payload 是 `{after, before: null, revokedMessageId, _data}`：`after` 是撤回那条协议消息经 `toWAMessage` 转出来的（`from` 是 `Info.Chat`，`fromMe` 是不是自己撤回的，`source` 是 `api` / `app`，`timestamp` 是秒）；`revokedMessageId` 是被撤回消息的 ID，不带 `<true|false>_<chat>_` 前缀；`_data` 是原始消息。别人撤回的、自己撤回的都推，经 WAHA API 撤回的也推（`source` 是 `api`），可能比 DELETE 的响应先到。协议消息本身不会再作为 `message.any` 推；
+    - 撤回时限：WhatsApp 没写明确数字，2022 年放宽时说的是「两天多」，普遍报道是 2 天 12 小时（[WABetaInfo](https://wabetainfo.com/whatsapp-is-rolling-out-the-delete-for-everyone-feature-for-all-users/)、[XDA](https://www.xda-developers.com/whatsapp-chat-delete-two-days/)）。这里按 60 小时算，留 1 小时余量，只允许发出 59 小时内撤回。
 - **Meta**：
   - webhook 校验和签名，见 [getting started](https://developers.facebook.com/docs/graph-api/webhooks/getting-started)；
   - 消息结构和 `context`，见 [payload examples](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples)、[text messages webhook](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/text)；
@@ -43,7 +47,8 @@
   - 上传媒体：`POST /{ver}/{phone-number-id}/media`，multipart 带 `messaging_product=whatsapp`、`type`、`file`，返回 `{id}`，上传的媒体 30 天有效。下载媒体：`GET /{ver}/{media-id}` 返回 `{url, mime_type, file_size}`，再带同一个 Bearer token GET 这个 url，url 5 分钟有效。大小限制：jpeg 和 png 图片 5MB；txt、xls、xlsx、doc、docx、ppt、pptx、pdf 这些文档 100MB；webp 只能当贴纸。见 [media](https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media)；
   - 发文档 `{type: "document", document: {id, filename}}`、发图片 `{type: "image", image: {id}}`，见 [document messages](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/document-messages)、[image messages](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/image-messages)；
   - 入站图片和语音的 webhook 结构，见 [image](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/image)、[audio](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/audio)；视频（`video`）、文件（`document`，多一个 `filename`）、贴纸（`sticker`）也是 `{id, mime_type, …}`，下载方式同上；
-  - 模板消息（F11，按文档写的，还没真机发过）：`POST /{ver}/{phone-number-id}/messages`，体 `{messaging_product: "whatsapp", recipient_type: "individual", to, type: "template", template: {name, language: {code}}}`，返回 `messages[0].id`。主动发起会话（24 小时窗口外）只能用审核通过的模板。见 [send message templates](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates)。
+  - 模板消息（F11，按文档写的，还没真机发过）：`POST /{ver}/{phone-number-id}/messages`，体 `{messaging_product: "whatsapp", recipient_type: "individual", to, type: "template", template: {name, language: {code}}}`，返回 `messages[0].id`。主动发起会话（24 小时窗口外）只能用审核通过的模板。见 [send message templates](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates)；
+  - 撤回已发的消息：Cloud API 的消息接口只有发送和标已读，没有撤回或删除（见 [messages](https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages)；第三方的 [DelightChat](https://www.delightchat.io/help-center/whatsapp-api-delete-message) 也这么说，没在 Meta 的更新日志里逐条核对），所以 Meta 号不能撤回。客户撤回消息时 Meta 会不会推 webhook、推什么没核实，这里不处理。
 - **Resend**：
   - `POST https://api.resend.com/emails`，`Authorization: Bearer <key>`，体 `{from, to[], subject, text, html?}`，返回 `{id}`，见 [send email](https://resend.com/docs/api-reference/emails/send-email)；
   - 错误（422 参数错误、403 域名未验证）和限流（429，带 `retry-after`，这里重试 1 次），见 [errors](https://resend.com/docs/api-reference/errors)、[rate limit](https://resend.com/docs/api-reference/rate-limit)。
@@ -77,3 +82,10 @@
   - **LibreTranslate**（开源，可自己部署）：`POST {地址}/translate`，JSON `{q, source: "auto", target, format: "text", api_key?}`，返回 `{translatedText, detectedLanguage: {language}}`；`POST {地址}/detect` 返回 `[{language, confidence}]`。出错返回 `{"error": "..."}`：400 语言不支持或缺 API Key、403 API Key 不对或被封、429 太频繁。简体中文 `zh-Hans`、挪威语 `nb`。能译哪些语言看部署时装了哪些模型。按项目源码 [app.py](https://github.com/LibreTranslate/LibreTranslate/blob/main/libretranslate/app.py) 核对；
   - 签名的单元测试（`server/test/translate-providers.test.js`）用的是官方文档里的示例：腾讯云「签名方法 v3」的示例（规范请求的哈希、待签名字符串、从文档给的 SecretDate 往下派生的 SecretSigning 和最后的签名；示例的 SecretKey 打了码，SecretKey → SecretDate 这一步核对不了）；火山引擎「签名方法」里 GET 和 POST 两个示例的规范请求哈希和签名；百度「通用文本翻译」和「语种识别」接入文档里的两个 MD5 示例；
   - 本地判断语言用 [tinyld](https://github.com/komodojp/tinyld)（MIT，没有依赖，返回 ISO 639-1 两位代码，短句也能判断）：只在对方没给出客户语言时、和判断业务员写的是不是已经是客户的语言时用，把握低于 0.5 的当判断不出。它不认马来语，「ok」「thanks」这类太短的话判断不出。
+- **全局代理（mihomo v1.19.32 和机场订阅）**（代码在 `server/src/proxy/`）：
+  - 订阅：GET 订阅地址，`User-Agent: clash.meta`（机场按 UA 决定返回 Clash 配置还是 base64 的节点链接列表），直连，30 秒超时、最大 5MB、最多 5 次重定向。只取 YAML 里的 `proxies`。节点字段照 [mihomo 的文档](https://wiki.metacubex.one/config/proxies/) 原样交给 mihomo，墨鸽只检查 name、type、server、port；
+  - 配置：墨鸽生成 JSON 格式的配置（JSON 是合法的 YAML）：`mixed-port`、`allow-lan` / `bind-address`、`authentication` 加 `skip-auth-prefixes`（本机免密）、`external-controller` 和 `secret`、两个分组（`url-test` 的 `inkdove-auto` 和 `select` 的 `inkdove`）、一条规则 `MATCH,inkdove`。字段见 [general](https://wiki.metacubex.one/config/general/)、[proxy-groups](https://wiki.metacubex.one/config/proxy-groups/)；
+  - `mihomo -t -d <目录> -f <文件>` 只检查配置。实测（官方 v1.19.32 darwin-arm64，只听 127.0.0.1）：有一个节点不合法（比如 REALITY 的公钥不对）时整份配置失败，报 `proxy <序号>: <原因>` 后退出码 1；墨鸽据此去掉那个节点再查，直到通过；
+  - 控制接口（`Authorization: Bearer <secret>`）：`GET /version` 用来判断起好了；`GET /proxies/{分组}` 的 `now` 是分组现在用的节点；`GET /group/{分组}/delay?url=&timeout=` 测分组里所有节点的延迟，返回 `{节点名: 毫秒}`，超时的节点不在里面，全部超时返回 504。见 [RESTful API](https://wiki.metacubex.one/api/)。实测：经本机的假 http 节点时这个测速接口报 503 / 504（测的是 `https://www.gstatic.com/generate_204`，假节点连不出去），所以「有节点测得出延迟」这条路只用测试里的假 mihomo 验证过，没用真机场节点试过；
+  - 实测（同上）：生成的配置能起来，墨鸽的请求经混合端口 → mihomo → 本机的假 http 节点 → 目标，CONNECT 里是域名；控制接口的 `now` 对；`kill -9` 之后按退避自动拉起。
+

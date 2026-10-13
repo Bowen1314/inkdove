@@ -397,6 +397,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
         },
       },
       blockwords: { enabled: false, words: [] },
+      proxy: { enabled: false, source: 'subscription', node: '', bypass: [], subscriptionUrlSet: false },
       webhookBase: 'https://kb.example.com',
     });
   });
@@ -444,8 +445,8 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
     const nope = await t.req('GET', '/api/nope');
     assert.equal(nope.status, 404);
     assert.equal(nope.body.code, 'not_found');
-    // 第一期的接口已删除
-    for (const p of ['/api/wa/status', '/api/settings/notify/test', '/api/settings/proxy/test', '/api/wa/waha/start']) {
+    // 第一期的接口已删除（/api/settings/proxy/test 现在是全局代理的测试，见 global-proxy.test.js）
+    for (const p of ['/api/wa/status', '/api/settings/notify/test', '/api/wa/waha/start']) {
       const m = p.endsWith('status') ? 'GET' : 'POST';
       assert.equal((await t.req(m, p)).status, 404, p);
     }

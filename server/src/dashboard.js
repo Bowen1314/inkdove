@@ -187,8 +187,66 @@ const jsonArr = (col) => `json_each(CASE WHEN json_valid(${col}) THEN ${col} ELS
 // 按号筛选：@acc 为 NULL 时不筛
 const accEq = (col) => `(@acc IS NULL OR ${col} = @acc)`;
 const bucketOf = (col) => `CAST(strftime('%s', ${col}) AS INTEGER) / ${BUCKET_SECONDS}`;
-// 入站消息：客户发的，不含导入的历史消息
-const INBOUND = (m) => `${m}.direction = 'in' AND ${m}.author = 'customer' AND COALESCE(${m}.via, '') <> 'import'`;
+// 入站消息：客户发的，不含导入的历史消息（助手的概况工具 assistant/tools.js 用同一个口径）
+export const INBOUND = (m) => `${m}.direction = 'in' AND ${m}.author = 'customer' AND COALESCE(${m}.via, '') <> 'import'`;
+
+/**
+ * 模型调用的次数、token 和按设置里的单价估算的费用（看板的 cost，助手的用量工具也用它，口径一致）。
+ * 不按号筛选时 acc 为 null；按号筛时和会话有关的调用按号筛，不属于任何号的调用照算。没配单价的模型费用记 null。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{model:string, inputPerMillion:number, outputPerMillion:number}[]} pricingList 设置里的 pricing
+ * @param {{from:string, to:string, acc:string|null}} p
+ */
+export function llmCostSummary(db, pricingList, { from, to, acc }) {
+  const pricing = new Map((pricingList || []).map((p) => [p.model, p]));
+  const purposes = new Map();
+  const cost = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: null, byPurpose: [] };
+  for (const row of db
+    .prepare(
+      `SELECT purpose, model, COUNT(*) AS calls, SUM(input_tokens) AS inTok, SUM(output_tokens) AS outTok FROM llm_calls
+        WHERE ts >= @from AND ts <= @to AND (@acc IS NULL OR account_id IS NULL OR account_id = @acc)
+        GROUP BY purpose, model`,
+    )
+    .all({ from, to, acc })) {
+    if (!purposes.has(row.purpose)) {
+      purposes.set(row.purpose, {
+        purpose: row.purpose,
+        label: purposeLabel(row.purpose),
+        calls: 0,
+        inputTokens: null,
+        outputTokens: null,
+        costUsd: 0,
+        priced: true,
+      });
+    }
+    const p = purposes.get(row.purpose);
+    p.calls += row.calls;
+    cost.calls += row.calls;
+    if (row.inTok != null) {
+      p.inputTokens = (p.inputTokens || 0) + row.inTok;
+      cost.inputTokens += row.inTok;
+    }
+    if (row.outTok != null) {
+      p.outputTokens = (p.outputTokens || 0) + row.outTok;
+      cost.outputTokens += row.outTok;
+    }
+    const price = row.model == null ? null : pricing.get(String(row.model).trim());
+    if (!price) {
+      p.priced = false;
+      continue;
+    }
+    const usd = ((row.inTok || 0) * price.inputPerMillion + (row.outTok || 0) * price.outputPerMillion) / 1e6;
+    p.costUsd += usd;
+    cost.estimatedCostUsd = (cost.estimatedCostUsd || 0) + usd;
+  }
+  if (cost.estimatedCostUsd != null) cost.estimatedCostUsd = roundUsd(cost.estimatedCostUsd);
+  const purposeOrder = Object.keys(LLM_PURPOSES);
+  const orderOf = (p) => (purposeOrder.includes(p) ? purposeOrder.indexOf(p) : purposeOrder.length);
+  cost.byPurpose = [...purposes.values()]
+    .sort((a, b) => b.calls - a.calls || orderOf(a.purpose) - orderOf(b.purpose))
+    .map(({ priced, costUsd, ...p }) => ({ ...p, costUsd: priced ? roundUsd(costUsd) : null }));
+  return cost;
+}
 
 // ---------------- 看板 ----------------
 
@@ -472,51 +530,7 @@ export function createDashboard(ctx, opts = {}) {
     ];
 
     // ---- 成本（不按号筛选；和会话有关的调用按号筛，不属于任何号的调用照算） ----
-    const pricing = new Map((ctx.getSettings().pricing || []).map((p) => [p.model, p]));
-    const purposes = new Map();
-    const cost = { calls: 0, inputTokens: 0, outputTokens: 0, estimatedCostUsd: null, byPurpose: [] };
-    for (const row of all(
-      `SELECT purpose, model, COUNT(*) AS calls, SUM(input_tokens) AS inTok, SUM(output_tokens) AS outTok FROM llm_calls
-        WHERE ts >= @from AND ts <= @to AND (@acc IS NULL OR account_id IS NULL OR account_id = @acc)
-        GROUP BY purpose, model`,
-    )) {
-      if (!purposes.has(row.purpose)) {
-        purposes.set(row.purpose, {
-          purpose: row.purpose,
-          label: purposeLabel(row.purpose),
-          calls: 0,
-          inputTokens: null,
-          outputTokens: null,
-          costUsd: 0,
-          priced: true,
-        });
-      }
-      const p = purposes.get(row.purpose);
-      p.calls += row.calls;
-      cost.calls += row.calls;
-      if (row.inTok != null) {
-        p.inputTokens = (p.inputTokens || 0) + row.inTok;
-        cost.inputTokens += row.inTok;
-      }
-      if (row.outTok != null) {
-        p.outputTokens = (p.outputTokens || 0) + row.outTok;
-        cost.outputTokens += row.outTok;
-      }
-      const price = row.model == null ? null : pricing.get(String(row.model).trim());
-      if (!price) {
-        p.priced = false;
-        continue;
-      }
-      const usd = ((row.inTok || 0) * price.inputPerMillion + (row.outTok || 0) * price.outputPerMillion) / 1e6;
-      p.costUsd += usd;
-      cost.estimatedCostUsd = (cost.estimatedCostUsd || 0) + usd;
-    }
-    if (cost.estimatedCostUsd != null) cost.estimatedCostUsd = roundUsd(cost.estimatedCostUsd);
-    const purposeOrder = Object.keys(LLM_PURPOSES);
-    const orderOf = (p) => (purposeOrder.includes(p) ? purposeOrder.indexOf(p) : purposeOrder.length);
-    cost.byPurpose = [...purposes.values()]
-      .sort((a, b) => b.calls - a.calls || orderOf(a.purpose) - orderOf(b.purpose))
-      .map(({ priced, costUsd, ...p }) => ({ ...p, costUsd: priced ? roundUsd(costUsd) : null }));
+    const cost = llmCostSummary(db, ctx.getSettings().pricing, P);
 
     // ---- 挡掉的白嫖 ----
     const abuse = {

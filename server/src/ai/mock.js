@@ -277,8 +277,85 @@ export function createMockAi(opts = {}) {
       const head = clip(String(text).replace(/\s+/g, ' ').trim(), 80);
       return `${name}（${filename}）${head ? `：${head}` : image ? '：产品图片' : ''}`;
     },
+
+    /** 助手 mock：按问题里的关键词挑工具（见 mockAssistantStep），拿到结果后拼一段带引用的回答 */
+    async assistantStep({ messages = [], tools = [], toolChoice = 'auto', signal }) {
+      await wait(signal);
+      return mockAssistantStep({ messages, tools, toolChoice });
+    },
+
+    /** 助手 mock：总是支持工具调用 */
+    async assistantProbe() {
+      return { supported: true, detail: '' };
+    },
   };
   return ai;
+}
+
+/**
+ * 助手 mock 挑工具的规则（只挑这次给了的工具）：按顺序看问题里的关键词，命中第一条就用这条的工具：
+ * 费用、花了、成本 → get_usage_cost；成员、同事 → list_members；哪些号、号码状态、在线 → list_accounts；
+ * 线索、询盘 → search_leads；待处理 → search_conversations(status=pending)；会话、聊天、客户说 → search_conversations；
+ * 交期、起订量、货源、产品、价格、报价、规格、资料、样品 → search_knowledge 加 search_files；
+ * 新客户、多少、今天、昨天、数据、概况 → get_overview；其余也查知识库和文件。
+ * @param {string} q
+ * @param {Set<string>} names
+ */
+function pickMockTools(q, names) {
+  const rules = [
+    [/费用|花了|成本|token/i, () => [{ name: 'get_usage_cost', args: {} }]],
+    [/成员|同事/, () => [{ name: 'list_members', args: {} }]],
+    [/哪些号|号码状态|在线/, () => [{ name: 'list_accounts', args: {} }]],
+    [/线索|询盘/, () => [{ name: 'search_leads', args: {} }]],
+    [/待处理/, () => [{ name: 'search_conversations', args: { status: 'pending' } }]],
+    [/会话|聊天|客户说/, () => [{ name: 'search_conversations', args: { status: 'all' } }]],
+    [/交期|起订量|货源|产品|价格|报价|规格|资料|样品/, () => sources],
+    [/新客户|多少|今天|昨天|数据|概况/, () => [{ name: 'get_overview', args: {} }]],
+  ];
+  const sources = [
+    { name: 'search_knowledge', args: { query: q } },
+    { name: 'search_files', args: { query: q } },
+  ];
+  const hit = rules.find(([re]) => re.test(q));
+  const calls = hit ? hit[1]() : sources;
+  return calls.filter((c) => names.has(c.name));
+}
+
+/**
+ * 助手 mock 的一步：最后一个用户问题之后还没有工具结果、而且允许调用工具时，按 pickMockTools 调工具；
+ * 否则直接回答：「mock 回答：」、用到的工具、结果里 totals 的数字，再把结果里出现的 ref 都标成 [[ref]]。
+ * @param {{messages:any[], tools:{name:string}[], toolChoice?:string}} p
+ */
+export function mockAssistantStep({ messages = [], tools = [], toolChoice = 'auto' }) {
+  let qi = messages.length - 1;
+  while (qi >= 0 && messages[qi].role !== 'user') qi--;
+  const question = qi >= 0 ? String(messages[qi].text || '') : '';
+  const results = messages
+    .slice(qi + 1)
+    .filter((m) => m.role === 'tool')
+    .flatMap((m) => m.results || []);
+  if (!results.length && toolChoice !== 'none') {
+    const calls = pickMockTools(question, new Set(tools.map((t) => t.name)));
+    if (calls.length) {
+      return { text: '', toolCalls: calls.map((c, i) => ({ id: `mock_call_${i}`, name: c.name, args: c.args, idFromModel: true })), raw: null };
+    }
+  }
+  const lines = [`mock 回答：${results.length ? `查了 ${[...new Set(results.map((r) => r.name))].join('、')}` : '没有查数据'}`];
+  const refs = new Set();
+  for (const r of results) {
+    const content = String(r.content || '');
+    for (const m of content.matchAll(/"ref":"([cef]\d+)"/g)) refs.add(m[1]);
+    try {
+      const totals = JSON.parse(content)?.totals;
+      if (totals && typeof totals === 'object') {
+        for (const [k, v] of Object.entries(totals)) if (typeof v === 'number') lines.push(`- ${k}：${v}`);
+      }
+    } catch {
+      /* 截断了的结果不是合法 JSON，只取 ref */
+    }
+  }
+  if (refs.size) lines.push(`相关：${[...refs].map((k) => `[[${k}]]`).join(' ')}`);
+  return { text: lines.join('\n'), toolCalls: [], raw: null };
 }
 
 /** 演示模式的向量维度 */

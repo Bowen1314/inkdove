@@ -81,6 +81,14 @@ const HISTORY_SKIP_REASON = '导入的历史消息，机器人不处理';
 /** 客户媒体存盘：一个文件最多下这么久（64MB 的视频在慢线路上也够） */
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const MEDIA_TOO_LARGE_TEXT = '文件太大，没有保存';
+/**
+ * 消息撤回（对所有人删除）的时限。WhatsApp 官方只说「两天多一点」，广泛报道的是 2 天 12 小时（60 小时，2022-08 起）；
+ * 这里少算 1 小时：我方发的消息 ts 记的是发送接口返回之后的时间，比 WhatsApp 那边略晚，服务器时钟也可能有偏差
+ */
+export const WHATSAPP_REVOKE_LIMIT_MS = 60 * 3600 * 1000;
+export const REVOKE_WINDOW_MS = WHATSAPP_REVOKE_LIMIT_MS - 3600 * 1000;
+/** 客户撤回了还没处理的消息时记的处理原因 */
+export const REVOKED_SKIP_REASON = '客户撤回了这条消息';
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -176,6 +184,17 @@ function wahaRawKind(p) {
   if (d.type === 'sticker') return 'sticker';
   if (d.type === 'document') return 'document';
   return null;
+}
+
+/**
+ * 消息撤回用的消息 ID（WhatsApp 协议里的 key.ID）：WAHA 的序列化 id 是 `<true|false>_<chat>_<ID>`，群里再接 `_<participant>`，
+ * 取第 3 段；不带 `_` 的本来就是 ID。只给撤回用：shortMessageId 取最后一段，碰到带 participant 的群消息会取成发送人
+ */
+export function messageKeyId(id) {
+  const s = String(id || '');
+  const parts = s.split('_');
+  if ((parts.length === 3 || parts.length === 4) && (parts[0] === 'true' || parts[0] === 'false')) return parts[2];
+  return parts[parts.length - 1];
 }
 
 /** WAHA message payload → 统一的入站结构 */
@@ -384,6 +403,14 @@ export function createWaService(ctx, opts = {}) {
   const recentSent = new Map();
   /** @type {Map<string, number>} 会话 id → 正在识别的语音/图片条数（F4）；识别完之前不处理这个会话 */
   const converting = new Map();
+  /**
+   * @type {Map<string, {user:{id:string, name:string}|null, at:number}>} `<号 id>|<消息 ID>` → 业务员在墨鸽里点的撤回（保留 10 分钟）。
+   * 经 WAHA 撤回后 WhatsApp 会推回一条 message.revoked（fromMe、source=api），可能比接口响应先到，也可能接口超时了撤回其实成了：
+   * 收到时按这里记的人标上，不当成手机上撤回的
+   */
+  const revokeAttempts = new Map();
+  /** @type {Set<string>} 正在撤回的消息（墨鸽的消息 id），同一条不同时撤两次 */
+  const revoking = new Set();
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
   /** 客户媒体单个文件的上限（测试里可以调小） */
   const mediaMaxBytes = opts.mediaStoreMaxBytes ?? MEDIA_STORE_MAX_BYTES;
@@ -587,7 +614,21 @@ export function createWaService(ctx, opts = {}) {
     };
   }
 
-  function rowToMessage(r) {
+  /**
+   * 我方这条消息最晚能撤回到什么时候（ISO），不能撤回时为 null：扫码号发送成功、有 WhatsApp 消息 id、还没撤回、
+   * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号没有撤回接口
+   */
+  function revocableUntil(r, acc) {
+    if (r.direction !== 'out' || r.status !== 'sent' || !r.external_id || r.revoked_at || acc?.channel !== 'waha') return null;
+    const until = Date.parse(r.ts) + REVOKE_WINDOW_MS;
+    return Number.isFinite(until) && until > Date.now() ? new Date(until).toISOString() : null;
+  }
+
+  /**
+   * @param {any} r 消息行
+   * @param {any} [acc] 会话所属的号（算 revocableUntil 用；不给时按不能撤回）
+   */
+  function rowToMessage(r, acc = null) {
     const decision = r.direction === 'in' ? r.bot_decision ?? null : null;
     return {
       id: r.id,
@@ -609,6 +650,11 @@ export function createWaService(ctx, opts = {}) {
       error: r.error ?? null,
       // 会话里点「翻译」译成的中文 {text, via, createdAt, truncated?}，没译过的为 null
       translation: storedTranslation(r.translation),
+      // 撤回：{at, by: member|customer|phone, userId, name}（member 时是点撤回的成员和当时的名字），没撤回过的为 null。原文照样在 text 里
+      revoked: r.revoked_at
+        ? { at: r.revoked_at, by: r.revoked_by || 'phone', userId: r.revoked_by_user_id ?? null, name: r.revoked_by_name ?? null }
+        : null,
+      revocableUntil: revocableUntil(r, acc),
     };
   }
 
@@ -692,7 +738,7 @@ export function createWaService(ctx, opts = {}) {
     );
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(ts, conv.id);
     if (status === 'sent') clearSuggestion(conv.id);
-    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id));
+    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id), acc);
   }
 
   /**
@@ -738,7 +784,7 @@ export function createWaService(ctx, opts = {}) {
     );
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(ts, conv.id);
     if (status === 'sent') clearSuggestion(conv.id);
-    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id));
+    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id), acc);
   }
 
   function sendNotice(acc, convId, reason, detail) {
@@ -1267,6 +1313,8 @@ export function createWaService(ctx, opts = {}) {
       const secs = m.media.seconds || oggDurationSeconds(buffer);
       if (secs && secs > limits.maxSeconds) return fail('media_unsupported', `语音 ${Math.round(secs)} 秒，超过 3 分钟`);
     }
+    // 下载期间客户撤回了这条：不再拿去识别（撤回过的消息不进模型），handleRevoked 已经记为跳过
+    if (db.prepare('SELECT revoked_at FROM messages WHERE id = ?').get(msgId)?.revoked_at) return;
     // 识别调用计入每会话每日 LLM 上限
     const now = getConvRow(convId);
     if (!now) return;
@@ -1331,7 +1379,7 @@ export function createWaService(ctx, opts = {}) {
     if (!conv) return;
     const pending = db
       .prepare(
-        "SELECT seq, text, external_id FROM messages WHERE conversation_id = ? AND direction = 'in' AND kind = 'text' AND handled = 0 ORDER BY seq",
+        "SELECT seq, text, external_id FROM messages WHERE conversation_id = ? AND direction = 'in' AND kind = 'text' AND handled = 0 AND revoked_at IS NULL ORDER BY seq",
       )
       .all(convId);
     if (!pending.length) return;
@@ -1415,6 +1463,15 @@ export function createWaService(ctx, opts = {}) {
     const accNow = accounts.get(acc.id);
     if (!accNow) return void settle('skipped', '这个号已删除');
     if (conv.bot_paused || closed) return void settle('skipped', '生成回复期间人工接管了这个会话');
+    // 生成期间客户撤回了这一轮里的消息：这份回复是照着撤回的话写的，不发；撤回的那条已经记为 skipped，剩下的重新走一轮
+    const revokedNow = db
+      .prepare(`SELECT 1 FROM messages WHERE conversation_id = ? AND revoked_at IS NOT NULL AND seq IN (${pending.map(() => '?').join(', ')}) LIMIT 1`)
+      .get(convId, ...pending.map((p) => p.seq));
+    if (revokedNow) {
+      log.info(`[wa] 会话 ${convId} 生成回复期间客户撤回了消息，这次的回复不发，重新处理`);
+      scheduleFlush(convId);
+      return;
+    }
     // 屏蔽词：自动回复里有就不发，按「回复被拦截」转人工（和规则拦截一样暂停、起草、通知），管理员另外会收到提醒
     if (result.decision === 'replied') {
       const hit = ctx.blockwords.check(result.reply, { source: 'bot', accountId: acc.id, conversationId: convId });
@@ -1494,13 +1551,13 @@ export function createWaService(ctx, opts = {}) {
   };
 
   /**
-   * seq 之前的最近 12 条消息（自动回复、草稿、推荐回复共用的上下文）。
+   * seq 之前的最近 12 条消息（自动回复、草稿、推荐回复共用的上下文）。撤回过的消息（客户撤回的、我方撤回的）不算。
    * sentOnly 只有推荐回复传：我方发送失败的消息（客户没收到）不算，不当成我方说过的话；自动回复和转人工草稿照旧都带上。
    */
   function historyBefore(convId, seq, { sentOnly = false } = {}) {
     return db
       .prepare(
-        `SELECT direction, text, attachment FROM messages WHERE conversation_id = ? AND seq < ?${sentOnly ? " AND (direction = 'in' OR status = 'sent')" : ''}
+        `SELECT direction, text, attachment FROM messages WHERE conversation_id = ? AND seq < ? AND revoked_at IS NULL${sentOnly ? " AND (direction = 'in' OR status = 'sent')" : ''}
          ORDER BY seq DESC LIMIT 12`,
       )
       .all(convId, seq)
@@ -1519,15 +1576,20 @@ export function createWaService(ctx, opts = {}) {
    * 会话里一条客户消息都没有时为 null（外联发出去客户没回之类，现状如此，不起草）。
    * 「我方的消息」只认发送成功的（status=sent，和清推荐、F12 首次回复一样）：发送失败的客户没收到，不算我方回过，
    * 也不进最近对话和 ourMessages——客户问了、业务员回的那条没发出去时，照旧按「客户这次的消息」起草，不当成跟进。
+   * 撤回过的消息两边都当没有：客户撤回的不算客户说过的话，我方撤回的客户看不到了，也不算我方回过。
    * @returns {{message:string, history:any[], followUp:boolean, ourMessages:string[]}|null}
    */
   function suggestInput(convId) {
     const lastOut = db
-      .prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent'")
+      .prepare(
+        "SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL",
+      )
       .get(convId).n;
     const inSince = (after, upTo) =>
       db
-        .prepare("SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND seq > ? AND seq <= ? ORDER BY seq")
+        .prepare(
+          "SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND revoked_at IS NULL AND seq > ? AND seq <= ? ORDER BY seq",
+        )
         .all(convId, after, upTo);
     let rows = inSince(lastOut, Number.MAX_SAFE_INTEGER);
     if (rows.length) {
@@ -1539,16 +1601,20 @@ export function createWaService(ctx, opts = {}) {
         ourMessages: [],
       };
     }
-    const lastIn = db.prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in'").get(convId).n;
+    const lastIn = db
+      .prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in' AND revoked_at IS NULL")
+      .get(convId).n;
     if (lastIn == null) return null;
     const outBefore = db
-      .prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND seq < ?")
+      .prepare(
+        "SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL AND seq < ?",
+      )
       .get(convId, lastIn).n;
     rows = inSince(outBefore, lastIn).slice(-MAX_SUGGEST_MESSAGES);
     if (!rows.length) return null;
     const ours = db
       .prepare(
-        "SELECT text, attachment FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND seq > ? ORDER BY seq DESC LIMIT ?",
+        "SELECT text, attachment FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL AND seq > ? ORDER BY seq DESC LIMIT ?",
       )
       .all(convId, lastIn, MAX_FOLLOWUP_MESSAGES)
       .reverse()
@@ -2084,10 +2150,12 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * WAHA session 的代理配置（4.5 / F13）。http 上游直接交给 WAHA；https / socks 上游指向 inkdove 的中继。
+   * 「用全局代理」的号指向 inkdove 上 mihomo 的混合端口（和中继一样经 INKDOVE_PROXY_RELAY_HOST 连，账号密码是随机生成的、只有字母数字和 -_）。
    * server 按文档不带协议头；WAHA 把账号密码原样拼进代理 URL，所以先做 URL 编码。
    */
   function wahaProxyFor(acc) {
     const px = acc.waha?.proxy;
+    if (px?.enabled && px.useGlobal) return ctx.globalProxy.wahaProxy();
     if (!px?.enabled || !px.host || !px.port) return null;
     if (needsRelay(acc)) {
       if (!acc.relay) return null;
@@ -2103,6 +2171,7 @@ export function createWaService(ctx, opts = {}) {
   /**
    * inkdove 管理的那部分 session 配置：webhook 和代理。
    * F12：订阅 message.any（收到的和自己发的消息都推，自己发的带 fromMe），用来记下机主在手机上发的消息。
+   * 消息撤回：订阅 message.revoked（客户撤回、在手机上撤回我方消息都推）。
    * 改了这里指纹就变，已有的号在服务启动时（init）或下次 start 时会把新配置 PUT 过去。
    */
   function wahaManagedConfig(acc) {
@@ -2110,7 +2179,7 @@ export function createWaService(ctx, opts = {}) {
       webhooks: [
         {
           url: config.wahaWebhookUrl,
-          events: ['message.any', 'session.status'],
+          events: ['message.any', 'message.revoked', 'session.status'],
           hmac: { key: config.wahaWebhookSecret },
           retries: { policy: 'constant', delaySeconds: 2, attempts: 3 },
         },
@@ -2365,6 +2434,160 @@ export function createWaService(ctx, opts = {}) {
     recentSent.delete(acc.id);
   }
 
+  // ---------------- 消息撤回 ----------------
+  // 两个方向：业务员在墨鸽里撤回我方消息（revokeMessage，经 WAHA 对所有人删除）；WAHA 推来 message.revoked（handleRevoked：
+  // 客户撤回了他的消息，或者在同一个号的手机上撤回了我方消息）。都只标上撤回，原文保留给业务员看；撤回过的消息不再进模型的上下文。
+
+  /** 清掉 10 分钟前记下的撤回尝试 */
+  function pruneRevokeAttempts() {
+    const now = Date.now();
+    for (const [k, v] of revokeAttempts) if (now - v.at > ECHO_ID_KEEP_MS) revokeAttempts.delete(k);
+  }
+
+  /** 把一条消息标成撤回；已经标过的不动。返回这次有没有标上 */
+  function markRevoked(msgId, by, user, at) {
+    return (
+      db
+        .prepare('UPDATE messages SET revoked_at = ?, revoked_by = ?, revoked_by_user_id = ?, revoked_by_name = ? WHERE id = ? AND revoked_at IS NULL')
+        .run(at, by, user?.id ?? null, user ? clip(String(user.name ?? ''), 100) : null, msgId).changes > 0
+    );
+  }
+
+  /**
+   * 撤回事件对应的消息。先在这个聊天的会话里找，找不到再在这个号的所有会话里找（同一个客户的 chat id 可能一会儿是
+   * <号码>@c.us、一会儿是 <lid>@lid）。按 WhatsApp 消息 ID 比：库里的 external_id 是 WAHA 的序列化 id `<true|false>_<chat>_<ID>`
+   * （群里再接 `_<participant>`，墨鸽不收群消息，这里照样认），ID 是随机的，同一个号里撞不上。fromMe 的只找我方消息，否则只找客户消息
+   */
+  function findRevokeTarget(acc, chatId, keyId, fromMe) {
+    const match = (col) =>
+      `${col} IS NOT NULL AND (${col} = ? OR substr(${col}, -length(?) - 1) = '_' || ? OR instr(${col}, '_' || ? || '_') > 0)`;
+    const keys = [keyId, keyId, keyId, keyId];
+    const direction = fromMe ? 'out' : 'in';
+    const inChat = db
+      .prepare(`SELECT * FROM messages WHERE conversation_id = ? AND direction = ? AND ${match('external_id')} LIMIT 1`)
+      .get(conversationIdOf(acc.id, chatId), direction, ...keys);
+    if (inChat) return inChat;
+    return (
+      db
+        .prepare(
+          `SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversation_id
+           WHERE c.account_id = ? AND m.direction = ? AND ${match('m.external_id')} LIMIT 1`,
+        )
+        .get(acc.id, direction, ...keys) || null
+    );
+  }
+
+  /**
+   * WAHA 的 message.revoked。GOWS 的载荷（镜像 2026.9.2 的 dist 代码）：{after: 撤回那条协议消息转成的 WAMessage（from 是聊天对象，
+   * fromMe 是不是自己撤回的，source 是 api / app）, before: null, revokedMessageId: 被撤回消息的 ID（key.ID，不带前缀）, _data: 原始消息}。
+   * - 客户撤回（fromMe=false）：对上客户消息，标「客户已撤回」。还没处理的（在防抖、识别中）记为 skipped，正在拟真等待的发送取消，
+   *   剩下的消息重新走一轮；
+   * - 自己撤回（fromMe=true）：墨鸽里点过撤回的（revokeAttempts 里有）按那个成员标；source=api 但没记录的（比如接口返回前服务重启了）
+   *   按墨鸽里撤回、不知道是谁；其余是在手机等其他设备上撤回的，标「已在手机上撤回」。
+   * 群聊、对不上的忽略；可以重复推，标过的不再动。返回处理结果（测试用）
+   */
+  function handleRevoked(acc, p) {
+    if (closed) return 'closed';
+    const after = p.after && typeof p.after === 'object' ? p.after : {};
+    const idOf = (x) => (typeof x === 'string' ? x : x?._serialized || x?.id || null);
+    const rawId = [p.revokedMessageId, p._data?.Message?.protocolMessage?.key?.ID, p.before?.id].map(idOf).find((x) => typeof x === 'string' && x);
+    // 聊天对象和是不是自己撤回的按入站消息的规则取（after 就是一条 WAMessage）；没有 after 时从原始消息的 Info 取
+    const info = after._data?.Info || p._data?.Info || {};
+    const fromMe = !!(after.fromMe ?? info.IsFromMe);
+    const { chatId } = parseWahaMessage({ fromMe, from: after.from ?? info.Chat, to: after.to ?? null, _data: after._data || p._data || {} });
+    if (!rawId) return 'ignored_revoke';
+    if (!chatId || isNonPrivateChat(chatId)) return 'ignored_non_private';
+    // ID 只防明显不对的值（空的、带 @ 的）；对不对得上靠下面按整段比 external_id
+    const keyId = messageKeyId(rawId);
+    if (!/^[^_@\s]{3,}$/.test(keyId)) return 'ignored_revoke';
+    const row = findRevokeTarget(acc, chatId, keyId, fromMe);
+    if (!row) return 'ignored_revoke_unknown';
+    if (row.revoked_at) return 'ignored_duplicate';
+    // 撤回时间用协议消息的时间（秒），没有时用收到的时间
+    const sec = Number(after.timestamp);
+    const at = Number.isFinite(sec) && sec > 0 ? new Date(sec < 1e12 ? sec * 1000 : sec).toISOString() : nowIso();
+    if (fromMe) {
+      pruneRevokeAttempts();
+      const attempt = revokeAttempts.get(`${acc.id}|${keyId}`);
+      if (attempt || after.source === 'api') {
+        markRevoked(row.id, 'member', attempt?.user ?? null, at);
+        return 'revoked_member';
+      }
+      markRevoked(row.id, 'phone', null, at);
+      return 'revoked_phone';
+    }
+    db.transaction(() => {
+      markRevoked(row.id, 'customer', null, at);
+      if (!row.handled) {
+        db.prepare("UPDATE messages SET handled = 1, bot_decision = 'skipped', decision_reason = ? WHERE id = ? AND handled = 0").run(
+          REVOKED_SKIP_REASON,
+          row.id,
+        );
+      }
+    })();
+    if (!row.handled) abortSending(row.conversation_id, 'revoked');
+    return 'revoked_customer';
+  }
+
+  /** 撤回接口的报错转成中文原因。超时的撤回可能其实成了：之后收到 WhatsApp 的撤回通知会按这个成员标上（见 handleRevoked） */
+  function revokeFail(err) {
+    if (!(err instanceof WahaError)) return err;
+    if (!err.status && /超时/.test(err.message)) {
+      return new HttpError(
+        502,
+        'waha_timeout',
+        '撤回没有确认：WAHA 超时没有响应。客户那边可能已经撤回了，收到 WhatsApp 的撤回通知后这里会自动标上；没有的话可以再试一次',
+      );
+    }
+    // WAHA 等会话进入 WORKING 等不到时回 422
+    if (err.status === 422) return new HttpError(409, 'not_connected', `这个号现在没连上 WhatsApp，连上后再撤回（${err.message}）`);
+    return new HttpError(502, 'waha_error', `撤回失败：${err.message}`);
+  }
+
+  /**
+   * 业务员在墨鸽里撤回我方的一条消息（对所有人删除，客户那边显示「此消息已删除」）。权限同手动发消息（路由里 loadConv 判）。
+   * 只有扫码号上发送成功、有 WhatsApp 消息 id、还没撤回、没超过时限（REVOKE_WINDOW_MS）的我方消息能撤回（机器人、人工、手机上发的、
+   * 外联、文件都算），按这个顺序判，判不过的不调 WAHA。WAHA 报错、超时时消息不变，报中文原因。
+   * 成功后原文保留，记上撤回时间和成员（id、当时的名字）；不暂停机器人、不清草稿。返回更新后的消息
+   */
+  async function revokeMessage(convId, messageId, user) {
+    const conv = getConvRow(convId);
+    if (!conv) throw notFound('会话不存在');
+    const row = typeof messageId === 'string' ? db.prepare('SELECT * FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId) : null;
+    if (!row) throw notFound('消息不存在');
+    if (row.direction !== 'out') throw badRequest('只能撤回我方发出的消息', 'not_own_message');
+    if (row.revoked_at) throw new HttpError(409, 'already_revoked', '这条消息已经撤回了');
+    if (row.status !== 'sent') throw badRequest('这条消息没有发出去，客户没收到，不用撤回', 'not_sent');
+    const acc = conv.account_id ? accounts.get(conv.account_id) : null;
+    if (!acc) throw badRequest('这个会话所属的号已删除，不能再撤回', 'account_deleted');
+    if (acc.channel !== 'waha') throw badRequest('Meta 官方接口的号不能撤回消息（WhatsApp Cloud API 没有撤回功能）', 'revoke_unsupported');
+    if (!row.external_id) throw badRequest('这条消息没有记下 WhatsApp 的消息 id，不能撤回', 'no_message_id');
+    if (!revocableUntil(row, acc)) throw badRequest('已经超过 WhatsApp 允许撤回的时间（发出后约两天半），不能再撤回', 'revoke_expired');
+    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '正在撤回这条消息，请稍等');
+    const chatId = conv.chat_id || conv.id;
+    const keyId = messageKeyId(row.external_id);
+    // WAHA 要完整的序列化 id：库里存的就是 true_<chat>_<ID> 的直接用，否则按这个会话的 chat id 拼
+    const serialized = /^true_[^_]+_[^_]+$/.test(row.external_id) ? row.external_id : `true_${chatId}_${keyId}`;
+    const who = user ? { id: user.id, name: user.name ?? '' } : null;
+    const attemptKey = `${acc.id}|${keyId}`;
+    pruneRevokeAttempts();
+    revokeAttempts.set(attemptKey, { user: who, at: Date.now() });
+    revoking.add(row.id);
+    try {
+      await waha.deleteMessage(acc.sessionName, chatId, serialized);
+    } catch (err) {
+      // WAHA 明确报错的没撤成，不会再有撤回通知；超时、连不上的可能其实成了，留着记录等通知
+      if (err instanceof WahaError && err.status) revokeAttempts.delete(attemptKey);
+      log.warn(`[wa] 撤回会话 ${convId} 的消息 ${row.id} 失败：${err?.message || err}`);
+      throw revokeFail(err);
+    } finally {
+      revoking.delete(row.id);
+    }
+    // 撤回通知可能比接口响应先到、已经按这个成员标上了，这里不再改
+    markRevoked(row.id, 'member', who, nowIso());
+    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(row.id), accounts.get(acc.id) || acc);
+  }
+
   // ---------------- webhook ----------------
   async function handleWahaWebhook(body) {
     if (!body || typeof body !== 'object') return 'ignored';
@@ -2377,6 +2600,7 @@ export function createWaService(ctx, opts = {}) {
       observeWahaStatus(acc.id, body.payload?.status);
       return 'status';
     }
+    if (body.event === 'message.revoked') return handleRevoked(acc, body.payload || {});
     // message.any 是现在订阅的；message 是老配置还没更新时推的（只有收到的消息），两种都按同一条路处理，按 id 去重
     if (body.event !== 'message.any' && body.event !== 'message') return 'ignored_event';
     return handleInbound(acc, parseWahaMessage(body.payload || {}));
@@ -2419,6 +2643,7 @@ export function createWaService(ctx, opts = {}) {
     handleWahaWebhook,
     handleMetaWebhook,
     handleInbound,
+    revokeMessage,
     notifier,
 
     /** 进程启动时按配置拉起所有需要的代理中继（F13） */
@@ -2432,7 +2657,7 @@ export function createWaService(ctx, opts = {}) {
       for (const acc of accounts.list()) {
         if (acc.channel === 'waha') getStatus(acc).catch(() => {});
       }
-      // inkdove 管理的 session 配置变了（比如 F12 把 webhook 事件改成 message.any）：已有的号把新配置 PUT 过去，
+      // inkdove 管理的 session 配置变了（比如 F12 把 webhook 事件改成 message.any、消息撤回加订 message.revoked）：已有的号把新配置 PUT 过去，
       // 运行中的 session 由 WAHA 自动重启一次，登录态保留。指纹没变的、从没推过配置的（还没建 session，start 时按新配置建）
       // 不动；WAHA 连不上时只记日志，下次 start 时再同步
       for (const acc of accounts.list()) {
@@ -2477,11 +2702,14 @@ export function createWaService(ctx, opts = {}) {
       return conversationById(id);
     },
     listMessages(id) {
-      if (!getConvRow(id)) throw notFound('会话不存在');
+      const conv = getConvRow(id);
+      if (!conv) throw notFound('会话不存在');
+      // 号算每条消息能不能撤回（revocableUntil）用
+      const acc = conv.account_id ? accounts.get(conv.account_id) : null;
       return db
         .prepare('SELECT * FROM (SELECT * FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 200) ORDER BY seq')
         .all(id)
-        .map(rowToMessage);
+        .map((r) => rowToMessage(r, acc));
     },
     /** 后台人工发送：via=admin，记下发送人 */
     async operatorSend(id, text, user) {
@@ -2526,12 +2754,14 @@ export function createWaService(ctx, opts = {}) {
       const msg = db.prepare('SELECT * FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
       if (!msg) throw notFound('消息不存在');
       if (msg.author !== 'operator') throw badRequest('只能把人工回复存进知识库', 'not_operator_message');
+      // 撤回过的人工回复多半是说错了，不拿去改写（撤回过的消息不进模型）
+      if (msg.revoked_at) throw badRequest('这条消息已经撤回了，不能存进知识库', 'message_revoked');
       const answer = String(msg.text || '').trim();
       if (!answer) throw badRequest('这条人工消息没有文字', 'empty_message');
       if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
-      // 它前面的客户提问：往前找，跳过紧挨着的我方消息，取连续的客户消息（最多 3 条）
+      // 它前面的客户提问：往前找，跳过紧挨着的我方消息，取连续的客户消息（最多 3 条）；撤回过的消息当没有
       const before = db
-        .prepare('SELECT author, text FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT 30')
+        .prepare('SELECT author, text FROM messages WHERE conversation_id = ? AND seq < ? AND revoked_at IS NULL ORDER BY seq DESC LIMIT 30')
         .all(convId, msg.seq);
       const asked = [];
       for (const r of before) {

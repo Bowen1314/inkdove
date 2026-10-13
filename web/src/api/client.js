@@ -95,6 +95,16 @@ export async function request(method, path, opts = {}) {
 }
 
 const enc = (id) => encodeURIComponent(id);
+/** 浏览器的时区和现在的时间（助手按这个算「今天」） */
+function clientClock() {
+  let tz;
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    tz = undefined;
+  }
+  return { tz, now: new Date().toISOString() };
+}
 const get = (p, o) => request('GET', p, o);
 const post = (p, body, o) => request('POST', p, { ...o, body: body === undefined ? {} : body });
 const put = (p, body, o) => request('PUT', p, { ...o, body });
@@ -131,6 +141,12 @@ export const api = {
   /** 把 :id 负责的全部会话转给 toUserId → {moved, skipped}；skipped 是目标没有对应号权限、保持原样的会话数 */
   transferUserConversations: (id, toUserId, o) => post(`/api/users/${enc(id)}/transfer`, { toUserId }, o),
 
+  // 操作日志（admin，只读）
+  /** {actorId?, type?, from?, to?, q?, cursor?, limit?} → {items, nextCursor}；按时间倒序，nextCursor 为 null 时没有下一页 */
+  listAuditLogs: (query, o) => get('/api/audit-logs', { ...o, query }),
+  /** 操作类型 → [{value, label}] */
+  auditLogTypes: (o) => get('/api/audit-logs/types', o),
+
   // 全局设置（admin）
   getSettings: (o) => get('/api/settings', o),
   putSettings: (patch, o) => put('/api/settings', patch, o),
@@ -140,6 +156,18 @@ export const api = {
   /** 翻译接口：用表单里当前（可能没保存）的值把一段固定的中文译成英语 → {ok, text, detectedSource, latencyMs} 或 {ok:false, error, kind, field?} */
   testTranslation: (body) => post('/api/settings/translation/test', body),
   testEmail: (to) => post('/api/settings/email/test', { to }),
+  /**
+   * 全局代理的状态 → {available, enabled, state: off|starting|running|error, error, restartAt, port, source, node, current,
+   * nodes: [{name, type}], nodeCount, subscription: {set, nodeCount, skipped, invalid, updatedAt, lastAttemptAt, error},
+   * config: {set, nodeCount, skipped, invalid, updatedAt}, notice, usedBy: [{id, name}]}
+   */
+  getProxyStatus: (o) => get('/api/settings/proxy/status', o),
+  /** 经全局代理请求测试地址 → {ok, ip, latencyMs} 或 {ok:false, error} */
+  testGlobalProxy: (o) => post('/api/settings/proxy/test', {}, o),
+  /** 立即更新订阅 → {ok, nodeCount, status} 或 {ok:false, error, status} */
+  refreshProxySubscription: (o) => post('/api/settings/proxy/refresh', {}, o),
+  /** 给所有节点测延迟 → {ok, delays: {节点名: 毫秒或 null}, url} 或 {ok:false, error} */
+  proxyDelays: (o) => post('/api/settings/proxy/delay', {}, o),
 
   // 资料
   listSources: (o) => get('/api/sources', o),
@@ -214,6 +242,26 @@ export const api = {
   // 看板（F12，admin）：range 取 today | 7d | 30d；accountId 空为全部号码；tz 是浏览器的 IANA 时区
   /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach}，结构见 SPEC-phase2 F12 */
   getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
+
+  // 首页 AI 助手（所有人都能用，对话只有本人看得到）：提问在后台进行，前端轮询那条消息，直到 status 不是 running
+  /** → {chats:[{id, title, createdAt, updatedAt}]（新到旧）, usage:{used, limit}}（今天问了几次、每天最多几次） */
+  assistantChats: (o) => get('/api/assistant/chats', o),
+  /**
+   * 提问（chatId 空为新对话），带上浏览器的时区和时间（「今天」按这个时区算）→ {chat, message}，message.status 为 running。
+   * 400 llm_not_configured，409 assistant_busy（自己有一个问题还在查），429 assistant_daily_limit
+   */
+  assistantAsk: ({ question, chatId }, o) => post('/api/assistant/ask', { question, chatId, ...clientClock() }, o),
+  /** → {chat, messages}（从早到晚，最多 100 条） */
+  assistantChat: (id, o) => get(`/api/assistant/chats/${enc(id)}`, o),
+  /**
+   * 轮询用 → Message：{id, chatId, question, answer, status: running|done|failed, steps:[{label, status}], refs, error, errorCode, …}。
+   * refs 是回答里 [[c1]] 这类标记对应的对象 {key, kind: conversation|entry|file, id, available, name?, accountName?, entry?, file?}
+   */
+  assistantMessage: (chatId, messageId, o) => get(`/api/assistant/chats/${enc(chatId)}/messages/${enc(messageId)}`, o),
+  /** 重答这个对话里最后一个没答成的问题（算一次提问）→ Message */
+  assistantRetry: (chatId, o) => post(`/api/assistant/chats/${enc(chatId)}/retry`, clientClock(), o),
+  /** 删掉自己的一个对话（正在查的会停下）。删了不退今天的次数 */
+  assistantDeleteChat: (id, o) => del(`/api/assistant/chats/${enc(id)}`, o),
 
   // 在线更新（admin）
   /**
@@ -357,6 +405,12 @@ export const api = {
   /** F2b：人工消息改写成条目草稿，不落库 → {type, title, content, tags} */
   kbDraft: (convId, messageId) =>
     post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/kb-draft`, {}),
+  /**
+   * 撤回我方的一条消息（对所有人删除，客户那边显示「此消息已删除」），原文保留 → 更新后的消息（revoked 有值）。
+   * 能不能撤回看消息的 revocableUntil；默认不弹 toast，失败原因由调用方显示在消息下面
+   */
+  revokeMessage: (convId, messageId, o) =>
+    post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/revoke`, {}, { silent: true, ...o }),
 
   /** 用表单里当前（可能未保存）的值拉模型列表。总是 200 → {ok:true, models:[{id, label?}]} | {ok:false, error} */
   listLlmModels: (body) => post('/api/settings/llm/models', body),

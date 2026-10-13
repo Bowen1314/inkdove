@@ -3,10 +3,15 @@
 // Resend：https://resend.com/docs/api-reference/emails/send-email
 //         错误码 https://resend.com/docs/api-reference/errors ，限流 https://resend.com/docs/api-reference/rate-limit
 import nodemailer from 'nodemailer';
+import { smtpProxyFor } from './proxy/route.js';
 import { sleep } from './util.js';
 
-/** SMTP 连接参数：secure=true 走 SMTPS（通常 465），false 则强制 STARTTLS（通常 587） */
+/**
+ * SMTP 连接参数：secure=true 走 SMTPS（通常 465），false 则强制 STARTTLS（通常 587）。
+ * 全局代理开着、SMTP 服务器不在直连名单里时，经它连（nodemailer 自带的 HTTP 代理支持：CONNECT 隧道里再做 TLS）
+ */
 export function smtpOptions(smtp) {
+  const proxy = smtpProxyFor(smtp.host);
   return {
     host: smtp.host,
     port: smtp.port,
@@ -16,6 +21,7 @@ export function smtpOptions(smtp) {
     connectionTimeout: 15_000,
     greetingTimeout: 15_000,
     socketTimeout: 30_000,
+    ...(proxy ? { proxy } : {}),
   };
 }
 

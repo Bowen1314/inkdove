@@ -1,4 +1,4 @@
-// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）、一键翻译。
+// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）、一键翻译、全局代理。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -123,11 +123,36 @@ export function settingsRouter(ctx) {
 
   router.get('/', (_req, res) => res.json(view()));
 
-  router.put('/', (req, res) => {
-    const next = applySettingsPatch(ctx.getSettings(), req.body);
+  router.put('/', async (req, res) => {
+    let next = applySettingsPatch(ctx.getSettings(), req.body);
+    if (req.body.proxy === undefined) {
+      ctx.setSettings(next);
+      res.json(view());
+      return;
+    }
+    // 全局代理：先检查（可能要下载订阅），都没问题再一起保存，然后按新设置起停 mihomo
+    const cur = ctx.getSettings();
+    const plan = await ctx.globalProxy.prepare(cur.proxy, next.proxy, req.body.proxy);
+    // 下载订阅期间别的设置可能被改过：在最新的设置上重新套一遍这次的改动
+    next = applySettingsPatch(ctx.getSettings(), req.body);
+    next.proxy = plan.proxy;
     ctx.setSettings(next);
+    plan.commit();
+    await ctx.globalProxy.apply();
     res.json(view());
   });
+
+  // 全局代理的状态：运行情况、节点名（不带服务器地址和密码）、订阅更新时间
+  router.get('/proxy/status', async (_req, res) => res.json(await ctx.globalProxy.status({ live: true })));
+  // 经全局代理请求测试地址，回出口 IP 和耗时。成功失败都回 200
+  router.post('/proxy/test', async (_req, res) => res.json(await ctx.globalProxy.test()));
+  // 立即更新订阅。成功失败都回 200，带上最新状态
+  router.post('/proxy/refresh', async (_req, res) => {
+    const r = await ctx.globalProxy.refresh();
+    res.json({ ...r, status: await ctx.globalProxy.status({ live: true }) });
+  });
+  // 给所有节点测延迟。成功失败都回 200
+  router.post('/proxy/delay', async (_req, res) => res.json(await ctx.globalProxy.delays()));
 
   router.post('/llm/test', async (_req, res) => {
     const s = ctx.getSettings();

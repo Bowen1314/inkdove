@@ -60,14 +60,14 @@ describe('WAHA 号', () => {
   it('新建的号：sessionName 由系统生成；start 建 session，webhook、events 和 HMAC key 正确', async () => {
     assert.match(acc.waha.sessionName, new RegExp(`^inkdove_${acc.id}$`));
     assert.equal(acc.meta, null);
-    assert.deepEqual(acc.waha.proxy, { enabled: false, protocol: 'socks5', host: '', port: null, username: '', passwordSet: false });
+    assert.deepEqual(acc.waha.proxy, { enabled: false, useGlobal: false, protocol: 'socks5', host: '', port: null, username: '', passwordSet: false });
     const create = fake.state.requests.find((r) => r.method === 'POST' && r.path === '/api/sessions');
     assert.ok(create);
     assert.equal(create.headers['x-api-key'], undefined, '未配置 key 时不带');
     assert.equal(create.body.name, acc.waha.sessionName);
     const [hook] = create.body.config.webhooks;
     assert.equal(hook.url, 'http://127.0.0.1:8794/webhooks/waha');
-    assert.deepEqual(hook.events, ['message.any', 'session.status']);
+    assert.deepEqual(hook.events, ['message.any', 'message.revoked', 'session.status']);
     assert.deepEqual(hook.hmac, { key: WAHA_SECRET });
     assert.equal(create.body.config.proxy, undefined, '未启用代理时不带 proxy');
     const got = await t.req('GET', `/api/accounts/${acc.id}`);

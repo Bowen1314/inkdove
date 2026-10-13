@@ -1,0 +1,293 @@
+/* 概览页的 AI 助手（pages/overview/Assistant.jsx）和回答里的 Markdown（pages/overview/markdown.jsx） */
+
+.ov-assistant {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ov-assistant__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+/* 问答区：自己滚动，不把概览页撑得太长 */
+.ov-assistant__body {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: var(--sp-4);
+}
+.ov-assistant__state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-height: 120px;
+}
+.ov-assistant__samples {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+.ov-assistant__turns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ov-assistant__turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+/* 问题靠右，像自己发的消息；回答铺满宽度 */
+.ov-assistant__q {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-bubble);
+  border-top-right-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ov-assistant__a {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  overflow-wrap: anywhere;
+}
+.ov-assistant__error-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+/* 查询进度 */
+.ov-assistant__steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+.ov-assistant__step {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.ov-assistant__step > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.ov-assistant__step.is-running {
+  color: var(--text);
+}
+.ov-assistant__step.is-error > svg {
+  color: var(--danger);
+}
+
+/* 「最近的对话」浮层 */
+.ov-assistant__history {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-height: 320px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.ov-assistant__history-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-width: 0;
+}
+.ov-assistant__history-open {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+  height: 32px;
+  padding: 0 var(--sp-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-base);
+  text-align: left;
+  transition: background-color var(--dur-fast) ease;
+}
+.ov-assistant__history-open:hover {
+  background: var(--bg-hover);
+}
+.ov-assistant__history-item.is-current .ov-assistant__history-open {
+  background: var(--bg-muted);
+  font-weight: 500;
+}
+
+/* 输入框：同会话页，焦点环由外框的 focus-within 代替 */
+.ov-assistant__compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.ov-assistant__composer {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+.ov-assistant__composer:focus-within {
+  border-color: var(--text);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.ov-assistant__input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px var(--sp-3) 4px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  resize: none;
+  outline: none;
+}
+.ov-assistant__input::placeholder {
+  color: var(--text-faint);
+}
+.ov-assistant__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 4px 6px 6px var(--sp-3);
+}
+.ov-assistant__hint {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .ov-assistant__body {
+    max-height: 60vh;
+  }
+  .ov-assistant__q {
+    max-width: 100%;
+  }
+}
+
+/* ---- 回答里的 Markdown ---- */
+.ov-md {
+  min-width: 0;
+}
+.ov-md > * {
+  margin: 0;
+}
+.ov-md > * + * {
+  margin-top: var(--sp-2);
+}
+.ov-md ul,
+.ov-md ol {
+  padding-left: var(--sp-6);
+}
+.ov-md li + li {
+  margin-top: var(--sp-1);
+}
+.ov-md strong,
+.ov-md__heading {
+  font-weight: 600;
+}
+.ov-md code {
+  padding: 0 var(--sp-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.ov-md__code {
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg-muted);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  white-space: pre;
+}
+.ov-md__code code {
+  padding: 0;
+  background: none;
+}
+.ov-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+/* 表格在自己的框里横向滚动，窄屏不撑破页面 */
+.ov-md__table {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ov-md__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+  overflow-wrap: normal;
+}
+.ov-md__table th,
+.ov-md__table td {
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.ov-md__table th {
+  background: var(--bg-subtle);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.ov-md__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* 引用小标签夹在文字里 */
+.ov-md__ref {
+  display: inline-flex;
+  max-width: 100%;
+  margin: 0 var(--sp-1);
+  vertical-align: middle;
+}

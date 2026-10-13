@@ -12,6 +12,7 @@ import { fmtNum, fmtShortTime, fmtTime } from '../lib/format.js';
 import { useAuth } from '../lib/auth.jsx';
 import { isConnected, useAccounts } from '../lib/accounts.js';
 import { setPendingCount } from '../lib/inboxCount.js';
+import Assistant from './overview/Assistant.jsx';
 
 function settle(p) {
   return p.then(
@@ -348,6 +349,8 @@ export default function Overview() {
 
         <div className="grid-12">
           {isAdmin && !first && <GettingStarted steps={steps} />}
+
+          <Assistant />
 
           {isAdmin && (
             <>

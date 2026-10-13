@@ -122,6 +122,11 @@ export function waRouter(ctx) {
     const c = loadConv(req);
     res.json(await translateMessage(ctx, c, String(req.params.messageId)));
   });
+  // 撤回我方的一条消息（对所有人删除），权限同手动发消息；只有扫码号、没超过时限的能撤回。原文保留 → 更新后的 Message
+  router.post('/conversations/:id/messages/:messageId/revoke', async (req, res) => {
+    const c = loadConv(req);
+    res.json(await wa.revokeMessage(c.id, String(req.params.messageId), req.user));
+  });
   // 推荐回复 / 草稿正文的中文意思：{createdAt, text}，草稿没变时译文存进草稿（draft.zh），权限同看这个会话。不计入会话每日模型次数
   router.post('/conversations/:id/draft/translation', async (req, res) => {
     const c = loadConv(req);

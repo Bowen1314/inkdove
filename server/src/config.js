@@ -34,6 +34,9 @@ export function loadConfig(env = process.env) {
     // F13 代理中继：每个号一个端口，从这里往上分配；WAHA 用 INKDOVE_PROXY_RELAY_HOST 连过来（compose 里 inkdove 的固定主机名）
     proxyRelayPortBase: num('INKDOVE_PROXY_RELAY_PORT_BASE', 18000),
     proxyRelayHost: get('INKDOVE_PROXY_RELAY_HOST').trim() || 'inkdove',
+    // 全局代理：mihomo 的位置（Docker 镜像里自带）和它的混合端口（墨鸽本机免密；WAHA 带账号密码经 INKDOVE_PROXY_RELAY_HOST 连）
+    mihomoPath: get('INKDOVE_MIHOMO_PATH').trim() || '/usr/local/bin/mihomo',
+    globalProxyPort: num('INKDOVE_GLOBAL_PROXY_PORT', 17890),
     // 仅第一期升级用：第一期的 WAHA session 名，迁移成「默认号」时沿用，已扫码的登录态不用重扫
     legacyWahaSession: get('INKDOVE_WAHA_SESSION').trim() || 'default',
     llmInit: {
@@ -51,6 +54,8 @@ export function loadConfig(env = process.env) {
     updaterToken: get('INKDOVE_UPDATER_TOKEN').trim(),
     // compose 里应用镜像的标签（默认 latest）。钉成 x.y.z 时一键更新升不上去，只提示命令
     imageTag: get('INKDOVE_IMAGE_TAG').trim() || 'latest',
+    // 操作日志保留多少天（默认 365），过期的每天清一次
+    auditRetentionDays: num('INKDOVE_AUDIT_RETENTION_DAYS', 365),
     // 仅测试用：覆盖 Meta Graph API 基址
     metaGraphUrl: (get('INKDOVE_META_GRAPH_URL').trim() || 'https://graph.facebook.com').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Resend API 地址
@@ -67,8 +72,14 @@ export function loadConfig(env = process.env) {
   if (!Number.isInteger(config.proxyRelayPortBase) || config.proxyRelayPortBase < 1024 || config.proxyRelayPortBase > 65000) {
     errors.push('INKDOVE_PROXY_RELAY_PORT_BASE 必须是 1024–65000 的整数');
   }
+  if (!Number.isInteger(config.globalProxyPort) || config.globalProxyPort < 1024 || config.globalProxyPort > 65535) {
+    errors.push('INKDOVE_GLOBAL_PROXY_PORT 必须是 1024–65535 的整数');
+  }
   if (!/^[\w.-]+\/[\w.-]+$/.test(config.updateRepo)) errors.push('INKDOVE_UPDATE_REPO 要写成 owner/repo');
   if (!/^[\w][\w.-]{0,127}$/.test(config.imageTag)) errors.push('INKDOVE_IMAGE_TAG 不是合法的镜像标签');
+  if (!Number.isInteger(config.auditRetentionDays) || config.auditRetentionDays < 1 || config.auditRetentionDays > 36500) {
+    errors.push('INKDOVE_AUDIT_RETENTION_DAYS 必须是 1–36500 的整数（天）');
+  }
   if (errors.length) {
     const err = new Error(errors.join('；'));
     err.name = 'ConfigError';

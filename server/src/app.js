@@ -5,6 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAccountStore, migrateLegacy } from './accounts.js';
+import { createAssistant } from './assistant/store.js';
+import { auditMiddleware } from './audit/middleware.js';
+import { AUDIT_CLEANUP_INTERVAL_MS, createAuditLog } from './audit/store.js';
 import { canAccessAccount, createAuth } from './auth.js';
 import { createBlockwords } from './blockwords/store.js';
 import { createDashboard } from './dashboard.js';
@@ -19,9 +22,12 @@ import { createKbStore } from './kb/store.js';
 import { createVectorIndexer, VECTOR_DEBOUNCE_MS } from './kb/vectors.js';
 import { createLeadStore, LEADS_SCAN_INTERVAL_MS } from './leads/store.js';
 import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
+import { createGlobalProxy } from './proxy/index.js';
 import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
+import { assistantRouter } from './routes/assistant.js';
+import { auditRouter } from './routes/audit.js';
 import { blockwordsRouter } from './routes/blockwords.js';
 import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
@@ -79,13 +85,21 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   updateNow?: () => number,
  *   updateScheduleTickMs?: number,
  *   relayBindHost?: string,
+ *   globalProxy?: {bindHost?: string, refreshCheckMs?: number, backoff?: object, readyTimeoutMs?: number, subscriptionTimeoutMs?: number},
  *   canary?: string,
  *   proxyTestUrl?: string,
  *   webDist?: string,
  *   translateEndpoints?: Record<string, string>,
  *   translateTimeoutMs?: number,
+ *   auditNow?: () => number,
+ *   auditCleanupIntervalMs?: number,
+ *   assistantNow?: () => number,
+ *   assistantLimits?: {maxToolCalls?: number, runTimeoutMs?: number, stepTimeoutMs?: number},
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
+ *   globalProxy：全局代理（proxy/index.js）的选项；bindHost 默认和代理中继一样
+ *   auditNow：操作日志的时钟（测试过期清理用）；auditCleanupIntervalMs：多久清一次过期的操作日志，为 0 时不起定时器（测试里手动调 ctx.audit.cleanup()）
+ *   assistantNow、assistantLimits：测试用，首页 AI 助手的时钟和循环上限（工具次数、总时长、每步时长）
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -127,6 +141,7 @@ export function createApp(config, options = {}) {
     mailer: null,
     // F13：中继只在 compose 内网监听（容器里绑 0.0.0.0，不映射到宿主机端口）
     relays: createRelayManager({ bindHost: options.relayBindHost || '0.0.0.0', log }),
+    globalProxy: null,
     ai: null,
     vectors: null,
     distill: null,
@@ -137,7 +152,11 @@ export function createApp(config, options = {}) {
     redteam: null,
     dashboard: null,
     blockwords: null,
+    assistant: null,
   };
+  // 全局代理（设置 → 代理，默认关）：开着时最先换好出口，之后各模块连外网的请求都经它（proxy/route.js）
+  ctx.globalProxy = createGlobalProxy(ctx, { bindHost: options.relayBindHost || '0.0.0.0', ...(options.globalProxy || {}) });
+  ctx.globalProxy.start();
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
     resendUrl: config.resendApiUrl,
@@ -178,11 +197,16 @@ export function createApp(config, options = {}) {
   ctx.redteam = createRedteamRunner(ctx);
   // F12：管理员数据看板（只读已经记下的数据）。dashboardNow 是测试用的时钟
   ctx.dashboard = createDashboard(ctx, { now: options.dashboardNow });
+  // 首页的 AI 助手：只读地查数据回答问题（assistant/）。进程重启时还在答的问题标成失败
+  ctx.assistant = createAssistant(ctx, { now: options.assistantNow, limits: options.assistantLimits });
   // 在线更新：启动 1 分钟后查一次 GitHub 最新发布，之后每 6 小时一次。githubApiUrl、updateNow 是测试用的，updateCheckIntervalMs 为 0 时不启动定时检查
   ctx.update = createUpdateService(ctx, { version: VERSION, githubApiUrl: options.githubApiUrl, now: options.updateNow });
   ctx.update.start(options.updateFirstCheckMs, options.updateCheckIntervalMs);
   // 预约更新：启动时先处理一次重启前留下的预约，之后每分钟看一次到没到点。updateScheduleTickMs 为 0 时都不做（测试里手动调 ctx.update.tick()）
   ctx.update.startSchedule(options.updateScheduleTickMs ?? SCHEDULE_TICK_MS);
+  // 操作日志：谁在什么时候做了什么（audit/）。超过保留天数的每天清一次
+  ctx.audit = createAuditLog(ctx, { retentionDays: config.auditRetentionDays, now: options.auditNow });
+  ctx.audit.start(options.auditCleanupIntervalMs ?? AUDIT_CLEANUP_INTERVAL_MS);
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
   const ready = ctx.wa.init().catch((err) => log.error(`[relay] 拉起代理中继出错：${err?.stack || err}`));
@@ -207,6 +231,8 @@ export function createApp(config, options = {}) {
 
   const api = express.Router();
   api.use(express.json({ limit: '2mb' }));
+  // 操作日志：所有改东西的请求（和导出）都经过这里，登录前的也算
+  api.use(auditMiddleware(ctx, auth));
 
   // health 不要求登录；登录了才带上有权限看的号
   api.get('/health', async (req, res) => {
@@ -258,11 +284,13 @@ export function createApp(config, options = {}) {
   api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
   api.use('/update', auth.requireAdmin, updateRouter(ctx));
   api.use('/blockwords', auth.requireAdmin, blockwordsRouter(ctx));
+  api.use('/audit-logs', auth.requireAdmin, auditRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));
   api.use('/leads', leadsRouter(ctx));
   api.use('/campaigns', campaignsRouter(ctx));
+  api.use('/assistant', assistantRouter(ctx));
   api.use(() => {
     throw new HttpError(404, 'not_found', '接口不存在');
   });
@@ -306,6 +334,7 @@ export function createApp(config, options = {}) {
     /** 代理中继都拉起来之后 resolve（测试用） */
     ready,
     async close() {
+      await ctx.assistant.close();
       await ctx.vectors.close();
       ctx.leads.stop();
       await ctx.outreach.stop();
@@ -314,6 +343,8 @@ export function createApp(config, options = {}) {
       ctx.distill.abortAll();
       ctx.redteam.abortAll();
       await ctx.update.stop();
+      await ctx.globalProxy.close();
+      ctx.audit.stop();
       try {
         db.close();
       } catch {

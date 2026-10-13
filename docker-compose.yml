@@ -19,12 +19,14 @@ services:
     # 在线更新：只让更新助手动这个容器
     labels:
       com.centurylinklabs.watchtower.enable: "true"
-    # 只映射后台端口；代理中继的端口（INKDOVE_PROXY_RELAY_PORT_BASE 起）只在 compose 内网里给 WAHA 用，不要映射
+    # 只映射后台端口；代理中继的端口（INKDOVE_PROXY_RELAY_PORT_BASE 起）和全局代理的端口（INKDOVE_GLOBAL_PROXY_PORT，默认 17890）
+    # 只在 compose 内网里给 WAHA 用，不要映射
     ports:
       - "127.0.0.1:8794:8794"
     volumes:
       - ./data:/app/data
-    mem_limit: 384m
+    # 开了全局代理时 mihomo 作为子进程跑在这个容器里，一起算在这个上限内
+    mem_limit: 512m
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

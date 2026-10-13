@@ -62,6 +62,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     // 在线更新：不启动定时检查，GitHub 指向连不上的端口，绝不访问外网
     updateCheckIntervalMs: 0,
     githubApiUrl: 'http://127.0.0.1:9',
+    // 操作日志：不起过期清理的定时器（要测时手动调 ctx.audit.cleanup()）
+    auditCleanupIntervalMs: 0,
     ...options,
   });
   const { app, ctx, close } = created;
@@ -304,6 +306,12 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     checkChatIds: {},
     /** 为真时查号返回 500 */
     failCheckExists: false,
+    /** 撤回 DELETE /api/<session>/chats/<chatId>/messages/<messageId> 成功的 {session, chatId, messageId}；收到请求时记进 revokeStarted */
+    revoked: [],
+    revokeStarted: [],
+    /** 设成 {status, message} 时撤回返回这个错误；revokeDelayMs 让撤回晚点返回（测回声比 API 响应先到） */
+    revokeError: null,
+    revokeDelayMs: 0,
   };
   const masked = (cfg) => {
     if (!maskSecrets || !cfg) return cfg;
@@ -383,6 +391,19 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     if (req.method === 'GET' && parts[0] === 'api' && parts[2] === 'auth' && parts[3] === 'qr') {
       res.writeHead(200, { 'content-type': 'image/png' });
       return res.end(TINY_PNG);
+    }
+    // 撤回（GOWS 的 deleteMessage 发 RevokeMessageRequest）：session 不是 WORKING 时 422（WorkingSessionPipe），返回形状不重要
+    if (req.method === 'DELETE' && parts[0] === 'api' && parts[2] === 'chats' && parts[4] === 'messages' && parts.length === 6) {
+      const entry = { session: parts[1], chatId: parts[3], messageId: parts[5] };
+      state.revokeStarted.push(entry);
+      if (state.revokeDelayMs) await sleep(state.revokeDelayMs);
+      if (state.revokeError) return json(state.revokeError.status, { message: state.revokeError.message });
+      const s = state.sessions.get(parts[1]);
+      if (s && s.status !== 'WORKING') {
+        return json(422, { error: 'Session status is not as expected. Try again later or restart the session', session: parts[1], status: s.status, expected: ['WORKING'] });
+      }
+      state.revoked.push(entry);
+      return json(200, { id: parts[5] });
     }
     if (req.method === 'GET' && parts[0] === 'api' && parts[2] === 'chats') {
       const chats = state.chats.get(parts[1]) || [];
