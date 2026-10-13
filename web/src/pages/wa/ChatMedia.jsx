@@ -153,13 +153,16 @@ export function MessageMedia({ convId, msg, onLoad }) {
     );
   }
 
+  // 视频、语音点播放才加载（preload="none"）：会话里媒体多时一打开就要发很多请求。
+  // 没加载前拿不到时长和尺寸：视频先占一个 16:9 的位置（见 .msg__video），播放后换成实际比例，onLoad 让贴着底部的消息区重新滚到底；
+  // 浏览器播放不了的也要点了播放才知道，那时再换成下载卡片
   if (view === 'video') {
     return (
       <video
         className="msg__video"
         src={url}
         controls
-        preload="metadata"
+        preload="none"
         onLoadedMetadata={onLoad}
         onError={() => setBroken(true)}
         aria-label={name}
@@ -168,7 +171,7 @@ export function MessageMedia({ convId, msg, onLoad }) {
   }
 
   if (view === 'audio') {
-    return <audio className="msg__audio" src={url} controls preload="metadata" onError={() => setBroken(true)} aria-label={name} />;
+    return <audio className="msg__audio" src={url} controls preload="none" onError={() => setBroken(true)} aria-label={name} />;
   }
 
   const FileIcon = media.type === 'document' ? fileIcon(media) : Icon;

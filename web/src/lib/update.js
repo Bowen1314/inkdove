@@ -84,12 +84,12 @@ export function scheduleResultOf(r) {
   return { tone: 'danger', text: `${head}失败：${r.error || '原因不明'}` };
 }
 
-/** 选的时间 {day（0 是今天）, hour, minute} → Date（按浏览器时区） */
+/** 选的时间 {day（0 是 now 那天）, hour, minute} → Date（按浏览器时区）。弹窗里 now 传打开选时间时定下的日子（UpdateModal 的 pickBase） */
 export function pickToDate({ day, hour, minute }, now = new Date()) {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, hour, minute, 0, 0);
 }
 
-/** ISO 时间 → {day, hour, minute}（按浏览器时区）；不在能选的范围里时返回 null */
+/** ISO 时间 → {day（从 now 那天算）, hour, minute}（按浏览器时区）；不在能选的范围里时返回 null */
 export function dateToPick(iso, now = new Date()) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;

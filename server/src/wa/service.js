@@ -1179,6 +1179,9 @@ export function createWaService(ctx, opts = {}) {
     const tooBig = () => fail('media_unsupported', `文件超过 ${Math.round(limits.maxBytes / 1024 / 1024)}MB`);
     // 优先用存盘下来的文件，不重复下载；没存成功（下载失败）再按原来的方式下载一次
     const stored = saved ? await saved : null;
+    // 服务正在关闭：存盘是被关闭中止的（返回失败），不要再用下面不受关闭控制的方式重新下载，也不写库（数据库马上要关）。
+    // 存盘状态留在 pending，下次启动时记为下载中断
+    if (closed) return;
     if (stored?.stored === 'too_large') return tooBig();
     if (stored?.stored === 'ok' && stored.fileKey) {
       if (Number(stored.size) > limits.maxBytes) return tooBig();

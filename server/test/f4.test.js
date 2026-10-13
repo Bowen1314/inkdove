@@ -497,3 +497,40 @@ describe('F4 三种接口格式的识别请求', () => {
     assert.equal(f.state.requests.length, n, '没有发出请求');
   });
 });
+
+// 服务关闭时正在存盘的图片：存盘被关闭中止（返回失败）后，识别那边原来会退回去再下载一次（不受关闭控制，超时 60 秒），
+// 下完写库时数据库已经关了，多一条错误日志。现在等到存盘结果时先看服务是不是在关闭，是就直接收尾。
+describe('F4：服务关闭时正在存盘的图片', () => {
+  it('存盘被中止后，识别不再重新下载、不写库、不报错', async () => {
+    const fake = await startFakeWaha();
+    const t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url } });
+    let closed = false;
+    try {
+      await t.login();
+      const s = await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 }, media: { image: true } } });
+      assert.equal(s.status, 200, JSON.stringify(s.body));
+      const acc = await t.createAccount({ name: '关闭号', autoReply: true });
+      await t.req('POST', `/api/accounts/${acc.id}/waha/start`);
+      // 文件晚 300ms 才给：关闭时存盘还在下载
+      const p = `${acc.waha.sessionName}/CLOSING.jpeg`;
+      fake.state.files.set(p, { buffer: fakeJpeg(), mime: 'image/jpeg', delayMs: 300 });
+      const downloads = () => fake.state.requests.filter((r) => r.path === `/api/files/${p}`).length;
+      const media = { url: `http://waha:3000/api/files/${p}`, mimetype: 'image/jpeg', filename: null };
+      const r = await postWaha(t, wahaMessage({ from: newChat(), hasMedia: true, media, session: acc.waha.sessionName }));
+      assert.equal(r.status, 200);
+      await waitFor(() => downloads() === 1, { message: '存盘没有开始下载' });
+
+      closed = true;
+      await t.close();
+      await waitFor(() => t.ctx.wa.idle(), { message: '识别迟迟没收尾' });
+      assert.equal(downloads(), 1, '关闭后没有再下载一次');
+      assert.deepEqual(
+        t.log.lines.filter((l) => l.startsWith('error ')),
+        [],
+      );
+    } finally {
+      if (!closed) await t.close();
+      await fake.close();
+    }
+  });
+});

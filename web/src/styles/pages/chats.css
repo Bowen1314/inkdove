@@ -517,6 +517,8 @@ a.msg__file:hover {
   width: 320px;
   max-width: 100%;
   max-height: 360px;
+  /* 点播放才加载（preload="none"），之前不知道尺寸：先按 16:9 占位，加载后用视频自己的比例 */
+  aspect-ratio: auto 16 / 9;
   border-radius: var(--radius-bubble);
   border-top-left-radius: var(--radius-sm);
   background: var(--bg-muted);

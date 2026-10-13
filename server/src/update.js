@@ -36,6 +36,7 @@ const NOTES_MAX = 20_000;
  * POST <INKDOVE_UPDATER_URL>/v1/update?image=<镜像名，不带标签>&async=true，头 Authorization: Bearer <口令>。
  * image= 让它只更新这个镜像的容器；async=true 时立刻返回 202，在后台拉镜像、重建容器（同步时是 200）。
  * 注意它只会重新拉「同一个标签」的新镜像，所以 compose 里钉了完整版本号时升不上去。
+ * timeoutMs 内没回话按「已经让它更新了」处理（请求多半已经收到，可能正在拉镜像）。
  */
 export const UPDATER_API = {
   path: '/v1/update',
@@ -269,6 +270,11 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
 
   const updaterFailed = (msg) => new HttpError(502, 'updater_failed', msg);
 
+  /**
+   * 让更新助手更新。它回 200 / 202 或者一直没回话都算已经让它更新了（正常返回）；连不上、拒绝、出错时抛 updater_failed。
+   * 没回话也当已经更新：请求多半已经收到、正在拉镜像（比如它没按 async 立刻回话），这时当失败处理会放开更新锁，
+   * 管理员再点一次就又触发一次更新；当成已经更新则和成功一样锁 10 分钟、等新版本启动。
+   */
   async function callUpdater() {
     const u = new URL(config.updaterUrl + UPDATER_API.path);
     for (const [k, v] of Object.entries(UPDATER_API.query(imageName))) u.searchParams.set(k, v);
@@ -281,7 +287,8 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       });
     } catch (err) {
       if (err?.name === 'TimeoutError') {
-        throw updaterFailed(`更新助手 ${UPDATER_API.timeoutMs / 1000} 秒没有回应，更新可能还在进行，请过几分钟刷新页面看版本号`);
+        log.warn(`[update] 更新助手 ${UPDATER_API.timeoutMs / 1000} 秒没有回应，按已经开始更新处理（可能正在下载新版本），等新版本启动`);
+        return;
       }
       throw updaterFailed(`连不上更新助手（${config.updaterUrl}），请检查 compose 里的 updater 服务有没有在运行`);
     }
@@ -367,8 +374,11 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
     return newerOf(state.latest?.version, s && !s.startedAt ? s.targetVersion : null);
   }
 
-  /** 清掉预约，记下这次的结果，打一行日志 */
-  function finish(s, { outcome, from = version, to = version, error = null }) {
+  /**
+   * 清掉预约，记下这次的结果，打一行日志。
+   * updaterCalled：已经让更新助手更新了、等新版本启动时没等到才记的失败，结果里带上 updaterCalled: true（见 reviseSlowSuccess）
+   */
+  function finish(s, { outcome, from = version, to = version, error = null, updaterCalled = false }) {
     writeSchedule(null);
     kvSet(db, SCHEDULE_RESULT_KEY, {
       /** success | failed | missed */
@@ -381,19 +391,49 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       backup: s.backup ?? null,
       error,
       finishedAt: iso(now()),
+      ...(updaterCalled ? { updaterCalled: true } : {}),
     });
     const head = `[update] ${who(s.scheduledBy)} 预约在 ${s.at} 更新到 v${s.targetVersion}`;
     if (outcome === 'success') log.info(`${head}：已完成，现在是 v${version}`);
     else log.warn(`${head}：${outcome === 'missed' ? '' : '失败，'}${error}`);
   }
 
-  /** 到点了：先查一次 GitHub（有更新的版本就更到最新），再走和立即更新一样的流程 */
+  /**
+   * 预约更新到的那次结果记了失败，但那是已经让更新助手更新了、等新版本启动时没等到才记的（拉镜像比预期慢，
+   * 或者中途重启了一次），后来新版本还是起来了：改成成功，from / to 照旧。只改结果，不碰预约，不会再触发更新。
+   * 别的失败（没装更新助手、钉了版本、备份失败、更新助手拒绝…）根本没让它更新，之后版本变了是用别的办法升的，不改。
+   * 每次看预约时都调；当前版本在一个进程里不变，所以实际上只在新版本启动后那一次改得动。
+   */
+  function reviseSlowSuccess() {
+    const r = kvGet(db, SCHEDULE_RESULT_KEY, null);
+    if (r?.outcome !== 'failed' || !r.updaterCalled || !parseVersion(r.to) || compareVersions(version, r.to) < 0) return;
+    kvSet(db, SCHEDULE_RESULT_KEY, { ...r, outcome: 'success', error: null, finishedAt: iso(now()) });
+    log.info(`[update] ${who(r.scheduledBy)} 预约在 ${r.at} 更新到 v${r.targetVersion}：更新比预期慢，最后成功了，现在是 v${version}`);
+  }
+
+  /**
+   * 到点时更新到哪个版本：GitHub 上有比预约时更新的版本、而且能一键升到它，就更到它；
+   * 升不上去（比如镜像是 0.3 这种浮动标签，新出的已经是 0.4.0）时按预约时记下的版本，免得本来能升的也不升了
+   */
+  function scheduleTarget(s) {
+    const latest = state.latest?.version;
+    if (!latest || compareVersions(latest, s.targetVersion) <= 0) return s.targetVersion;
+    try {
+      assertCanUpdate(latest);
+      return latest;
+    } catch {
+      log.info(`[update] GitHub 上最新的 v${latest} 一键更新升不上去，按预约时的 v${s.targetVersion} 更新`);
+      return s.targetVersion;
+    }
+  }
+
+  /** 到点了：先查一次 GitHub（有更新、又能升上去的版本就更到它），再走和立即更新一样的流程 */
   async function execute(s) {
     state.scheduleRunning = true;
     try {
       if (config.updateCheck && now() - state.lastAttemptAt >= UPDATE_CHECK_MIN_GAP_MS) await check();
       if (closing.signal.aborted) return;
-      const to = newerOf(state.latest?.version, s.targetVersion);
+      const to = scheduleTarget(s);
       log.info(`[update] 到了 ${who(s.scheduledBy)} 预约的时间（${s.at}），开始更新：v${version} → v${to}`);
       let r;
       try {
@@ -415,10 +455,11 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
 
   /**
    * 看一眼预约（启动时一次，之后每分钟一次）：
-   * 当前版本已经 ≥ 目标版本 → 清掉、记成功；让更新助手更新了但没升上去 → 清掉、记失败；
+   * 当前版本已经 ≥ 目标版本 → 清掉、记成功；让更新助手更新了但没升上去 → 清掉、记失败（后来升上去了再改成成功）；
    * 还没到点 → 不动；过了 1 小时以上（服务当时没在运行）→ 清掉、记「错过了」；否则执行。失败不自动重试。
    */
   async function runSchedule() {
+    reviseSlowSuccess();
     const s = readSchedule();
     if (!s) return;
     if (compareVersions(version, s.targetVersion) >= 0) {
@@ -431,11 +472,13 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       // 这个进程刚让更新助手更新：等它重建容器
       if (firedHere && t - Date.parse(s.startedAt) < UPDATE_LOCK_MS) return;
       const why = firedHere ? `过了 ${UPDATE_LOCK_MS / 60_000} 分钟还是` : '服务重启后还是';
+      // 更新助手没回话时也会走到这里，所以不说它「收到了请求」
       finish(s, {
         outcome: 'failed',
         from: s.from,
         to: s.to,
-        error: `更新助手收到了请求，但${why} v${version}，没有更新到 v${s.to}。可以在服务器上用 docker compose logs updater 看看更新助手的日志`,
+        error: `已经让更新助手更新，但${why} v${version}，没有更新到 v${s.to}。可以在服务器上用 docker compose logs updater 看看更新助手的日志`,
+        updaterCalled: true,
       });
       return;
     }

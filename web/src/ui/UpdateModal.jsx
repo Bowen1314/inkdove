@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { CalendarClock, Download, ExternalLink } from 'lucide-react';
 import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
@@ -72,6 +72,8 @@ export function UpdateModal() {
   const started = useRef({ at: 0, from: '' });
   // 预约：选的时间、时间不对的提示、正在提交（schedule | cancel）
   const [pick, setPick] = useState(defaultPick);
+  // 选的「第几天」从哪天算：打开选时间时定下来，显示的日期和提交都按它换算（弹窗开着跨过零点也不会晚一天）
+  const [pickBase, setPickBase] = useState(() => new Date());
   const [pickError, setPickError] = useState('');
   const [busy, setBusy] = useState('');
 
@@ -82,10 +84,13 @@ export function UpdateModal() {
   const lead = s && target ? manualLead(s, target) : null;
   const picking = modalView === 'schedule' && !lead && !waiting && !scheduleRunning;
 
-  // 打开选时间时：改时间从原来的时间开始，新预约默认明天凌晨 3 点
-  useEffect(() => {
+  // 打开选时间时：改时间从原来的时间开始，新预约默认明天凌晨 3 点。
+  // 用 layout effect：在画出来之前换好，不会先闪一下上次打开时的日子
+  useLayoutEffect(() => {
     if (!modalOpen || !picking) return;
-    setPick((schedule && dateToPick(schedule.at)) || defaultPick());
+    const base = new Date();
+    setPickBase(base);
+    setPick((schedule && dateToPick(schedule.at, base)) || defaultPick());
     setPickError('');
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -143,7 +148,7 @@ export function UpdateModal() {
   };
 
   const submitSchedule = async () => {
-    const at = pickToDate(pick);
+    const at = pickToDate(pick, pickBase);
     if (!scheduleTimeOk(at)) {
       setPickError(BAD_TIME);
       return;
@@ -212,6 +217,7 @@ export function UpdateModal() {
       <div className="update-modal">
         <div>选一个时间，到时间自动更新到 v{target}，只更新这一次。</div>
         <ScheduleFields
+          base={pickBase}
           pick={pick}
           onChange={(p) => {
             setPick(p);

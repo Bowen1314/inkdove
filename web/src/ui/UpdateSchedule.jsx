@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { SCHEDULE_DAYS, SCHEDULE_MINUTE_STEP, pickToDate, scheduleTimeOk } from '../lib/update.js';
+import { SCHEDULE_DAYS, SCHEDULE_MINUTE_STEP, dateToPick, pickToDate, scheduleTimeOk } from '../lib/update.js';
 import { Field } from './common.jsx';
 import { Select } from './Select.jsx';
 
@@ -19,12 +19,15 @@ function browserTimeZone() {
 /**
  * 选预约时间：哪天（今天和之后 7 天）+ 几点 + 几分（5 分钟一档），三个都是 ui/Select，按浏览器时区。
  * 不在「1 分钟之后、7 天之内」的选项灰掉；换了日子或钟点后原来的时间不能选了，就挪到那天（那个钟点）最早能选的时间。
+ * base: 第几天从哪天算（打开选时间时的时间，提交时也按它换算），能不能选按现在的时间判断；
  * pick: {day, hour, minute}；onChange(新的 pick)；error 显示在下面。
  */
-export function ScheduleFields({ pick, onChange, error }) {
+export function ScheduleFields({ base, pick, onChange, error }) {
   const id = useId();
   const now = new Date();
-  const ok = (p) => scheduleTimeOk(pickToDate(p, now), now.getTime());
+  const ok = (p) => scheduleTimeOk(pickToDate(p, base), now.getTime());
+  // 跨过零点后 base 那天已经是昨天：「今天」「明天」按现在的日子标
+  const today = dateToPick(now.toISOString(), base)?.day ?? 0;
 
   const minutes = Array.from({ length: 60 / SCHEDULE_MINUTE_STEP }, (_, i) => i * SCHEDULE_MINUTE_STEP);
   // 原来的预约不在 5 分钟一档上（接口直接调的）时也能显示
@@ -41,9 +44,10 @@ export function ScheduleFields({ pick, onChange, error }) {
   };
 
   const dayOptions = Array.from({ length: SCHEDULE_DAYS }, (_, day) => {
-    const d = pickToDate({ day, hour: 0, minute: 0 }, now);
+    const d = pickToDate({ day, hour: 0, minute: 0 }, base);
     const date = `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`;
-    return { value: day, label: NEAR_DAYS[day] ? `${NEAR_DAYS[day]} · ${date}` : date, disabled: !firstTime(day) };
+    const near = NEAR_DAYS[day - today];
+    return { value: day, label: near ? `${near} · ${date}` : date, disabled: !firstTime(day) };
   });
   const hourOptions = HOURS.map((hour) => ({
     value: hour,

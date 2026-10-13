@@ -1,11 +1,12 @@
 // 在线更新：假 GitHub（GET /repos/<repo>/releases/latest）和假更新助手（POST /v1/update）都是本地 HTTP 服务，不访问外网；
 // 时钟注入（createApp 的 updateNow）。覆盖：版本比较和钉版本判断、启动后延迟首查、关闭检测时不发请求、只有 admin、
 // 60 秒内不重查、预发布不提示、GitHub 出错、自定义仓库、数据库备份文件和保留份数、备份失败不更新、
-// 更新助手未配置 / 口令错 / 出错 / 连不上 / 成功、同一时间只允许一个更新。
+// 更新助手未配置 / 口令错 / 出错 / 连不上 / 成功 / 迟迟不回话（按已经开始更新处理）、同一时间只允许一个更新。
 // 预约更新（定时检查用 updateScheduleTickMs=0 关掉，手动调 ctx.update.tick()；重启用预先写好 kv 的数据目录模拟）：
 // 权限、时间范围和格式、条件不满足、覆盖旧预约、取消、到点执行（只执行一次、等重启期间不能改、10 分钟没重启记失败）、
-// 到点时有更新的版本、执行失败记原因不重试、立即更新后预约作废、定时器、重启后已经是新版本 / 错过 1 小时以上 /
-// 不到 1 小时照常执行 / 更新了没升上去 / 条件不满足、重启不丢。
+// 到点时有更新的版本（x.y 浮动标签升不到新的小版本时按预约时的版本）、更新助手迟迟不回话、执行失败记原因不重试、
+// 立即更新后预约作废、定时器、重启后已经是新版本 / 错过 1 小时以上 / 不到 1 小时照常执行 / 更新了没升上去 / 条件不满足、
+// 重启不丢、等重启时记了失败但后来升上去了改记成功。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -22,6 +23,7 @@ import {
   SCHEDULE_MISS_MS,
   UPDATE_CHECK_MIN_GAP_MS,
   UPDATE_LOCK_MS,
+  UPDATER_API,
   compareVersions,
   isPinned,
   parseVersion,
@@ -113,6 +115,18 @@ async function recheck(t) {
   const r = await t.req('POST', '/api/update/check');
   assert.equal(r.status, 200, JSON.stringify(r.body));
   return r.body;
+}
+
+/** 把等更新助手回话的时间临时调短到 0.2 秒，假更新助手 1 秒后才回（app 和测试在同一个进程里，用的是同一个 UPDATER_API） */
+async function withSlowUpdater(fn) {
+  const saved = UPDATER_API.timeoutMs;
+  UPDATER_API.timeoutMs = 200;
+  updater.state.delayMs = 1000;
+  try {
+    return await fn();
+  } finally {
+    UPDATER_API.timeoutMs = saved;
+  }
 }
 
 const backupsOf = (t) => {
@@ -456,6 +470,21 @@ describe('一键更新', () => {
     assert.equal(r.status, 200, '同步模式返回 200 也算成功');
   });
 
+  it('更新助手迟迟不回话：按已经开始更新处理（返回成功、锁住），再点 409，不会再触发一次', async () => {
+    await recheck(t);
+    await withSlowUpdater(async () => {
+      const r = await t.req('POST', '/api/update/apply');
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.to, NEXT);
+      assert.match(r.body.backup, /^backups\/inkdove-v.+\.db$/);
+      const again = await t.req('POST', '/api/update/apply');
+      assert.equal(again.status, 409);
+      assert.equal(again.body.code, 'update_in_progress');
+    });
+    assert.equal(updater.state.requests.length, 1);
+    assert.ok(t.log.lines.some((l) => l.startsWith('warn [update] 更新助手 0.2 秒没有回应，按已经开始更新处理')));
+  });
+
   it('更新前的备份只留最近 5 份，别的文件不碰', async () => {
     await recheck(t);
     const dir = path.join(t.dataDir, 'backups');
@@ -769,6 +798,7 @@ describe('预约更新', () => {
     assert.equal(res.from, CURRENT);
     assert.equal(res.to, NEXT);
     assert.match(res.error, new RegExp(`过了 10 分钟还是 v${CURRENT.replace(/\./g, '\\.')}，没有更新到 v${NEXT.replace(/\./g, '\\.')}`));
+    assert.equal(res.updaterCalled, true, '已经让更新助手更新了：新版本后来起来了还能改记成功');
     assert.deepEqual((await getStatus(t)).scheduleResult, res);
     assert.equal(updater.state.requests.length, 1);
   });
@@ -785,6 +815,73 @@ describe('预约更新', () => {
     assert.equal(s.targetVersion, NEXT);
     assert.equal(s.to, NEWER);
     assert.ok(t.log.lines.some((l) => l.endsWith(`开始更新：v${CURRENT} → v${NEWER}`)));
+  });
+
+  it('镜像是 x.y 浮动标签：到点时出了下一个小版本（升不上去）按预约时的版本更新，同一个小版本的更新照样更到最新', async () => {
+    const tag = `${cur.major}.${cur.minor + 1}`;
+    const a = await boot({ env: { INKDOVE_IMAGE_TAG: tag }, options: { updateScheduleTickMs: 0 } });
+    const b = await boot({ env: { INKDOVE_IMAGE_TAG: tag }, options: { updateScheduleTickMs: 0 } });
+    try {
+      await recheck(a);
+      await recheck(b);
+      assert.equal((await scheduleAt(a, later(HOUR))).status, 200);
+      assert.equal((await scheduleAt(b, later(HOUR))).status, 200);
+      clock.now += HOUR;
+
+      // 下一个小版本：x.y 标签拉不到，按预约时的 NEXT 更新，不记失败
+      const OTHER_MINOR = `${cur.major}.${cur.minor + 2}.0`;
+      gh.state.release = release(`v${OTHER_MINOR}`);
+      await a.ctx.update.tick();
+      assert.equal(updater.state.requests.length, 1);
+      assert.equal(scheduleOf(a).to, NEXT);
+      assert.ok(scheduleOf(a).startedAt);
+      assert.equal(resultOf(a), null);
+      assert.ok(a.log.lines.some((l) => l === `info [update] GitHub 上最新的 v${OTHER_MINOR} 一键更新升不上去，按预约时的 v${NEXT} 更新`));
+      assert.ok(a.log.lines.some((l) => l.endsWith(`开始更新：v${CURRENT} → v${NEXT}`)));
+
+      // 同一个小版本的补丁版：x.y 标签拉得到，更到它
+      const PATCH = `${cur.major}.${cur.minor + 1}.3`;
+      gh.state.release = release(`v${PATCH}`);
+      clock.now += UPDATE_CHECK_MIN_GAP_MS;
+      await b.ctx.update.tick();
+      assert.equal(updater.state.requests.length, 2);
+      assert.equal(scheduleOf(b).to, PATCH);
+      assert.equal(resultOf(b), null);
+    } finally {
+      await a.close();
+      await b.close();
+    }
+  });
+
+  it('到点时更新助手迟迟不回话：按已经开始更新处理，等新版本启动，不记失败、不再触发；10 分钟还没升上去才记失败', async () => {
+    await recheck(t);
+    await scheduleAt(t, later(HOUR));
+    clock.now += HOUR;
+    await withSlowUpdater(() => t.ctx.update.tick());
+    assert.equal(updater.state.requests.length, 1);
+    const s = scheduleOf(t);
+    assert.equal(s.startedAt, iso(clock.now));
+    assert.equal(s.from, CURRENT);
+    assert.equal(s.to, NEXT);
+    assert.match(s.backup, /^backups\/inkdove-v.+\.db$/);
+    assert.equal(resultOf(t), null, '没有记失败');
+
+    // 等新版本启动期间：再看几次、点立即更新、改预约都不会再触发
+    clock.now += MIN;
+    await t.ctx.update.tick();
+    assert.equal((await t.req('POST', '/api/update/apply')).status, 409);
+    assert.equal((await scheduleAt(t, later(HOUR))).status, 409);
+    assert.equal(updater.state.requests.length, 1);
+    assert.equal(scheduleOf(t).startedAt, s.startedAt);
+
+    clock.now = Date.parse(s.startedAt) + UPDATE_LOCK_MS;
+    await t.ctx.update.tick();
+    const res = resultOf(t);
+    assert.equal(res.outcome, 'failed');
+    assert.equal(res.updaterCalled, true);
+    assert.match(res.error, /已经让更新助手更新，但过了 10 分钟还是 v/);
+    assert.equal(scheduleOf(t), null);
+    assert.equal(updater.state.requests.length, 1);
   });
 
   it('执行失败（更新助手出错、备份失败）：清掉预约、记下原因，不自动重试', async () => {
@@ -805,6 +902,7 @@ describe('预约更新', () => {
     assert.deepEqual(res.scheduledBy, { id: adminId, email: ADMIN_EMAIL });
     assert.match(res.error, /更新助手返回 HTTP 500：something went wrong/);
     assert.equal(res.finishedAt, iso(clock.now));
+    assert.equal(res.updaterCalled, undefined, '更新助手没接手：之后版本变了也不改成成功');
     assert.ok(t.log.lines.some((l) => l.startsWith(`warn [update] ${ADMIN_EMAIL} 预约在 ${at} 更新到 v${NEXT}：失败，更新助手返回 HTTP 500`)));
 
     clock.now += 5 * MIN;
@@ -866,10 +964,11 @@ describe('预约更新', () => {
 
 describe('预约更新：重启之后', () => {
   /** 先把预约写进一个新的数据目录，再用它启动（启动时会马上看一次预约） */
-  async function bootWith(schedule, { env = {}, options = {} } = {}) {
+  async function bootWith(schedule, { env = {}, options = {}, result } = {}) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-test-'));
     const db = openDb(dir);
     kvSet(db, 'update_schedule', schedule);
+    if (result) kvSet(db, 'update_schedule_result', result);
     db.close();
     const t = await boot({ env: { INKDOVE_DATA_DIR: dir, ...env }, options });
     const close = t.close;
@@ -978,11 +1077,65 @@ describe('预约更新：重启之后', () => {
       const st = await getStatus(t);
       assert.equal(st.schedule, null);
       assert.equal(st.scheduleResult.outcome, 'failed');
-      assert.match(st.scheduleResult.error, /更新助手收到了请求，但服务重启后还是 v/);
+      assert.match(st.scheduleResult.error, /已经让更新助手更新，但服务重启后还是 v/);
       await sleep(50);
       assert.equal(updater.state.requests.length, 0);
     } finally {
       await t.close();
+    }
+  });
+
+  /** 上一次预约记下的失败：默认是等新版本启动时没等到（已经让更新助手更新了），目标是当前版本 */
+  const failedResult = (over = {}) => ({
+    outcome: 'failed',
+    at: iso(clock.now - HOUR),
+    targetVersion: CURRENT,
+    scheduledBy: { id: 'u_admin', email: ADMIN_EMAIL },
+    from: '0.0.1',
+    to: CURRENT,
+    backup: 'backups/x.db',
+    error: `已经让更新助手更新，但过了 10 分钟还是 v0.0.1，没有更新到 v${CURRENT}`,
+    finishedAt: iso(clock.now - 50 * MIN),
+    updaterCalled: true,
+    ...over,
+  });
+
+  it('等新版本启动时记了失败（拉镜像比预期慢），后来新版本起来了：改记成功，from / to 照旧，不再调更新助手', async () => {
+    const r = failedResult();
+    const t = await bootWith(null, { result: r });
+    try {
+      const st = await getStatus(t);
+      assert.equal(st.schedule, null);
+      assert.deepEqual(st.scheduleResult, { ...r, outcome: 'success', error: null, finishedAt: iso(clock.now) });
+      assert.ok(
+        t.log.lines.some(
+          (l) => l === `info [update] ${ADMIN_EMAIL} 预约在 ${r.at} 更新到 v${CURRENT}：更新比预期慢，最后成功了，现在是 v${CURRENT}`,
+        ),
+      );
+      // 之后再看也不会再改、不会触发更新
+      await t.ctx.update.tick();
+      assert.equal(resultOf(t).finishedAt, st.scheduleResult.finishedAt);
+      await sleep(50);
+      assert.equal(updater.state.requests.length, 0);
+      assert.deepEqual(backupsOf(t), []);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('没让更新助手更新的失败（后来是用别的办法升上去的）、还没升到目标版本的失败：都不改', async () => {
+    const manual = await bootWith(null, { result: failedResult({ updaterCalled: undefined, backup: null, error: '镜像标签钉在了 …' }) });
+    const behind = await bootWith(null, { result: failedResult({ targetVersion: NEXT, to: NEXT }) });
+    try {
+      for (const x of [manual, behind]) {
+        await x.ctx.update.tick();
+        assert.equal(resultOf(x).outcome, 'failed');
+        assert.equal((await getStatus(x)).scheduleResult.outcome, 'failed');
+      }
+      assert.equal(updater.state.requests.length, 0);
+    } finally {
+      await manual.close();
+      await behind.close();
     }
   });
 
