@@ -1,6 +1,7 @@
 {
   "name": "inkdove-server",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
   "description": "墨鸽后端：知识库蒸馏 + WhatsApp 自动回复",

@@ -664,4 +664,12 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 Inkdove contributors
+Copyright © 2026 Inkdove contributors
+
+从 v0.2.0 起采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0-only）：
+
+- 个人和公司都可以免费使用、修改、自己部署，包括用于商业经营；
+- 分发修改后的版本，或者把修改后的版本部署成服务、让别人通过网络使用，都要以 AGPL-3.0 公开完整的修改后源代码；
+- 后台「设置 → 版本」里有源代码链接，二次开发后请改成你自己的仓库地址。
+
+v0.1.0 及更早的版本仍然是 MIT 协议。
