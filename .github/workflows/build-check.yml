@@ -52,10 +52,17 @@ jobs:
 
       - name: 墨鸽能启动
         run: |
-          docker run -d --name inkdove --platform linux/${{ matrix.arch }} -p 8794:8794 inkdove:check
+          # 必填的几个变量用这次随机生成的值，容器用完就删
+          docker run -d --name inkdove --platform linux/${{ matrix.arch }} -p 8794:8794 \
+            -e INKDOVE_ADMIN_EMAIL=ci@example.com \
+            -e INKDOVE_ADMIN_PASSWORD="$(openssl rand -hex 16)" \
+            -e INKDOVE_SESSION_SECRET="$(openssl rand -hex 32)" \
+            -e INKDOVE_WAHA_WEBHOOK_SECRET="$(openssl rand -hex 32)" \
+            inkdove:check
           want=$(node -p "require('./server/package.json').version")
           for i in $(seq 1 90); do
             body=$(curl -fsS http://127.0.0.1:8794/api/health 2>/dev/null) && break
+            [ "$(docker inspect -f '{{.State.Running}}' inkdove)" = true ] || break
             sleep 2
           done
           docker logs inkdove
