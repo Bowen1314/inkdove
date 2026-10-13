@@ -16,7 +16,7 @@ export function invalidateAccounts() {
   cachedAt = 0;
 }
 
-/** 把一个号的最新数据写进缓存并通知所有 useAccounts（比如开关自动回复后） */
+/** 把一个号的最新数据写进缓存并通知所有 useAccounts（比如改了回复方式后） */
 export function patchAccountCache(account) {
   if (!account?.id || !cache) return;
   cache = cache.map((a) => (a.id === account.id ? { ...a, ...account } : a));

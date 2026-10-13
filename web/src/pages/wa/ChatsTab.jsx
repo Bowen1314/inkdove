@@ -101,7 +101,7 @@ function fmtMuteUntil(d) {
 
 /**
  * 会话状态。showActive（会话头部）时，没有别的状态也显示一句：自动回复的号是"机器人接待中"，
- * 推荐回复的号是"AI 推荐回复"，关闭的号不显示。replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
+ * 人工回复的号不显示。replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
  */
 function ConvState({ conv, size = 'sm', showActive = false, replyMode = null }) {
   if (conv.needsHuman) return <StatusDot tone="danger" tinted size={size}>待你处理</StatusDot>;
@@ -109,7 +109,6 @@ function ConvState({ conv, size = 'sm', showActive = false, replyMode = null }) 
   const mute = activeMute(conv);
   if (mute) return <StatusDot tone="neutral" muted size={size}>反复离题，静默到 {fmtMuteUntil(mute)}</StatusDot>;
   if (!showActive || replyMode === 'off') return null;
-  if (replyMode === 'suggest') return <StatusDot tone="info" muted size={size}>AI 推荐回复</StatusDot>;
   return <StatusDot tone="success" muted size={size}>机器人接待中</StatusDot>;
 }
 

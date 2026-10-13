@@ -216,7 +216,7 @@ export const api = {
   listAccounts: (o) => get('/api/accounts', o),
   createAccount: ({ name, channel }) => post('/api/accounts', { name, channel }),
   getAccount: (id, o) => get(`/api/accounts/${enc(id)}`, o),
-  /** 改号的设置（只有 admin，agent 一律 403）。回复方式用 replyMode: 'off' | 'suggest' | 'auto' */
+  /** 改号的设置（只有 admin，agent 一律 403）。回复方式用 replyMode: 'off'（人工回复）| 'auto'（自动回复） */
   putAccount: (id, patch, o) => put(`/api/accounts/${enc(id)}`, patch, o),
   deleteAccount: (id) => del(`/api/accounts/${enc(id)}`),
   /** 号码配置导出（admin）→ {format, version, exportedAt, accounts}，含密钥明文 */

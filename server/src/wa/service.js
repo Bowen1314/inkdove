@@ -1,4 +1,4 @@
-// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式、回复方式（关闭 / 推荐回复 / 自动回复）、回复范围、通知和代理；
+// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式、回复方式（人工回复 / 自动回复）、回复范围、通知和代理；
 // 会话 id 是 <accountId>:<chatId>。四层防滥用的第 4 层（会话级闸门）在这里，回复拟真（F1/F14）和
 // 在 WhatsApp 里处理转人工（F3）也在这里。
 import crypto from 'node:crypto';
@@ -882,10 +882,9 @@ export function createWaService(ctx, opts = {}) {
          contact_number = CASE WHEN excluded.contact_number <> '' THEN excluded.contact_number ELSE conversations.contact_number END`,
     ).run(convId, acc.id, m.chatId, acc.channel, clip(m.contactName || '', 100), number || '', now, now);
     const conv = getConvRow(convId);
-    // 机器人要不要处理这条：自动回复看会话有没有暂停；推荐回复不看（人工发过消息会话就会暂停，推荐照样给下一条客户消息起草）
-    const suggest = acc.replyMode === 'suggest';
-    const botOn = suggest || (acc.replyMode === 'auto' && !conv.bot_paused);
-    // F4：开了对应的识别、机器人要处理（自动回复且会话没暂停，或推荐回复）、模型已配置时，先存一条占位消息，识别成文字后再进回复流程
+    // 机器人只在自动回复、会话没暂停时处理；人工回复的号只存消息，不调用模型（推荐回复要业务员在会话页手动要）
+    const botOn = acc.replyMode === 'auto' && !conv.bot_paused;
+    // F4：开了对应的识别、机器人要处理、模型已配置时，先存一条占位消息，识别成文字后再进回复流程
     const s = settings();
     if (m.media && (m.media.type === 'voice' ? s.media.voice : s.media.image) && botOn && llmConfigured(s, config)) {
       const label = m.media.type === 'voice' ? '[语音]' : '[图片]';
@@ -910,8 +909,8 @@ export function createWaService(ctx, opts = {}) {
     }
     const willProcess = isText && botOn;
     let skipReason = null;
-    if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，${suggest ? '不生成推荐回复' : '已通知人工'}`;
-    else if (acc.replyMode === 'off') skipReason = '这个号没开自动回复';
+    if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，已通知人工`;
+    else if (acc.replyMode !== 'auto') skipReason = '这个号没开自动回复';
     else if (conv.bot_paused) skipReason = '会话已暂停（人工接管中）';
     const res = db
       .prepare(
@@ -934,9 +933,8 @@ export function createWaService(ctx, opts = {}) {
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
     abortSending(convId, 'new_message');
     if (!isText) {
-      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）。
-      // 推荐回复模式本来就是人来回，不标待处理、不通知
-      if (!suggest) flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
+      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）
+      flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
       return 'archived_media';
     }
     if (willProcess) {
@@ -972,8 +970,7 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 下载 → 检查大小、格式、时长 → 转写或描述 → 把占位消息改成文字（kind=text，等下一轮处理）。
-   * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）；
-   * 号在推荐回复模式时只记 skipped 和原因，不标待处理、不通知、不写处理记录。
+   * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）。
    */
   async function convertMedia(acc, convId, msgId, m) {
     const started = Date.now();
@@ -983,12 +980,7 @@ export function createWaService(ctx, opts = {}) {
     const fail = (code, why) => {
       const row = db.prepare('SELECT handled FROM messages WHERE id = ?').get(msgId);
       if (!row || row.handled || closed) return;
-      const desc = code === 'media_unsupported' ? `${what}超出识别范围：${why}` : `${what}识别失败：${why}`;
-      if (accounts.get(acc.id)?.replyMode === 'suggest') {
-        db.prepare("UPDATE messages SET handled = 1, bot_decision = 'skipped', decision_reason = ? WHERE id = ?").run(desc, msgId);
-        return;
-      }
-      const reason = `${desc}，已通知人工`;
+      const reason = code === 'media_unsupported' ? `${what}超出识别范围：${why}，已通知人工` : `${what}识别失败：${why}，已通知人工`;
       db.prepare("UPDATE messages SET handled = 1, bot_decision = 'handoff', decision_reason = ?, decision_code = ? WHERE id = ?").run(
         reason,
         code,
@@ -1097,7 +1089,6 @@ export function createWaService(ctx, opts = {}) {
     const acc = conv.account_id ? accounts.get(conv.account_id) : null;
 
     if (!acc) return void settle('skipped', '这个号已删除');
-    if (acc.replyMode === 'suggest') return suggestPending(acc, conv, settle);
     if (acc.replyMode !== 'auto') return void settle('skipped', '这个号没开自动回复');
     if (conv.bot_paused) return void settle('skipped', '会话已暂停（人工接管中）');
     if (!llmConfigured(s, config)) {
@@ -1251,20 +1242,19 @@ export function createWaService(ctx, opts = {}) {
       });
   }
 
-  // ---------------- 推荐回复（号的回复方式为 suggest，以及会话页手动「换一条」） ----------------
+  // ---------------- 推荐回复（只能手动要：会话页「推荐回复」「换一条」；客户来消息时不会自动起草） ----------------
   /**
    * 推荐回复的输入：「客户这次的消息」= 我方最后一条消息之后客户发的所有消息（合并，最多最近 20 条），加上它们之前的最近对话。
-   * 我方最后一条之后客户没再发（我方已经回了）时：latest=true 取最近一段连续的客户消息（手动「换一条」用），否则 null。
-   * 会话里一条客户消息都没有也是 null。
+   * 我方最后一条之后客户没再发（我方已经回了）时，取最近一段连续的客户消息。会话里一条客户消息都没有时为 null。
    */
-  function suggestInput(convId, { latest = false } = {}) {
+  function suggestInput(convId) {
     const lastOut = db.prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out'").get(convId).n;
     const inSince = (after, upTo) =>
       db
         .prepare("SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND seq > ? AND seq <= ? ORDER BY seq")
         .all(convId, after, upTo);
     let rows = inSince(lastOut, Number.MAX_SAFE_INTEGER);
-    if (!rows.length && latest) {
+    if (!rows.length) {
       const lastIn = db.prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in'").get(convId).n;
       if (lastIn == null) return null;
       const outBefore = db
@@ -1321,39 +1311,6 @@ export function createWaService(ctx, opts = {}) {
   /** 从 startSeq 之后我方有没有发过消息（后台、手机、机器人、外联都算） */
   const repliedSince = (convId, startSeq) =>
     !!db.prepare("SELECT 1 FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq > ? LIMIT 1").get(convId, startSeq);
-
-  /**
-   * 推荐回复模式下防抖后的一轮：起草一条推荐回复存进 draft（kind=suggest），不发送；
-   * 不暂停会话、不标待处理、不通知、不写处理记录（decisions）。消息记 suggested；模型没配置、到了当天上限、生成失败记 skipped。
-   * 生成期间我方已经回了的，丢掉结果（这时这几条消息一般已被人工接管记成 skipped）。
-   */
-  async function suggestPending(acc, conv, settle) {
-    if (!llmConfigured(settings(), config)) {
-      log.warn('[wa] 模型未配置，跳过推荐回复');
-      return void settle('skipped', '还没有配置模型');
-    }
-    const today = localDay();
-    const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
-    if (usedToday + 1 > DAILY_LLM_LIMIT) {
-      log.warn(`[wa] 会话 ${conv.id} 今天的模型调用已达上限（${usedToday}/${DAILY_LLM_LIMIT}）`);
-      return void settle('skipped', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`);
-    }
-    const input = suggestInput(conv.id);
-    if (!input) return void settle('skipped', '我方已经回复');
-    let r;
-    try {
-      // 自动生成用会话负责人的个人话术
-      r = await generateSuggestion(acc, conv.id, input, { stylePrompt: stylePromptOf(conv.assignee_id) });
-    } catch (err) {
-      log.warn(`[wa] 会话 ${conv.id} 生成推荐回复失败：${err?.message || err}`);
-      return void settle('skipped', clip(`生成推荐回复失败：${err?.message || err}`, 500));
-    }
-    if (closed) return;
-    if (!getConvRow(conv.id)) return;
-    if (repliedSince(conv.id, r.startSeq)) return void settle('skipped', '生成推荐回复期间我方已经回复，推荐作废');
-    db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(r.draft), conv.id);
-    settle('suggested', '已生成推荐回复');
-  }
 
   /**
    * F2a：转人工时给人工起草一条回复（不自动发送）。当天 LLM 次数不够、生成失败时不带草稿；
@@ -2248,7 +2205,7 @@ export function createWaService(ctx, opts = {}) {
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
       if (!acc) throw badRequest('这个会话所属的号已删除', 'account_deleted');
       if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
-      const input = suggestInput(convId, { latest: true });
+      const input = suggestInput(convId);
       if (!input) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
       const today = localDay();
       const usedToday = conv.llm_day === today ? conv.llm_calls : 0;

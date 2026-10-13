@@ -77,13 +77,13 @@ export const AUTHOR_LABEL = {
   owner: '手机回复',
 };
 
-// 号的回复方式（replyMode）。新建的号默认 suggest；desc 是号详情里选中时下面那句说明
+// 号的回复方式（replyMode）。新建的号默认 off（人工回复）；desc 是号详情里选中时下面那句说明。
+// 推荐回复不是一种回复方式：两种方式下都能在会话页点「推荐回复」手动要一条（v0.3.0 的 suggest 模式已取消，后端按 off 返回）
 export const REPLY_MODES = [
-  { value: 'off', label: '关闭', desc: '只保存客户消息，不自动回复，也不起草推荐回复。' },
   {
-    value: 'suggest',
-    label: '推荐回复',
-    desc: 'AI 读上下文起草一条推荐回复放在会话页，业务员改好、确认后自己发。机器人不直接回客户。',
+    value: 'off',
+    label: '人工回复',
+    desc: '客户来消息不会自动调用 AI，由业务员回复。需要时在会话页点「推荐回复」，AI 按知识库和话术起草一条，改好再发。',
   },
   { value: 'auto', label: '自动回复', desc: '机器人根据知识库直接回复客户，拿不准的问题不回，转给人工并通知。' },
 ];
@@ -121,7 +121,7 @@ export const ASK_DECISION = {
   offtopic: { label: '离题', tone: 'gray' },
 };
 
-// 客户消息上的 botDecision（replied 不标）
+// 客户消息上的 botDecision（replied 不标）。suggested 只在 v0.3.0 推荐回复模式的历史消息上有
 export const BOT_DECISION_NOTE = {
   offtopic: '离题·未回复',
   handoff: '转人工',

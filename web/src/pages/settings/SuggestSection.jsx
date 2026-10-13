@@ -18,7 +18,7 @@ const PLACEHOLDER = `例如：
 
 const toDraft = (s) => ({ companyPrompt: s?.companyPrompt || '' });
 
-/** 推荐回复：公司话术（管理员写，所有业务员的推荐回复都会带上） */
+/** 推荐回复：公司话术（管理员写，所有人在会话页手动要的推荐回复都会带上） */
 export default function SuggestSection({ settings, onSaved }) {
   const [draft, setDraft, base] = useSliceDraft(settings.suggest, toDraft);
   const [saving, setSaving] = useState(false);
@@ -51,7 +51,7 @@ export default function SuggestSection({ settings, onSaved }) {
       <SettingsRow
         label="公司话术"
         htmlFor="sg-company"
-        hint="AI 起草推荐回复时按这里的要求说话：称呼、署名、语气、常用说法。业务员还可以在「我的话术」里加自己的习惯。"
+        hint="在会话页点「推荐回复」时，AI 按这里的要求起草：称呼、署名、语气、常用说法。每个人还可以在「我的话术」里加自己的习惯。"
         help="优先级：起草规则 > 公司话术 > 个人习惯，冲突时以前者为准。话术只管怎么说，不能让 AI 编造价格、交期和承诺；需要人拍板的地方 AI 仍会写成【待你确认：…】。"
       >
         <textarea

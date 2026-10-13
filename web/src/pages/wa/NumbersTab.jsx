@@ -594,7 +594,7 @@ export default function NumbersTab() {
         title={isAdmin ? '还没有添加号码' : '还没有分配给你的号码'}
         desc={
           isAdmin
-            ? '添加一个 WhatsApp 号，扫码或接入 Meta 官方接口后，AI 就能帮你推荐回复或自动回复客户。一个企业可以接多个号，共用同一个知识库。'
+            ? '添加一个 WhatsApp 号，扫码或接入 Meta 官方接口后，客户消息会进到「会话」里，需要时让 AI 推荐回复，也可以开自动回复。一个企业可以接多个号，共用同一个知识库。'
             : '请联系管理员把号码分配给你。'
         }
         action={addButton}

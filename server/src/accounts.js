@@ -7,8 +7,11 @@ import { badRequest, HttpError, isPlainObject, nowIso, safeJsonParse } from './u
 import { releaseLostAccess } from './wa/assign.js';
 
 export const CHANNELS = ['waha', 'meta'];
-/** 回复方式：off 不回复（只存消息）、suggest 推荐回复（AI 起草，业务员确认后发）、auto 自动回复 */
-export const REPLY_MODES = ['off', 'suggest', 'auto'];
+/**
+ * 回复方式：off 人工回复（只存消息，不调用模型；业务员需要时在会话页手动要推荐回复）、auto 自动回复。
+ * v0.3.0 还有 suggest（客户来消息自动起草推荐回复），已取消：库里存的、PUT 收到的、导入文件里的 suggest 都按 off
+ */
+export const REPLY_MODES = ['off', 'auto'];
 export const PROXY_PROTOCOLS = ['http', 'https', 'socks4', 'socks5'];
 export const DELETED_ACCOUNT_NAME = '（已删除）';
 
@@ -18,7 +21,7 @@ export const conversationIdOf = (accountId, chatId) => `${accountId}:${chatId}`;
 
 function defaultConfig(channel) {
   return {
-    replyMode: 'suggest',
+    replyMode: 'off',
     persona: '',
     scope: 'all',
     allowlist: [],
@@ -34,16 +37,19 @@ function defaultConfig(channel) {
 
 /** 旧的 autoReply 开关 → 回复方式：开 → auto，关（或没有）→ off */
 const replyModeOfLegacy = (autoReply) => (autoReply === true ? 'auto' : 'off');
+/** 已取消的 suggest（v0.3.0 的推荐回复模式）当 off，其他值原样返回 */
+const withoutSuggest = (replyMode) => (replyMode === 'suggest' ? 'off' : replyMode);
 
 /** DB 行 → 内部对象（含密钥，只在服务端用） */
 export function rowToAccount(r) {
   if (!r) return null;
   const base = defaultConfig(r.channel);
-  const { autoReply, replyMode, ...c } = safeJsonParse(r.config, {}) || {};
+  const { autoReply, replyMode: stored, ...c } = safeJsonParse(r.config, {}) || {};
+  // v0.3.0 存的 suggest 读成 off（下次保存时写 off）；更早只存了 autoReply、没有 replyMode 的，开着的算 auto，关着的算 off
+  const replyMode = withoutSuggest(stored);
   const cfg = {
     ...base,
     ...c,
-    // 升级前存的是 autoReply，没有 replyMode：开着的算 auto，关着的算 off（不会变成默认的 suggest）
     replyMode: REPLY_MODES.includes(replyMode) ? replyMode : replyModeOfLegacy(autoReply),
     waha: base.waha ? { proxy: { ...base.waha.proxy, ...(c.waha?.proxy || {}) } } : null,
     meta: base.meta ? { ...base.meta, ...(c.meta || {}) } : null,
@@ -170,7 +176,8 @@ const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
 /**
  * 号的部分更新。接口层面整个 PUT 只有 admin 能调（agent 一律 403，见 routes/accounts.js）；
  * isAdmin=false 时 name、waha.proxy、meta.* 仍然拒绝，留作第二道防线。
- * 回复方式：replyMode（off / suggest / auto）；也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
+ * 回复方式：replyMode（off / auto）；suggest 按 off 处理（兼容 v0.3.0 的客户端），其他值 400。
+ * 也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
  * @param {any} current 内部对象
  * @param {any} patch
  * @param {{isAdmin:boolean, emailReady:boolean}} o
@@ -191,8 +198,9 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady }) {
     a.name = v;
   }
   if (patch.replyMode !== undefined) {
-    if (!REPLY_MODES.includes(patch.replyMode)) throw badRequest('replyMode 只能是 off、suggest 或 auto');
-    a.replyMode = patch.replyMode;
+    const mode = withoutSuggest(patch.replyMode);
+    if (!REPLY_MODES.includes(mode)) throw badRequest('replyMode 只能是 off 或 auto');
+    a.replyMode = mode;
   } else if (patch.autoReply !== undefined) {
     a.replyMode = replyModeOfLegacy(boolField(patch.autoReply, 'autoReply'));
   }
@@ -306,7 +314,8 @@ export function exportAccount(acc) {
 /**
  * 校验导入文件。全部合法才返回要新建的号；有一个不合法就抛 400（说明第几个号、哪个字段），一个都不建。
  * 每个号的校验和新建、更新共用（applyAccountPatch），缺的字段按新建号的默认值。
- * 回复方式：有 replyMode 用 replyMode；升级前导出的文件只有 autoReply，按 true → auto、false → off 换算；两个都没有按默认（suggest）。
+ * 回复方式：有 replyMode 用 replyMode（v0.3.0 导出的 suggest 按 off）；升级前导出的文件只有 autoReply，按 true → auto、false → off 换算；
+ * 两个都没有按默认（off）。
  * 唯一的例外是邮件通知：号里开了邮件通知、但这里还没配发信方式时不报错，
  * 而是把它关掉（收件人 to 保留），并在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON

@@ -67,7 +67,7 @@ const scopeLabel = (s) => REPLY_SCOPES.find((x) => x.value === (s === 'allowlist
 /**
  * 号详情的「回复」分组。admin：回复方式（Segmented，即时生效）、persona、回复范围、黑白名单（走保存栏）；
  * agent：同样几项只读展示（PUT /api/accounts/:id 对 agent 一律 403）。
- * 回复范围和名单对三种回复方式都生效（范围外的消息不保存），persona 自动回复和推荐回复都用，所以一直显示。
+ * 回复范围和名单对两种回复方式都生效（范围外的消息不保存），persona 自动回复和推荐回复都用，所以一直显示。
  * globalSettings：admin 才拿得到，用来在 persona 占位里显示全局设置。
  */
 export default function ReplySection({ account, setAccount, globalSettings, isAdmin }) {
@@ -179,7 +179,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
         </div>
         <div className="field__hint">
           {modeDesc(mode)}
-          {mode === 'suggest' && (
+          {mode === 'off' && (
             <>
               {' '}
               公司话术在
@@ -190,7 +190,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
             </>
           )}
         </div>
-        {mode !== 'off' && !isConnected(account) && (
+        {mode === 'auto' && !isConnected(account) && (
           <div className="field__hint numbers-reply__warn">
             这个号还没连接，{replyModeLabel(mode)}暂时不会生效。
             <Link to={connectPath} className="link">
@@ -262,7 +262,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
       <SettingsRow
         label="黑名单"
         htmlFor="rp-block"
-        hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复或起草推荐回复，适合填家人、朋友。"
+        hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复，适合填家人、朋友。"
       >
         <textarea
           id="rp-block"
@@ -322,7 +322,7 @@ function TestLine({ label, result }) {
 
 const EMAIL_NOT_CONFIGURED = '还没有配置发信方式，先到设置里配置才能发邮件通知';
 
-const NOTIFY_DESC = '自动回复模式下，机器人拿不准的问题不会回复客户，会通知你来处理';
+const NOTIFY_DESC = '需要人来处理时通知你：自动回复模式下机器人拿不准、没回复的问题，以及客户发来的语音、图片等机器人处理不了的消息';
 
 /**
  * 号详情的「通知」分组。admin 能改；agent 只看开关状态（收件邮箱、号码接口不给 agent，改和测试通知都是 403）。

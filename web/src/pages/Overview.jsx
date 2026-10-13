@@ -153,8 +153,6 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
     (healthAccounts
       ? healthAccounts.map((a) => ({ id: a.id, name: a.name, channel: a.channel, status: { state: a.state }, replyMode: undefined }))
       : null);
-  // 回复方式只有管理员能改，提醒也只给管理员
-  const idleConnected = isAdmin ? (list || []).filter((a) => isConnected(a) && replyModeOf(a) === 'off') : [];
 
   let body;
   if (!list && loading) {
@@ -212,11 +210,6 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
         </Link>
       </div>
       {body}
-      {idleConnected.length > 0 && (
-        <p className="ov-numbers__warn text-sm text-warning">
-          {idleConnected.map((a) => a.name).join('、')} 已连接，但回复方式是「关闭」，客户消息不会自动回复，也不会起草推荐回复。
-        </p>
-      )}
     </section>
   );
 }

@@ -574,7 +574,7 @@ describe('号码配置导出 / 导入（admin）', () => {
     assert.match(r.body.skipped[0].reason, /文件里前面的号「甲」/);
     // 缺的字段按新建号的默认值
     const yi = t.ctx.accounts.get(r.body.created[0].id);
-    assert.equal(yi.replyMode, 'suggest');
+    assert.equal(yi.replyMode, 'off');
     assert.equal(yi.meta.apiVersion, t.ctx.accounts.get(r.body.created[1].id).meta.apiVersion);
   });
 
