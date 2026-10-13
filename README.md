@@ -46,7 +46,8 @@ Dockerfile、docker-compose.yml、.env.example
 ```bash
 cp .env.example .env
 # 至少填：INKDOVE_ADMIN_EMAIL、INKDOVE_ADMIN_PASSWORD（≥12 位）、INKDOVE_SESSION_SECRET、
-#        INKDOVE_WAHA_WEBHOOK_SECRET、INKDOVE_WAHA_API_KEY（后三个用 openssl rand -hex 32 生成）
+#        INKDOVE_WAHA_WEBHOOK_SECRET、INKDOVE_WAHA_API_KEY、INKDOVE_UPDATER_TOKEN（后四个用 openssl rand -hex 32 生成；
+#        最后一个是在线更新用的，不要的话见下文「在线更新」）
 docker compose up -d --build
 ```
 
@@ -91,6 +92,31 @@ docker compose pull && docker compose up -d
 - 会话的可见范围从"按号"改成"按客户"：业务员只看得到分给自己的会话（还要有这个号的权限），管理员仍然看得到全部。
 - 升级后第一次启动时自动迁移一次（库里记了标记，之后不再跑）：已有的会话，如果它所属的号**恰好只有一个**启用中（没停用）的业务员有权限，就分给这个业务员；同一个号有两个及以上业务员、或者一个都没有的，保持未分配，只有管理员看得到，要管理员在会话页分配（可以多选批量分配）。迁移之后新来的会话一律未分配。
 
+## 在线更新
+
+**怎么工作**：
+
+- 应用启动 1 分钟后查一次 GitHub 上的最新发布（`GET https://api.github.com/repos/<INKDOVE_UPDATE_REPO>/releases/latest`，匿名，每个 IP 每小时 60 次），之后每 6 小时查一次，结果只存在内存里。预发布不提示。`INKDOVE_UPDATE_CHECK=0` 时完全不访问 GitHub。
+- 有新版本时，管理员在侧栏底部看到「有新版本 vX.Y.Z」，点开是新版本的说明（发布时间、更新说明、GitHub Release 链接）。**设置 → 版本**里能看当前版本、上次检查时间，手动「检查更新」（60 秒内重复点直接给上次的结果）。业务员看不到这些。
+- 装了更新助手时，弹窗里有「立即更新」：确认后应用先把数据库备份到 `./data/backups/`，再调 compose 里的 `updater` 服务（镜像 `nickfedor/watchtower:1.23.0`，`POST /v1/update?image=ghcr.io/bowen1314/inkdove&async=true`，带口令）。它拉同一个标签的新镜像、重建 `inkdove` 容器，期间后台约 1 分钟打不开；`waha` 容器打了不更新的标签，WhatsApp 连接不受影响。页面每 3 秒问一次版本号，变了就自动刷新；5 分钟还没变会提示去服务器上看（`docker compose logs updater`）并给出手动命令。
+- 没装更新助手、连不上它、或者镜像钉了版本号时，弹窗里只显示命令，在 `docker-compose.yml` 所在目录执行：
+
+  ```bash
+  docker compose pull
+  docker compose up -d
+  ```
+
+**安全**：更新助手挂了宿主机的 `/var/run/docker.sock`，等于能操作宿主机上所有容器。所以 compose 里它不映射任何端口，只在 compose 内网里给 `inkdove` 调；`INKDOVE_UPDATER_TOKEN` 要用足够长的随机串（`openssl rand -hex 32`）；它只更新打了 `com.centurylinklabs.watchtower.enable=true` 标签的容器（只有 `inkdove`）。不想要它：把 `docker-compose.yml` 里的 `updater` 整段删掉，`.env` 里的 `INKDOVE_UPDATER_TOKEN` 留空，网页上会改为显示上面的命令。
+
+**钉版本号**：更新助手只会重新拉「同一个标签」的新镜像。镜像标签用 `latest`（默认）时一键更新能升到新版；用 `0.2` 这种浮动标签时只能升到 0.2.x；在 `.env` 里设 `INKDOVE_IMAGE_TAG=0.2.0` 这种完整版本号时，一键更新升不上去，网页上只提示新版本，要先把标签改成新版本号再执行上面的命令。
+
+**更新前的备份**：每次一键更新前用 SQLite 在线备份把数据库拷到 `./data/backups/inkdove-v<旧版本>-<UTC 时间>.db`，只留最近 5 份；备份失败就不更新。上传的文件不在备份里（更新不会动它们）。手动用命令更新时不会自动备份，可以先自己拷一份 `./data`。
+
+**回滚**：
+
+1. 在 `.env` 里把 `INKDOVE_IMAGE_TAG` 设成旧版本号（比如 `0.1.0`），执行 `docker compose up -d`；
+2. 新版本改过数据库、旧版本读不了时，先 `docker compose stop inkdove`，把 `./data/inkdove.db` 换成 `./data/backups/` 里对应的备份（同时删掉旁边的 `inkdove.db-wal`、`inkdove.db-shm`），再 `docker compose up -d`。备份之后新产生的数据（新消息、改过的设置）会丢。
+
 ## 本地开发和测试
 
 需要 Node 20.18.1 及以上。
@@ -126,6 +152,7 @@ npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问�
 | `INKDOVE_SESSION_SECRET` | ✔ | cookie 签名密钥，也用来算 WAHA 配置指纹 |
 | `INKDOVE_WAHA_WEBHOOK_SECRET` | ✔ | WAHA webhook 的 HMAC 密钥 |
 | `INKDOVE_WAHA_API_KEY` | compose 里必填 | WAHA 的 `X-Api-Key`，compose 同时传给 waha 容器 |
+| `INKDOVE_UPDATER_TOKEN` | compose 里必填 | 更新助手的口令，compose 同时传给 updater 容器。像其他密钥一样用 `openssl rand -hex 32` 生成；删掉 updater 服务时留空，网页上改为显示更新命令 |
 | `INKDOVE_PORT` | | 默认 8794 |
 | `INKDOVE_DATA_DIR` | | 默认 `./data`，compose 里是 `/app/data` |
 | `INKDOVE_PUBLIC_BASE_URL` | | 对外地址：Meta 回调地址、邀请链接、通知里的后台链接都用它 |
@@ -137,6 +164,10 @@ npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问�
 | `INKDOVE_WAHA_SESSION` | | 仅第一期升级用：迁移成「默认号」时沿用的 session 名 |
 | `INKDOVE_LLM_BASE_URL` 等 4 个 | | LLM 初始值，只在第一次启动时写进库，之后以设置页为准 |
 | `INKDOVE_LLM_MOCK` | | 设 1 走假 LLM |
+| `INKDOVE_UPDATE_CHECK` | | 默认开：启动 1 分钟后、之后每 6 小时查一次 GitHub 上的最新发布。设 0 关掉，不再访问 GitHub |
+| `INKDOVE_UPDATE_REPO` | | 查哪个仓库的发布，默认 `Bowen1314/inkdove`；镜像名按它推出来（`ghcr.io/<小写的 owner/repo>`） |
+| `INKDOVE_UPDATER_URL` | | 更新助手的地址，默认 `http://updater:8080`（compose 内网） |
+| `INKDOVE_IMAGE_TAG` | | 应用镜像的标签，默认 `latest`；compose 用它拼镜像名，也传给应用判断能不能一键升级 |
 | `INKDOVE_META_GRAPH_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |
 
 ## 两种接入方式的区别和风险
@@ -600,6 +631,16 @@ WAHA 的 GOWS 引擎只会走 HTTP 代理：它把代理地址固定拼成 `http
     - **列表筛选**：admin 传不存在的成员 id 返回空数组；agent 传自己的 id 等同 `me`。号级的规则没变：`accountId` 指定没权限的号仍然 403，号码页、号的状态和外联任务仍然按号判断；
     - **`assignedCount`** 除了 `GET /api/users`，新建成员和 `PUT /api/users/:id` 返回的成员也带；`/api/auth/me` 不带；
     - **日志**只记数量和邮箱，不记会话 id（里面有客户号码）。
+47. **在线更新里约定没定、按自己理解做的**（详见「在线更新」，代码在 `server/src/update.js`，更新助手的接口参数集中在里面的 `UPDATER_API`）：
+    - **多了 `INKDOVE_IMAGE_TAG`**：应用自己看不到 compose 用的镜像标签，没法判断钉没钉版本，所以 compose 改成 `ghcr.io/bowen1314/inkdove:${INKDOVE_IMAGE_TAG:-latest}`，同一个变量也传给应用。镜像名（不带标签，传给更新助手的 `image=`）按 `INKDOVE_UPDATE_REPO` 推：`ghcr.io/<小写的 owner/repo>`，所以改了 `INKDOVE_UPDATE_REPO` 时 compose 里 `inkdove` 的 `image:` 也要改成对应的镜像名，否则更新助手找不到要更新的容器。直接改 compose 里 `image:` 的标签（不用 `INKDOVE_IMAGE_TAG`）应用是看不出来的，一键更新会白等 5 分钟后提示手动命令。`latest` 不算钉；`x.y` 和最新版同一个小版本时不算钉；完整版本号、别的 `x.y`、自定义标签都算钉；
+    - **`GET /api/update` 多一个 `checkEnabled`**（设置页据此显示"已关闭检查"）。`updater.reachable` 只在设了口令时带，只建 TCP 连接探一下（1.5 秒超时），不发 HTTP 请求，免得误触发更新；
+    - **`POST /api/update/check` 60 秒内重复调用**返回上次的结果（200），不返回 429；同时点多次只请求一次 GitHub。关闭了检查时 400 `update_check_disabled`；
+    - **`POST /api/update/apply` 的其他错误**：镜像钉了版本 400 `image_pinned`（一键更新升不上去，不如直接拦下）；已经在更新 409 `update_in_progress`；备份失败 500 `backup_failed`。更新助手 15 秒不回应、口令不对（401/403）、返回别的状态码、连不上都是 502 `updater_failed`。成功返回 `{ok, from, to, backup}`，之后 10 分钟内再点也是 409（容器马上要重建；万一没重建，过了 10 分钟可以再点）；
+    - **GitHub 出错时**保留上次查到的结果，`error` 记原因；release 链接不是 https 的换成仓库的发布页；正文超过 2 万字截断。检查结果只在内存里，重启后要等首查；
+    - **备份**文件名 `inkdove-v<当前版本>-<UTC 时间，到秒>.db`，同一秒里重名加序号；按修改时间留最近 5 份，只删 `inkdove-v*.db`，目录里别的文件不碰。只备份数据库，不备份上传的文件；
+    - **compose 里 `INKDOVE_UPDATER_TOKEN` 用 `:?` 必填**（和 `INKDOVE_WAHA_API_KEY` 一样）：口令为空时 watchtower 起不来、会一直重启，不如让 compose 直接报错。updater 限内存 128m（和其他服务一样设了上限，这个值没实测）；
+    - **前端**：提示放在侧栏底部（和「演示模式」同一处）；设置页新增「版本」分组（`/settings/version`），原来设置页底部那行灰字版本号去掉了；版本号旁边有「源代码 · AGPL-3.0」链接，地址集中在 `web/src/lib/update.js` 的 `SOURCE_REPO_URL`。点了更新后版本号**变了**就刷新（不要求正好等于弹窗里的新版本，免得拉到更新的版本时一直等）；关掉弹窗照样在后台等；别的管理员已经点了更新（409）时一起等；
+    - **测试**：`test/helpers.js` 默认关掉检查（`INKDOVE_UPDATE_CHECK=0`）、不起定时器、GitHub 指向连不上的端口；`test/update.test.js` 打开检查并指向本地假 GitHub 和假更新助手。
 
 ## 已核实的外部接口
 

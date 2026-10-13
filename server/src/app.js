@@ -28,10 +28,12 @@ import { leadsRouter } from './routes/leads.js';
 import { redteamRouter } from './routes/redteam.js';
 import { sendBrandLogo, settingsRouter } from './routes/settings.js';
 import { sourcesRouter } from './routes/sources.js';
+import { updateRouter } from './routes/update.js';
 import { usersRouter } from './routes/users.js';
 import { waRouter } from './routes/wa.js';
 import { webhooksRouter } from './routes/webhooks.js';
 import { llmConfigured, loadSettings, publicBranding, saveSettings } from './settings.js';
+import { createUpdateService } from './update.js';
 import { HttpError } from './util.js';
 import { PROXY_TEST_URL } from './wa/proxy-test.js';
 import { createRelayManager } from './wa/relay.js';
@@ -64,6 +66,10 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   outreachIntervalMs?: () => number,
  *   outreachTickMs?: number,
  *   dashboardNow?: () => number,
+ *   githubApiUrl?: string,
+ *   updateFirstCheckMs?: number,
+ *   updateCheckIntervalMs?: number,
+ *   updateNow?: () => number,
  *   relayBindHost?: string,
  *   canary?: string,
  *   proxyTestUrl?: string,
@@ -145,6 +151,9 @@ export function createApp(config, options = {}) {
   ctx.redteam = createRedteamRunner(ctx);
   // F12：管理员数据看板（只读已经记下的数据）。dashboardNow 是测试用的时钟
   ctx.dashboard = createDashboard(ctx, { now: options.dashboardNow });
+  // 在线更新：启动 1 分钟后查一次 GitHub 最新发布，之后每 6 小时一次。githubApiUrl、updateNow 是测试用的，updateCheckIntervalMs 为 0 时不启动定时检查
+  ctx.update = createUpdateService(ctx, { version: VERSION, githubApiUrl: options.githubApiUrl, now: options.updateNow });
+  ctx.update.start(options.updateFirstCheckMs, options.updateCheckIntervalMs);
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
   const ready = ctx.wa.init().catch((err) => log.error(`[relay] 拉起代理中继出错：${err?.stack || err}`));
@@ -216,6 +225,7 @@ export function createApp(config, options = {}) {
   api.use('/distill', auth.requireAdmin, distillRouter(ctx));
   api.use('/redteam', auth.requireAdmin, redteamRouter(ctx));
   api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
+  api.use('/update', auth.requireAdmin, updateRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));
@@ -270,6 +280,7 @@ export function createApp(config, options = {}) {
       await ctx.wa.close();
       ctx.distill.abortAll();
       ctx.redteam.abortAll();
+      ctx.update.stop();
       try {
         db.close();
       } catch {

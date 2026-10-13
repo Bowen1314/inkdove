@@ -2,7 +2,8 @@ services:
   inkdove:
     # 用发布好的镜像：docker compose pull && docker compose up -d；本地改了代码用 --build 现编
     build: .
-    image: ghcr.io/bowen1314/inkdove:latest
+    # 标签在 .env 里用 INKDOVE_IMAGE_TAG 改（默认 latest）。latest 才能在网页上一键升到新版，钉成 0.2.0 时只提示新版本和命令
+    image: ghcr.io/bowen1314/inkdove:${INKDOVE_IMAGE_TAG:-latest}
     # 固定主机名：WAHA 经 inkdove:<端口> 连到 inkdove 起的代理中继（F13）
     hostname: inkdove
     restart: unless-stopped
@@ -13,6 +14,11 @@ services:
       INKDOVE_WAHA_URL: http://waha:3000
       INKDOVE_WAHA_WEBHOOK_URL: http://inkdove:8794/webhooks/waha
       INKDOVE_PROXY_RELAY_HOST: inkdove
+      # 告诉应用镜像钉没钉版本（网页上的在线更新据此决定能不能一键升级）
+      INKDOVE_IMAGE_TAG: ${INKDOVE_IMAGE_TAG:-latest}
+    # 在线更新：只让更新助手动这个容器
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     # 只映射后台端口；代理中继的端口（INKDOVE_PROXY_RELAY_PORT_BASE 起）只在 compose 内网里给 WAHA 用，不要映射
     ports:
       - "127.0.0.1:8794:8794"
@@ -28,6 +34,9 @@ services:
     # GOWS 引擎镜像，见 https://waha.devlike.pro/docs/how-to/engines/
     image: devlikeapro/waha:gows
     restart: unless-stopped
+    # 更新助手不碰 WAHA：WhatsApp 连接不受在线更新影响
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
     environment:
       WAHA_API_KEY: ${INKDOVE_WAHA_API_KEY:?请在 .env 里设置 INKDOVE_WAHA_API_KEY}
       WHATSAPP_DEFAULT_ENGINE: GOWS
@@ -42,3 +51,21 @@ services:
     mem_limit: 768m
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # 更新助手：网页上点「立即更新」时，inkdove 先备份数据库，再让它拉新镜像、重建 inkdove 容器（见 README「在线更新」）。
+  # 它挂了宿主机的 docker.sock，能操作宿主机上所有容器：不映射任何端口，只在 compose 内网里给 inkdove 调，口令要够长。
+  # 不想要就把这一段整个删掉（.env 里的 INKDOVE_UPDATER_TOKEN 也留空），网页上会改为显示更新命令。
+  # 原版 containrrr/watchtower 已归档、和 Docker 29 不兼容，这里用维护中的 fork，锁版本
+  updater:
+    image: nickfedor/watchtower:1.23.0
+    restart: unless-stopped
+    environment:
+      # 只开 HTTP API 的 update 接口；开了 HTTP API 后它默认不再定时轮询，只在 inkdove 调它时更新
+      WATCHTOWER_HTTP_API_ENDPOINTS: update
+      WATCHTOWER_HTTP_API_TOKEN: ${INKDOVE_UPDATER_TOKEN:?请在 .env 里设置 INKDOVE_UPDATER_TOKEN（不要在线更新就删掉 updater 服务）}
+      # 只更新打了 com.centurylinklabs.watchtower.enable=true 的容器（inkdove），更新完删掉旧镜像
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    mem_limit: 128m

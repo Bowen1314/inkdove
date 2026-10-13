@@ -24,12 +24,14 @@ import { useAuth } from './lib/auth.jsx';
 import { useBranding } from './lib/branding.jsx';
 import { roleLabel } from './lib/labels.js';
 import { setPendingCount, usePendingCount } from './lib/inboxCount.js';
+import { loadUpdateStatus, openUpdateModal, useUpdateState } from './lib/update.js';
 import { usePolling } from './hooks/usePolling.js';
 import { ChangePasswordModal } from './ui/ChangePasswordModal.jsx';
 import { Avatar } from './ui/Avatar.jsx';
 import { BrandMark } from './ui/BrandMark.jsx';
 import { Menu, Tooltip } from './ui/Popover.jsx';
 import { StatusDot } from './ui/StatusDot.jsx';
+import { UpdateModal } from './ui/UpdateModal.jsx';
 import { useDialogFocus } from './ui/overlay.js';
 
 /** 导航分组见 DESIGN.md 第 3 节；adminOnly 的项对业务员直接不渲染 */
@@ -60,8 +62,9 @@ const NAV = [
   },
 ];
 
-function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePassword }) {
+function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePassword, onOpenUpdate }) {
   const pending = usePendingCount();
+  const { status: update } = useUpdateState();
   const { displayTitle } = useBranding();
   const name = user?.name || user?.email || '未命名用户';
   return (
@@ -98,6 +101,12 @@ function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePasswo
       </nav>
 
       <div className="sidebar__foot">
+        {isAdmin && update?.available && (
+          <button type="button" className="sidebar__note" onClick={onOpenUpdate}>
+            <StatusDot tone="info" />
+            有新版本 v{update.latest.version}
+          </button>
+        )}
         {mock && (
           <Tooltip content="不会调用真实的 AI 模型，整理结果和回复内容都是模拟的。正式使用前请联系部署人员关闭演示模式。">
             <button type="button" className="sidebar__note">
@@ -178,6 +187,9 @@ export function Layout() {
     { immediate: true },
   );
 
+  // 管理员：有没有新版本（服务端每 6 小时查一次 GitHub，这里只读它缓存的结果），1 小时补一次
+  usePolling(loadUpdateStatus, 3600_000, isAdmin, { immediate: true });
+
   useEffect(() => setNavOpen(false), [pathname]);
 
   const logout = async () => {
@@ -198,6 +210,10 @@ export function Layout() {
     mock,
     onLogout: logout,
     onChangePassword: () => setPwdOpen(true),
+    onOpenUpdate: () => {
+      setNavOpen(false);
+      openUpdateModal();
+    },
   };
 
   return (
@@ -223,6 +239,7 @@ export function Layout() {
         <SidebarContent {...sidebarProps} />
       </MobileNav>
       <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
+      {isAdmin && <UpdateModal />}
     </div>
   );
 }

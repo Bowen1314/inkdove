@@ -11,8 +11,9 @@ import EmailSection from './EmailSection.jsx';
 import BrandSection from './BrandSection.jsx';
 import OutreachSection from './OutreachSection.jsx';
 import PricingSection from './PricingSection.jsx';
+import VersionSection from './VersionSection.jsx';
 
-/** 分组子导航，每组一个子路由。「品牌」放最后。 */
+/** 分组子导航，每组一个子路由。「品牌」「版本」放最后。 */
 const NAV = [
   { to: '/settings/llm', label: 'AI 模型' },
   { to: '/settings/reply', label: '回复' },
@@ -22,9 +23,10 @@ const NAV = [
   { to: '/settings/outreach', label: '主动外联' },
   { to: '/settings/pricing', label: '模型单价' },
   { to: '/settings/brand', label: '品牌' },
+  { to: '/settings/version', label: '版本' },
 ];
 
-const GROUPS = ['llm', 'reply', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand'];
+const GROUPS = ['llm', 'reply', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -78,21 +80,19 @@ export default function SettingsPage() {
   } else {
     const props = { settings, onSaved };
     content = (
-      <>
-        <Routes>
-          <Route index element={<SettingsIndex />} />
-          <Route path="llm" element={<LlmSection {...props} health={health} refreshHealth={refreshHealth} />} />
-          <Route path="reply" element={<ReplySettingsSection {...props} />} />
-          <Route path="media" element={<MediaSection {...props} />} />
-          <Route path="leads" element={<LeadsSection {...props} />} />
-          <Route path="email" element={<EmailSection {...props} />} />
-          <Route path="outreach" element={<OutreachSection {...props} />} />
-          <Route path="pricing" element={<PricingSection {...props} />} />
-          <Route path="brand" element={<BrandSection {...props} />} />
-          <Route path="*" element={<Navigate to="/settings/llm" replace />} />
-        </Routes>
-        {health?.version && <div className="settings-page__version">版本 {health.version}</div>}
-      </>
+      <Routes>
+        <Route index element={<SettingsIndex />} />
+        <Route path="llm" element={<LlmSection {...props} health={health} refreshHealth={refreshHealth} />} />
+        <Route path="reply" element={<ReplySettingsSection {...props} />} />
+        <Route path="media" element={<MediaSection {...props} />} />
+        <Route path="leads" element={<LeadsSection {...props} />} />
+        <Route path="email" element={<EmailSection {...props} />} />
+        <Route path="outreach" element={<OutreachSection {...props} />} />
+        <Route path="pricing" element={<PricingSection {...props} />} />
+        <Route path="brand" element={<BrandSection {...props} />} />
+        <Route path="version" element={<VersionSection />} />
+        <Route path="*" element={<Navigate to="/settings/llm" replace />} />
+      </Routes>
     );
   }
 

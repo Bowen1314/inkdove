@@ -1896,3 +1896,53 @@
   color: var(--text-muted);
   white-space: pre-wrap;
 }
+
+/* ============ 在线更新弹窗（ui/UpdateModal.jsx） ============ */
+.update-modal {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+.update-modal__notes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+/* release 正文：纯文本，保留换行，太长时框内滚动 */
+.update-modal__notes {
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-subtle);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.update-modal__progress {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+.update-modal__progress > .spinner {
+  flex: none;
+  margin-top: 2px;
+}
+.update-modal__progress-title {
+  font-weight: 500;
+}
+.update-cmd__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+.update-cmd__head > .muted {
+  flex: 1 1 240px;
+  min-width: 0;
+}

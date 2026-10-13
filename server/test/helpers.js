@@ -37,6 +37,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     INKDOVE_PUBLIC_BASE_URL: 'https://kb.example.com',
     INKDOVE_WAHA_URL: 'http://127.0.0.1:9', // 默认指向一个连不上的端口
     INKDOVE_PROXY_RELAY_PORT_BASE: String(relayPortBase()),
+    // 在线更新：默认不查 GitHub（update.test.js 自己打开，并指向假 GitHub）
+    INKDOVE_UPDATE_CHECK: '0',
     ...env,
   });
   const log = quietLog();
@@ -55,6 +57,9 @@ export async function startApp({ env = {}, options = {} } = {}) {
     // F11：外联不启动定时检查（要测时手动调 ctx.outreach.tick()），两条之间不等
     outreachTickMs: 0,
     outreachIntervalMs: () => 0,
+    // 在线更新：不启动定时检查，GitHub 指向连不上的端口，绝不访问外网
+    updateCheckIntervalMs: 0,
+    githubApiUrl: 'http://127.0.0.1:9',
     ...options,
   });
   const { app, ctx, close } = created;

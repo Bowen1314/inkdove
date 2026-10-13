@@ -43,6 +43,14 @@ export function loadConfig(env = process.env) {
       distillModel: get('INKDOVE_LLM_DISTILL_MODEL').trim(),
     },
     llmMock: bool('INKDOVE_LLM_MOCK'),
+    // 在线更新：每 6 小时查一次 GitHub 上的最新发布（INKDOVE_UPDATE_CHECK=0 关掉，不发任何外部请求）
+    updateCheck: !['0', 'false', 'no', 'off'].includes(get('INKDOVE_UPDATE_CHECK').trim().toLowerCase()),
+    updateRepo: get('INKDOVE_UPDATE_REPO').trim() || 'Bowen1314/inkdove',
+    // 更新助手（compose 里的 updater 服务）：没设口令就当没装，网页上只显示更新命令
+    updaterUrl: (get('INKDOVE_UPDATER_URL').trim() || 'http://updater:8080').replace(/\/+$/, ''),
+    updaterToken: get('INKDOVE_UPDATER_TOKEN').trim(),
+    // compose 里应用镜像的标签（默认 latest）。钉成 x.y.z 时一键更新升不上去，只提示命令
+    imageTag: get('INKDOVE_IMAGE_TAG').trim() || 'latest',
     // 仅测试用：覆盖 Meta Graph API 基址
     metaGraphUrl: (get('INKDOVE_META_GRAPH_URL').trim() || 'https://graph.facebook.com').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Resend API 地址
@@ -59,6 +67,8 @@ export function loadConfig(env = process.env) {
   if (!Number.isInteger(config.proxyRelayPortBase) || config.proxyRelayPortBase < 1024 || config.proxyRelayPortBase > 65000) {
     errors.push('INKDOVE_PROXY_RELAY_PORT_BASE 必须是 1024–65000 的整数');
   }
+  if (!/^[\w.-]+\/[\w.-]+$/.test(config.updateRepo)) errors.push('INKDOVE_UPDATE_REPO 要写成 owner/repo');
+  if (!/^[\w][\w.-]{0,127}$/.test(config.imageTag)) errors.push('INKDOVE_IMAGE_TAG 不是合法的镜像标签');
   if (errors.length) {
     const err = new Error(errors.join('；'));
     err.name = 'ConfigError';

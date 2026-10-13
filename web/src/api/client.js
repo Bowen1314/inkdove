@@ -196,6 +196,20 @@ export const api = {
   /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach}，结构见 SPEC-phase2 F12 */
   getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
 
+  // 在线更新（admin）
+  /**
+   * → {current, latest:{version, name, url, publishedAt, notes}|null, available, checkedAt, error, checkEnabled,
+   *    updater:{configured, reachable?}, image, pinned}。notes 是 release 正文，按纯文本显示
+   */
+  getUpdate: (o) => get('/api/update', o),
+  /** 立即检查（60 秒内查过就直接给上次的结果）→ 同 getUpdate。关闭了检查：400 code=update_check_disabled */
+  checkUpdate: (o) => post('/api/update/check', {}, o),
+  /**
+   * 先备份数据库，再让更新助手拉新镜像、重建容器 → {ok, from, to, backup}。
+   * 400 updater_not_configured | no_update | image_pinned，409 update_in_progress，500 backup_failed，502 updater_failed
+   */
+  applyUpdate: (o) => post('/api/update/apply', {}, o),
+
   // WhatsApp 号码（F7）
   listAccounts: (o) => get('/api/accounts', o),
   createAccount: ({ name, channel }) => post('/api/accounts', { name, channel }),

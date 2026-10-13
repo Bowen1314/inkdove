@@ -66,13 +66,6 @@
   margin-top: var(--sp-1);
 }
 
-.settings-page__version {
-  margin-top: var(--sp-6);
-  color: var(--text-muted);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-sm);
-}
-
 /* 模型单价表：单元格直接是输入框（DESIGN 第 5 节「行内编辑」）。不贴页面边距，数字列定宽 */
 .pricing-table {
   --gutter: 0;
