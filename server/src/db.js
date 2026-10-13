@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3';
@@ -370,6 +371,65 @@ CREATE INDEX IF NOT EXISTS campaign_recipients_number ON campaign_recipients(num
 CREATE INDEX IF NOT EXISTS messages_direction_ts ON messages(direction, ts);
 CREATE INDEX IF NOT EXISTS campaign_recipients_sent ON campaign_recipients(sent_at);
 `);
+
+  // ---- 按客户分配会话（读写见 wa/assign.js） ----
+  // conversations.assignee_id：负责这个会话的成员，NULL 是未分配（只有 admin 看得到）；assigned_at：最近一次改负责人的时间。
+  // conversation_assignments：负责人每变一次写一行。to_user_id 为 NULL 是取消分配，by_user_id 为 NULL 是系统做的；
+  //   reason：manual | bulk | transfer | migration | campaign | access_removed | user_deleted
+  ensureColumn(db, 'conversations', 'assignee_id', 'TEXT');
+  ensureColumn(db, 'conversations', 'assigned_at', 'TEXT');
+  db.exec(`
+CREATE INDEX IF NOT EXISTS conversations_assignee ON conversations(assignee_id);
+CREATE TABLE IF NOT EXISTS conversation_assignments (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  from_user_id TEXT,
+  to_user_id TEXT,
+  by_user_id TEXT,
+  reason TEXT NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignments(conversation_id, at);
+`);
+  migrateAssignments(db);
+}
+
+/**
+ * 升级到按客户分配时跑一次（kv 的 assignments_migrated 记标记，新装的库第一次启动就记上，之后新建的会话不会被它分配）：
+ * 已有会话里，它的号恰好只有一个启用中（disabled=0）的 agent 有权限的，分给这个 agent（reason=migration，系统做的）；
+ * 其余保持未分配。为的是升级后 agent 不至于什么都看不到。
+ * @param {import('better-sqlite3').Database} db
+ */
+function migrateAssignments(db) {
+  if (kvGet(db, 'assignments_migrated', false)) return;
+  db.transaction(() => {
+    /** @type {Map<string, string[]>} 号 id → 有权限的启用中 agent */
+    const agentsOf = new Map();
+    for (const u of db.prepare("SELECT id, account_ids FROM users WHERE role = 'agent' AND disabled = 0").all()) {
+      let ids = [];
+      try {
+        ids = JSON.parse(u.account_ids || '[]');
+      } catch {
+        /* 存坏了的按没有号 */
+      }
+      for (const accountId of Array.isArray(ids) ? new Set(ids) : []) {
+        if (!agentsOf.has(accountId)) agentsOf.set(accountId, []);
+        agentsOf.get(accountId).push(u.id);
+      }
+    }
+    const now = new Date().toISOString();
+    const update = db.prepare('UPDATE conversations SET assignee_id = ?, assigned_at = ? WHERE id = ? AND assignee_id IS NULL');
+    const history = db.prepare(
+      `INSERT INTO conversation_assignments(id, conversation_id, from_user_id, to_user_id, by_user_id, reason, at)
+       VALUES(?, ?, NULL, ?, NULL, 'migration', ?)`,
+    );
+    for (const c of db.prepare('SELECT id, account_id FROM conversations WHERE assignee_id IS NULL AND account_id IS NOT NULL').all()) {
+      const agents = agentsOf.get(c.account_id) || [];
+      if (agents.length !== 1) continue;
+      if (update.run(agents[0], now, c.id).changes) history.run(crypto.randomUUID(), c.id, agents[0], now);
+    }
+    kvSet(db, 'assignments_migrated', true);
+  })();
 }
 
 /**

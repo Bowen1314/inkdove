@@ -180,7 +180,7 @@ describe('F7 多个号：数据互不串', () => {
   });
 });
 
-describe('F8 agent 只能看分给自己的号', () => {
+describe('F8 agent 只能看分给自己的号，和号上分给自己的会话', () => {
   let t;
   let fake;
   let mine;
@@ -201,19 +201,22 @@ describe('F8 agent 只能看分给自己的号', () => {
     await wahaSend(t, other, CUSTOMER, '我要人工');
     await waitDecided(t, convIdOf(mine, CUSTOMER), 1);
     await waitDecided(t, convIdOf(other, CUSTOMER), 1);
+    // 按客户分配：新会话一律未分配，管理员把自己号上的这个会话分给他
+    const r = await t.req('PUT', `${convPath(convIdOf(mine, CUSTOMER))}/assignee`, { body: { userId: agent.user.id } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
   });
   after(async () => {
     await t.close();
     await fake.close();
   });
 
-  it('号列表、health、会话列表只含自己的号', async () => {
+  it('号列表、health 只含自己的号；会话列表只含分给自己的会话', async () => {
     assert.deepEqual((await as('GET', '/api/accounts')).body.map((x) => x.id), [mine.id]);
     const health = (await t.req('GET', '/api/health', { cookie: agent.cookie })).body;
     assert.deepEqual(health.accounts.map((x) => x.id), [mine.id]);
     const convs = (await as('GET', '/api/wa/conversations')).body;
-    assert.ok(convs.length >= 1);
-    assert.ok(convs.every((c) => c.accountId === mine.id));
+    assert.deepEqual(convs.map((c) => c.id), [convIdOf(mine, CUSTOMER)]);
+    assert.equal(convs[0].assignee.id, agent.user.id);
   });
 
   it('别人的号和会话：一律 403（不论存不存在）', async () => {
@@ -269,12 +272,17 @@ describe('F8 agent 只能看分给自己的号', () => {
     assert.equal(bot.status, 200);
   });
 
-  it('分配新号后立即可见；取消分配后立即 403', async () => {
+  it('分配新号后号立即可见，号上的会话要再分给他才可见；去掉号后立即 403，他在这个号上负责的会话变成未分配', async () => {
+    const cp = convPath(convIdOf(other, CUSTOMER));
     await t.req('PUT', `/api/users/${agent.user.id}`, { body: { accountIds: [mine.id, other.id] } });
     assert.equal((await as('GET', `/api/accounts/${other.id}`)).status, 200);
-    assert.equal((await as('GET', convPath(convIdOf(other, CUSTOMER)))).status, 200);
+    assert.equal((await as('GET', cp)).status, 403, '有号的权限但会话没分给他');
+    assert.equal((await t.req('PUT', `${cp}/assignee`, { body: { userId: agent.user.id } })).status, 200);
+    assert.equal((await as('GET', cp)).status, 200);
     await t.req('PUT', `/api/users/${agent.user.id}`, { body: { accountIds: [mine.id] } });
     assert.equal((await as('GET', `/api/accounts/${other.id}`)).status, 403);
+    assert.equal((await as('GET', cp)).status, 403);
+    assert.equal((await getConv(t, convIdOf(other, CUSTOMER))).assignee, null);
   });
 });
 

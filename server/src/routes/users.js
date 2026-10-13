@@ -1,7 +1,9 @@
 // F8 成员管理（仅 admin）。邀请和重置链接由管理员自己复制发给对方，系统不发邮件。
+// 按客户分配：每个成员带 assignedCount；删成员、agent 失去号的权限时他负责的会话变成未分配；转交把他的会话全部给另一个人。
 import express from 'express';
 import { normalizeEmail, ROLES, rowToUser } from '../auth.js';
 import { badRequest, HttpError, isPlainObject, newId, notFound, nowIso } from '../util.js';
+import { assignedCounts, releaseAll, releaseLostAccess, transferAll } from '../wa/assign.js';
 
 /**
  * @param {any} ctx
@@ -32,9 +34,12 @@ export function usersRouter(ctx, auth) {
     if (!row) throw notFound('成员不存在');
     return row;
   }
+  /** 成员 + assignedCount（当前负责的会话数） */
+  const view = (row, counts = assignedCounts(db)) => ({ ...rowToUser(row), assignedCount: counts.get(row.id) || 0 });
 
   router.get('/', (_req, res) => {
-    res.json(db.prepare('SELECT * FROM users ORDER BY created_at, rowid').all().map(rowToUser));
+    const counts = assignedCounts(db);
+    res.json(db.prepare('SELECT * FROM users ORDER BY created_at, rowid').all().map((r) => view(r, counts)));
   });
 
   router.post('/', (req, res) => {
@@ -52,7 +57,7 @@ export function usersRouter(ctx, auth) {
     ).run(id, normalizeEmail(email), name, role, JSON.stringify(accountIds), nowIso());
     const inviteUrl = auth.createLink(id, 'invite');
     ctx.log.info(`[users] ${req.user.email} 邀请了 ${email}（${role}）`);
-    res.json({ user: rowToUser(auth.getUserRow(id)), inviteUrl });
+    res.json({ user: view(auth.getUserRow(id)), inviteUrl });
   });
 
   router.put('/:id', (req, res) => {
@@ -69,28 +74,45 @@ export function usersRouter(ctx, auth) {
     }
     // 降级或停用最后一个启用中的 admin → 400 last_admin
     if ((row.role === 'admin' && next.role !== 'admin') || (!row.disabled && next.disabled)) auth.assertNotLastAdmin(row);
-    db.prepare('UPDATE users SET name = ?, role = ?, account_ids = ?, disabled = ? WHERE id = ?').run(
-      next.name,
-      next.role,
-      JSON.stringify(next.accountIds),
-      next.disabled ? 1 : 0,
-      row.id,
-    );
+    db.transaction(() => {
+      db.prepare('UPDATE users SET name = ?, role = ?, account_ids = ?, disabled = ? WHERE id = ?').run(
+        next.name,
+        next.role,
+        JSON.stringify(next.accountIds),
+        next.disabled ? 1 : 0,
+        row.id,
+      );
+      // agent 的 accountIds 去掉了某个号（或者 admin 降级成 agent）：他在没有权限的号上负责的会话变成未分配。
+      // 停用不动负责关系，等管理员转交
+      releaseLostAccess(db, row.id, req.user);
+    })();
     // 停用后这个人的所有会话立即失效
     if (next.disabled) auth.dropSessions(row.id);
-    res.json(rowToUser(auth.getUserRow(row.id)));
+    res.json(view(auth.getUserRow(row.id)));
   });
 
   router.delete('/:id', (req, res) => {
     const row = load(req.params.id);
     auth.assertNotLastAdmin(row);
+    let released = 0;
     db.transaction(() => {
+      // 他负责的会话变成未分配（要在删用户行之前）
+      released = releaseAll(db, row.id, req.user);
       db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(row.id);
       db.prepare('DELETE FROM invites WHERE user_id = ?').run(row.id);
       db.prepare('DELETE FROM users WHERE id = ?').run(row.id);
     })();
-    ctx.log.info(`[users] ${req.user.email} 删除了成员 ${row.email}`);
+    ctx.log.info(`[users] ${req.user.email} 删除了成员 ${row.email}${released ? `，${released} 个会话变成未分配` : ''}`);
     res.json({ ok: true });
+  });
+
+  // 转交客户：{toUserId} → 把这个成员负责的会话全部转给 toUserId，返回 {moved, skipped}。
+  // skipped 是目标 agent 没有对应号权限、保持原样的会话数；目标不存在、已停用、就是他自己 → 400 assignee_invalid
+  router.post('/:id/transfer', (req, res) => {
+    const row = load(req.params.id);
+    const r = transferAll(db, row.id, req.body?.toUserId, req.user);
+    ctx.log.info(`[users] ${req.user.email} 把 ${row.email} 负责的 ${r.moved} 个会话转交出去，${r.skipped} 个没有号权限没转`);
+    res.json(r);
   });
 
   router.post('/:id/reset-link', (req, res) => {

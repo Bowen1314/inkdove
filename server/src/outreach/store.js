@@ -430,7 +430,7 @@ export function createOutreach(ctx, opts = {}) {
     if (!open.length) return null;
     return db
       .prepare(
-        `SELECT r.*, c.message, c.meta_template_name, c.meta_template_language ${PENDING_JOIN}
+        `SELECT r.*, c.message, c.meta_template_name, c.meta_template_language, c.created_by_id ${PENDING_JOIN}
            AND COALESCE(r.tz, 'UTC') IN (${open.map(() => '?').join(', ')})
          ORDER BY c.started_at, c.rowid, r.seq LIMIT 1`,
       )
@@ -453,7 +453,7 @@ export function createOutreach(ctx, opts = {}) {
   /**
    * 给一个收件人发开场消息。返回 true 表示调了 WhatsApp 的接口（之后要等一个间隔），false 表示本地就跳过了。
    * @param {any} acc
-   * @param {any} r 收件人行（带任务的 message 和模板）
+   * @param {any} r 收件人行（带任务的 message、模板和发起人 created_by_id）
    */
   async function sendTo(acc, r) {
     const key = `${r.campaign_id}|${acc.id}`;
@@ -487,7 +487,8 @@ export function createOutreach(ctx, opts = {}) {
       const template = acc.channel === 'meta' ? { name: r.meta_template_name, languageCode: r.meta_template_language } : null;
       // Meta 发的是模板，会话里存一条说明是哪个模板
       const text = template ? `[模板] ${template.name}（${template.languageCode}）` : r.message;
-      const res = await ctx.wa.sendCampaignMessage(acc, { chatId, number: r.number, text, template });
+      // 发起人是有这个号权限的 agent 时，新会话分给他（按客户分配）
+      const res = await ctx.wa.sendCampaignMessage(acc, { chatId, number: r.number, text, template, createdById: r.created_by_id });
       const t = now();
       db.prepare(
         `UPDATE campaign_recipients SET status = 'sent', sent_at = ?, sent_day = ?, chat_id = ?, conversation_id = ?, error = NULL

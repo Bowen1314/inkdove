@@ -1,4 +1,4 @@
-// F6 客户线索：后台提取的触发条件、manualFields、阶段历史、每日上限、接口、CSV 导出和 F8 权限。
+// F6 客户线索：后台提取的触发条件、manualFields、阶段历史、每日上限、接口、CSV 导出和权限（按客户分配）。
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { after, before, beforeEach, describe, it } from 'node:test';
@@ -9,7 +9,7 @@ import { csvCell, normalizeExtraction } from '../src/leads/store.js';
 import { AI_METHOD_PURPOSE } from '../src/records.js';
 import { newId } from '../src/util.js';
 import { DAILY_LLM_LIMIT, localDay } from '../src/wa/service.js';
-import { convIdOf, startApp, startFakeWaha, waitDecided, waitFor, wahaMessage, wahaSend } from './helpers.js';
+import { convIdOf, convPath, startApp, startFakeWaha, waitDecided, waitFor, wahaMessage, wahaSend } from './helpers.js';
 
 let seq = 0;
 const newNumber = () => `86135${String(Date.now() % 1e5).padStart(5, '0')}${String(++seq).padStart(2, '0')}`;
@@ -563,37 +563,45 @@ describe('F6 客户线索（mock）', () => {
       assert.equal(csvCell(null), '');
     });
 
-    describe('F8 权限：agent 只能碰自己号的线索', () => {
+    describe('F8 权限：agent 只能碰自己负责的会话的线索（按客户分配）', () => {
       const as = (method, p, body) => t.req(method, p, { cookie: agent.cookie, body });
+      before(async () => {
+        // 只把 b 分给 agent；a 在他的号上但没分给他，c 在别人的号上
+        const r = await t.req('PUT', `${convPath(b)}/assignee`, { body: { userId: agent.user.id } });
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+      });
 
-      it('列表和导出只含自己号的；指定别人的号 403', async () => {
+      it('列表和导出只含分给自己的会话的线索，自己号上没分给他的也没有；指定别人的号 403', async () => {
         const list = (await as('GET', '/api/leads')).body;
-        assert.ok(list.length >= 2);
+        assert.deepEqual(mine(list), [b]);
         assert.ok(list.every((l) => l.accountId === acc.id));
-        assert.ok(!ids(list).includes(c));
         assert.equal((await as('GET', `/api/leads?accountId=${acc2.id}`)).status, 403);
+        assert.deepEqual(mine((await as('GET', `/api/leads?accountId=${acc.id}`)).body), [b]);
         assert.deepEqual(mine((await as('GET', '/api/leads?q=maria')).body), []);
+        assert.deepEqual(mine((await as('GET', '/api/leads?q=hans')).body), []);
         const csv = (await as('GET', '/api/leads/export.csv')).body;
-        assert.ok(csv.includes('李四') && !csv.includes('Maria'));
+        assert.ok(csv.includes('李四') && !csv.includes('Maria') && !csv.includes('Hans Müller'));
         const forbidden = await as('GET', `/api/leads/export.csv?accountId=${acc2.id}`);
         assert.equal(forbidden.status, 403);
         assert.equal(forbidden.body.code, 'forbidden');
       });
 
-      it('看、改、重新提取别人号的线索 403；自己号的可以', async () => {
-        const other = leadOf(t, c).id;
+      it('看、改、重新提取别人号的、自己号上没分给自己的线索 403；分给自己的可以', async () => {
         const own = leadOf(t, b).id;
-        for (const [method, p, body] of [
-          ['GET', `/api/leads/${other}`],
-          ['PUT', `/api/leads/${other}`, { name: 'x' }],
-          ['POST', `/api/leads/${other}/refresh`],
-          ['DELETE', `/api/leads/${other}`],
-        ]) {
-          const r = await as(method, p, body);
-          assert.equal(r.status, 403, `${method} ${p}`);
-          assert.equal(r.body.code, 'forbidden');
+        for (const other of [leadOf(t, c).id, leadOf(t, a).id]) {
+          for (const [method, p, body] of [
+            ['GET', `/api/leads/${other}`],
+            ['PUT', `/api/leads/${other}`, { name: 'x' }],
+            ['POST', `/api/leads/${other}/refresh`],
+            ['DELETE', `/api/leads/${other}`],
+          ]) {
+            const r = await as(method, p, body);
+            assert.equal(r.status, 403, `${method} ${p}`);
+            assert.equal(r.body.code, 'forbidden');
+          }
         }
         assert.equal(leadOf(t, c).name !== 'x', true);
+        assert.equal(leadOf(t, a).name !== 'x', true);
         assert.equal((await as('GET', `/api/leads/${own}`)).status, 200);
         const put = await as('PUT', `/api/leads/${own}`, { quantity: '20 箱' });
         assert.equal(put.status, 200);

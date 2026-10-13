@@ -4,6 +4,7 @@ import net from 'node:net';
 import { kvGet, kvSet } from './db.js';
 import { DEFAULT_META_API_VERSION, boolField, normalizeEmails, normalizeNumbers, str } from './settings.js';
 import { badRequest, HttpError, isPlainObject, nowIso, safeJsonParse } from './util.js';
+import { releaseLostAccess } from './wa/assign.js';
 
 export const CHANNELS = ['waha', 'meta'];
 export const PROXY_PROTOCOLS = ['http', 'https', 'socks4', 'socks5'];
@@ -412,14 +413,17 @@ export function createAccountStore(db, config) {
     setWahaConfigHash(id, hash) {
       db.prepare('UPDATE accounts SET waha_config_hash = ? WHERE id = ?').run(hash, id);
     },
-    delete(id) {
+    /** @param {{id:string}|null} [by] 删号的人（记进分配记录） */
+    delete(id, by = null) {
       db.transaction(() => {
         db.prepare('DELETE FROM accounts WHERE id = ?').run(id);
         db.prepare('DELETE FROM notice_messages WHERE account_id = ?').run(id);
-        // 同时从所有人的 accountIds 里移除
+        // 同时从所有人的 accountIds 里移除；agent 在这个号上负责的会话变成未分配（access_removed），admin 的不动
         for (const u of db.prepare('SELECT id, account_ids FROM users').all()) {
           const ids = safeJsonParse(u.account_ids, []);
-          if (ids.includes(id)) db.prepare('UPDATE users SET account_ids = ? WHERE id = ?').run(JSON.stringify(ids.filter((x) => x !== id)), u.id);
+          if (!ids.includes(id)) continue;
+          db.prepare('UPDATE users SET account_ids = ? WHERE id = ?').run(JSON.stringify(ids.filter((x) => x !== id)), u.id);
+          releaseLostAccess(db, u.id, by);
         }
       })();
     },

@@ -92,6 +92,27 @@ export function canAccessAccount(user, accountId) {
 }
 
 /**
+ * 会话级权限的唯一判断（会话详情、消息、发送、发文件、翻译、机器人开关、kb-draft、分配记录，以及客户线索都走它）：
+ * admin 能看、能操作所有会话；agent 只能是分给自己的、而且有这个号的权限，未分配的看不到。
+ * 列表（会话、线索）按 conversationScope 的同一套条件在 SQL 里过滤。
+ * @param {{accountId:string|null, assignee?:{id:string}|null}|null} conv Conversation 对象
+ */
+export function canAccessConversation(user, conv) {
+  if (!user) return false;
+  if (user.role === 'admin') return true;
+  return !!conv?.assignee && conv.assignee.id === user.id && canAccessAccount(user, conv.accountId);
+}
+
+/**
+ * 列表的可见范围，和 canAccessConversation 一致：admin 两项都是 null（不限）；agent 是 {assigneeId: 自己, accountIds: 自己的号}。
+ * @returns {{assigneeId: string|null, accountIds: string[]|null}}
+ */
+export function conversationScope(user) {
+  if (user?.role === 'admin') return { assigneeId: null, accountIds: null };
+  return { assigneeId: user?.id ?? '', accountIds: Array.isArray(user?.accountIds) ? user.accountIds : [] };
+}
+
+/**
  * @param {{db: import('better-sqlite3').Database, config: import('./config.js').Config, log: any}} ctx
  */
 export function createAuth(ctx) {

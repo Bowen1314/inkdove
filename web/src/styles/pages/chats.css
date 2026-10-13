@@ -22,6 +22,34 @@
   padding: var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
+/* 搜索框右边是 admin 的「批量分配」按钮 */
+.inbox__list-head--search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.inbox__list-head--search > .input-group {
+  flex: 1;
+}
+
+/* 批量分配栏（多选模式下在搜索框上面） */
+.bulk-assign {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+.bulk-assign__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.bulk-assign__cancel {
+  margin-left: auto;
+}
+.bulk-assign__select {
+  flex: 1;
+}
 .inbox__notice {
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border);
@@ -70,6 +98,29 @@
 .conv.is-active::before {
   background: var(--primary);
 }
+/* 多选模式下每行左边的勾选框（行本身是按钮，里面不能放真的 checkbox，样式同 .checkbox） */
+.conv__check {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin-top: var(--sp-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--on-primary);
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.conv.is-checked .conv__check {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.conv__check > svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3;
+}
 .conv__body {
   flex: 1;
   min-width: 0;
@@ -106,7 +157,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  min-height: 16px;
+  min-height: 20px;
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
 }
@@ -118,6 +169,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 负责人（admin 看到）：在所属号前面，一起靠右 */
+.conv__owner {
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.conv__owner.tag--warning {
+  color: var(--warning);
+}
+.conv__owner > svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+.conv__owner + .conv__acct {
+  margin-left: 0;
+  max-width: 35%;
 }
 
 /* ---- 会话窗口 ---- */
@@ -169,6 +244,34 @@
   align-items: center;
   gap: var(--sp-1);
   flex: none;
+}
+/* admin 的头部多一个负责人选择：放不下时操作区折到第二行，名字至少留 160 */
+.chat-head--assign {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+}
+.chat-head--assign .chat-head__info {
+  flex-basis: 160px;
+}
+.chat-head--assign .chat-head__actions {
+  margin-left: auto;
+}
+.chat-head__assignee {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  margin-right: var(--sp-1);
+}
+.chat-head__assignee-label {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+.select.chat-head__assignee-select {
+  width: auto;
+  max-width: 160px;
 }
 
 .inbox__stream {
@@ -610,6 +713,28 @@ a.draft__file:hover {
 }
 .info .kv {
   grid-template-columns: 64px minmax(0, 1fr);
+}
+/* 分配记录 */
+.assign-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.assign-log__meta {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--sp-2);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.assign-log__meta > * + *::before {
+  content: '·';
+  margin-right: var(--sp-2);
+  color: var(--text-faint);
 }
 .stage-bar {
   display: flex;

@@ -121,6 +121,8 @@ export const api = {
   updateUser: (id, patch) => put(`/api/users/${enc(id)}`, patch),
   deleteUser: (id) => del(`/api/users/${enc(id)}`),
   userResetLink: (id) => post(`/api/users/${enc(id)}/reset-link`, {}),
+  /** 把 :id 负责的全部会话转给 toUserId → {moved, skipped}；skipped 是目标没有对应号权限、保持原样的会话数 */
+  transferUserConversations: (id, toUserId, o) => post(`/api/users/${enc(id)}/transfer`, { toUserId }, o),
 
   // 全局设置（admin）
   getSettings: (o) => get('/api/settings', o),
@@ -217,8 +219,16 @@ export const api = {
   testNotify: (id) => post(`/api/accounts/${enc(id)}/notify/test`, {}),
 
   // 会话（id 形如 <accountId>:<chatId>，一律 encodeURIComponent）
-  listConversations: ({ accountId } = {}, o) => get('/api/wa/conversations', { ...o, query: { accountId } }),
+  /** assignee：空为全部可见的、me、none（仅 admin）、<userId>（仅 admin） */
+  listConversations: ({ accountId, assignee } = {}, o) => get('/api/wa/conversations', { ...o, query: { accountId, assignee } }),
   listMessages: (id, o) => get(`/api/wa/conversations/${enc(id)}/messages`, o),
+  // 按客户分配（admin）：userId 为 null 表示取消分配
+  /** → Conversation */
+  setConversationAssignee: (id, userId, o) => put(`/api/wa/conversations/${enc(id)}/assignee`, { userId }, o),
+  /** 最多 500 个 → {updated, skipped:[{id, code}]}，code: not_found | assignee_no_account_access | unchanged */
+  assignConversations: (conversationIds, userId, o) => post('/api/wa/conversations/assign', { conversationIds, userId }, o),
+  /** 分配历史，新到旧 → [{id, from, to, by, reason, at}]，from/to/by 为 {id, name} 或 null */
+  listAssignments: (id, o) => get(`/api/wa/conversations/${enc(id)}/assignments`, o),
 
   // 客户线索（F6）：agent 只能看、改自己号的线索，服务端按权限过滤
   /** query: {q, stage, accountId}，空值不带 → Lead[]（也兼容 {leads: Lead[]}） */

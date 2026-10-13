@@ -107,8 +107,11 @@ export function EntryPeek({ entryId, onClose }) {
   );
 }
 
-/** 一组被引用条目的标题链接，点开查看详情 */
-export function EntryRefs({ ids }) {
+/**
+ * 一组被引用条目的标题链接，点开查看详情。
+ * 传了 onOpen(id) 就交给调用方打开（放在浮层里用时，弹窗要渲染在浮层外面）；不传就在这里渲染 EntryPeek。
+ */
+export function EntryRefs({ ids, onOpen }) {
   const [map, setMap] = useState(null);
   const [peek, setPeek] = useState(null);
 
@@ -132,7 +135,7 @@ export function EntryRefs({ ids }) {
           const e = map?.get(id);
           return (
             <li key={id}>
-              <button type="button" className="ref-list__item" onClick={() => setPeek(id)}>
+              <button type="button" className="ref-list__item" onClick={() => (onOpen ? onOpen(id) : setPeek(id))}>
                 <FileText aria-hidden="true" />
                 <span className="ellipsis">{map ? (e ? e.title : '已删除的条目') : '加载中…'}</span>
               </button>
@@ -140,7 +143,7 @@ export function EntryRefs({ ids }) {
           );
         })}
       </ul>
-      <EntryPeek entryId={peek} onClose={() => setPeek(null)} />
+      {!onOpen && <EntryPeek entryId={peek} onClose={() => setPeek(null)} />}
     </>
   );
 }

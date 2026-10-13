@@ -185,15 +185,19 @@ describe('会话输入框一键翻译（mock）', () => {
     assert.deepEqual(await getOne(id), before);
   });
 
-  it('权限同手动回复：agent 只能翻译分给自己的号的会话', async () => {
+  it('权限同手动回复：agent 只能翻译分给自己的会话', async () => {
     const mine = await customer(quiet, ['Hello there']);
+    const unassigned = await customer(quiet, ['Hi, any news?']);
     const others = await customer(acc, ['Hello, are you open today?']);
     const agent = await t.addMember({ email: 'translate-agent@example.com', accountIds: [quiet.id] });
+    assert.equal((await translate(mine, '你好', { cookie: agent.cookie })).status, 403, '还没分给他');
+    assert.equal((await t.req('PUT', `${convPath(mine)}/assignee`, { body: { userId: agent.user.id } })).status, 200);
     const ok = await translate(mine, '你好', { cookie: agent.cookie });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.language, '英语');
     const denied = await translate(others, '你好', { cookie: agent.cookie });
     assert.equal(denied.status, 403);
+    assert.equal((await translate(unassigned, '你好', { cookie: agent.cookie })).status, 403, '自己号上没分给他的');
     assert.equal((await translate(mine, '你好', { auth: false })).status, 401);
   });
 });

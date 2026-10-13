@@ -1,5 +1,5 @@
 // F6 客户线索：表 leads、lead_stage_history（见 db.js）。后台定时扫描提取、手动重新提取、增删改查和 CSV 导出。
-// 权限（agent 只能碰自己号的线索）由路由判断，见 routes/leads.js。
+// 权限（agent 只能碰自己负责的会话的线索）由路由判断，见 routes/leads.js。
 import { DELETED_ACCOUNT_NAME } from '../accounts.js';
 import { LEAD_STAGES, leadStageLabel } from '../codes.js';
 import { llmScope } from '../records.js';
@@ -342,10 +342,11 @@ export function createLeadStore(ctx) {
     get,
 
     /**
-     * @param {{accountIds?: string[]|null, accountId?: string|null, stage?: string, q?: string}} f
-     *   accountIds=null 表示不限（admin）。按 lastContactAt 倒序
+     * @param {{accountIds?: string[]|null, assigneeId?: string|null, accountId?: string|null, stage?: string, q?: string}} f
+     *   accountIds、assigneeId 是可见范围（auth.js 的 conversationScope），null 表示不限（admin）：agent 只看自己负责、
+     *   而且有号权限的会话的线索，和会话的权限判断一致。按 lastContactAt 倒序
      */
-    list({ accountIds = null, accountId = null, stage = '', q = '' } = {}) {
+    list({ accountIds = null, assigneeId = null, accountId = null, stage = '', q = '' } = {}) {
       if (stage && !LEAD_STAGE_KEYS.includes(stage)) throw badRequest(`stage 只能是 ${LEAD_STAGE_KEYS.join('、')} 之一`);
       const where = [];
       const params = [];
@@ -353,9 +354,13 @@ export function createLeadStore(ctx) {
         where.push('l.account_id = ?');
         params.push(accountId);
       }
+      if (assigneeId !== null) {
+        where.push('c.assignee_id = ?');
+        params.push(assigneeId);
+      }
       if (accountIds) {
         if (!accountIds.length) return [];
-        where.push(`l.account_id IN (${accountIds.map(() => '?').join(', ')})`);
+        where.push(`c.account_id IN (${accountIds.map(() => '?').join(', ')})`);
         params.push(...accountIds);
       }
       if (stage) {

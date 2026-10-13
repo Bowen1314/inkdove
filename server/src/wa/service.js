@@ -11,6 +11,7 @@ import { llmScope } from '../records.js';
 import { buildReplyContext, decideReply, normalizeFileIds } from '../reply/engine.js';
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse, sleep } from '../util.js';
+import { assignCampaignConversation } from './assign.js';
 import { baseMime, MEDIA_LIMITS, mediaTypeOf, oggDurationSeconds, wahaVoiceSeconds } from './media.js';
 import { metaDownloadMedia, metaMarkRead, metaSendMedia, metaSendTemplate, metaSendText, metaUploadMedia } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
@@ -66,9 +67,12 @@ export const DEFAULT_HUMANIZE = {
   fileGapMs: () => rand(1000, 2000),
 };
 
-const CONV_SQL = `SELECT c.*, a.name AS account_name, m.text AS lm_text, m.attachment AS lm_attachment, m.direction AS lm_direction, m.ts AS lm_ts
+/** 负责人的列都起别名（users 和 conversations 有同名的 id、created_at） */
+const CONV_SQL = `SELECT c.*, a.name AS account_name, m.text AS lm_text, m.attachment AS lm_attachment, m.direction AS lm_direction, m.ts AS lm_ts,
+    u.name AS assignee_name, u.email AS assignee_email, u.disabled AS assignee_disabled
   FROM conversations c
   LEFT JOIN accounts a ON a.id = c.account_id
+  LEFT JOIN users u ON u.id = c.assignee_id
   LEFT JOIN messages m ON m.seq = (SELECT MAX(seq) FROM messages WHERE conversation_id = c.id)`;
 
 /** 群聊、广播、频道 */
@@ -450,6 +454,8 @@ export function createWaService(ctx, opts = {}) {
 
   function rowToConversation(r) {
     const muted = r.muted_until && Date.parse(r.muted_until) > Date.now() ? r.muted_until : null;
+    // 按客户分配：负责人（未分配、或负责人的用户行已经没了时为 null）和最近一次分配的时间
+    const assigned = !!r.assignee_id && r.assignee_email != null;
     return {
       id: r.id,
       accountId: r.account_id,
@@ -463,6 +469,8 @@ export function createWaService(ctx, opts = {}) {
       pendingReason: r.needs_human ? r.pending_reason ?? null : null,
       mutedUntil: muted,
       draft: parseDraft(r.draft),
+      assignee: assigned ? { id: r.assignee_id, name: r.assignee_name ?? '', email: r.assignee_email, disabled: !!r.assignee_disabled } : null,
+      assignedAt: assigned ? r.assigned_at ?? null : null,
       updatedAt: r.updated_at,
     };
   }
@@ -1880,8 +1888,11 @@ export function createWaService(ctx, opts = {}) {
     return getStatus(acc);
   }
 
-  /** DELETE /api/accounts/:id：扫码号先登出、再删 WAHA session；会话和消息保留 */
-  async function deleteAccount(acc) {
+  /**
+   * DELETE /api/accounts/:id：扫码号先登出、再删 WAHA session；会话和消息保留。
+   * agent 在这个号上负责的会话变成未分配（见 accounts.js 的 delete），by 是删号的人
+   */
+  async function deleteAccount(acc, by = null) {
     if (acc.channel === 'waha') {
       const warn = (err) => {
         if (err instanceof WahaError && (err.status === 404 || err.status === 422)) return;
@@ -1896,7 +1907,7 @@ export function createWaService(ctx, opts = {}) {
       cancelTimer(r.id);
       abortSending(r.id, 'account_deleted');
     }
-    accounts.delete(acc.id);
+    accounts.delete(acc.id, by);
     accState.delete(acc.id);
     recentSent.delete(acc.id);
   }
@@ -1981,13 +1992,22 @@ export function createWaService(ctx, opts = {}) {
       }
     },
 
-    /** @param {{accountIds?: string[]|null, accountId?: string|null}} f accountIds=null 表示不限（admin） */
-    listConversations({ accountIds = null, accountId = null } = {}) {
+    /**
+     * @param {{accountIds?: string[]|null, accountId?: string|null, assignee?: string|null}} f accountIds=null 表示不限（admin）；
+     *   assignee：null 不限，'none' 只要未分配的，其他是负责人的用户 id。agent 的可见范围见 auth.js 的 conversationScope
+     */
+    listConversations({ accountIds = null, accountId = null, assignee = null } = {}) {
       const where = [];
       const params = [];
       if (accountId) {
         where.push('c.account_id = ?');
         params.push(accountId);
+      }
+      if (assignee === 'none') {
+        where.push('c.assignee_id IS NULL');
+      } else if (assignee) {
+        where.push('c.assignee_id = ?');
+        params.push(assignee);
       }
       if (accountIds) {
         if (!accountIds.length) return [];
@@ -2101,11 +2121,12 @@ export function createWaService(ctx, opts = {}) {
      * F11：发一条外联开场消息并落库（outreach/store.js 的发送循环调）。WAHA 用 sendText 发 text；Meta 发审核过的模板
      * （type:"template"），text 只存档。和其他经 API 发出的消息一样先登记回声，手机那边推回来的 fromMe 消息会被剔除。
      * 会话不存在就新建、已有就复用；消息记 author=bot、via=campaign。发送失败直接抛错，不落库。
+     * 会话还没有负责人、发起人（createdById）是有这个号权限的启用中 agent 时，分给发起人（见 assign.js 的 assignCampaignConversation）。
      * @param {any} acc
-     * @param {{chatId:string, number:string, text:string, template?:{name:string, languageCode:string}|null}} p
+     * @param {{chatId:string, number:string, text:string, template?:{name:string, languageCode:string}|null, createdById?:string|null}} p
      * @returns {Promise<{conversationId:string, messageId:string, externalId:string|null}>}
      */
-    async sendCampaignMessage(acc, { chatId, number, text, template = null }) {
+    async sendCampaignMessage(acc, { chatId, number, text, template = null, createdById = null }) {
       if (!acc) throw new Error('这个号已删除');
       const entry = rememberSent(acc.id, chatId, text);
       let externalId;
@@ -2130,6 +2151,7 @@ export function createWaService(ctx, opts = {}) {
           `INSERT INTO messages(id, conversation_id, external_id, direction, author, kind, text, ts, status, handled, via)
            VALUES(?, ?, ?, 'out', 'bot', 'text', ?, ?, 'sent', 1, 'campaign')`,
         ).run(messageId, convId, dup ? null : externalId || null, text, ts);
+        assignCampaignConversation(db, convId, createdById);
       })();
       return { conversationId: convId, messageId, externalId: externalId || null };
     },

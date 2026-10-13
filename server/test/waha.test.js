@@ -151,6 +151,8 @@ describe('WAHA 号', () => {
     assert.deepEqual(Object.keys(conv).sort(), [
       'accountId',
       'accountName',
+      'assignedAt',
+      'assignee',
       'botPaused',
       'contactName',
       'contactNumber',
@@ -163,6 +165,9 @@ describe('WAHA 号', () => {
       'updatedAt',
     ]);
     assert.equal(conv.pendingReason, null);
+    // 客户主动来消息的新会话一律未分配
+    assert.equal(conv.assignee, null);
+    assert.equal(conv.assignedAt, null);
     const filtered = await t.req('GET', `/api/wa/conversations?accountId=${acc.id}`);
     assert.ok(filtered.body.some((c) => c.id === cid(chat)));
   });

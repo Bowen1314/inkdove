@@ -3,9 +3,11 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   BookPlus,
+  Check,
   CornerDownLeft,
   Image as ImageIcon,
   Languages,
+  ListChecks,
   MessagesSquare,
   Mic,
   PanelRight,
@@ -23,7 +25,7 @@ import { Avatar } from '../../ui/Avatar.jsx';
 import { Select } from '../../ui/Select.jsx';
 import { Drawer } from '../../ui/Drawer.jsx';
 import { Popover, Tooltip } from '../../ui/Popover.jsx';
-import { EntryRefs } from '../../ui/EntryRefs.jsx';
+import { EntryPeek, EntryRefs } from '../../ui/EntryRefs.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useAuth } from '../../lib/auth.jsx';
@@ -33,6 +35,14 @@ import { AUTHOR_LABEL, BOT_DECISION_NOTE, LEAD_STAGES, MEDIA_LABEL, leadStageLab
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
 import { AttachmentCard, DraftFiles, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
+import {
+  AssigneeMark,
+  AssigneeSelect,
+  AssigneeText,
+  AssignmentHistory,
+  BulkAssignBar,
+  assigneeFilterOptions,
+} from './Assignee.jsx';
 
 const POLL_MS = 4000;
 
@@ -89,8 +99,18 @@ function ConvState({ conv, size = 'sm', showActive = false }) {
 
 /* ---------- 会话列表 ---------- */
 
-function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accountFilter }) {
+/** 列表为空时的标题：业务员只看得到分给自己的会话；admin 按负责人筛选时说明是哪种空 */
+function emptyTitle({ isAdmin, accountFilter, assigneeFilter }) {
+  if (!isAdmin) return accountFilter ? '这个号还没有分配给你的客户' : '管理员还没有给你分配客户';
+  if (assigneeFilter === 'none') return '没有未分配的会话';
+  if (assigneeFilter) return '这个成员还没有负责的会话';
+  return accountFilter ? '这个号还没有会话' : '还没有会话';
+}
+
+function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accountFilter, assigneeFilter, isAdmin, users, onBulkAssigned }) {
   const [filter, setFilter] = useState('');
+  const [selecting, setSelecting] = useState(false); // admin 批量分配的多选模式
+  const [checked, setChecked] = useState(() => new Set());
   const sorted = useMemo(() => sortConvs(convs), [convs]);
   const f = filter.trim().toLowerCase();
   const shown = f
@@ -99,9 +119,47 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
       )
     : sorted;
 
+  // 只算还在列表里的（轮询后消失的会话不再算进去）
+  const checkedIds = sorted.filter((c) => checked.has(c.id)).map((c) => c.id);
+  const allChecked = shown.length > 0 && shown.every((c) => checked.has(c.id));
+  const someChecked = shown.some((c) => checked.has(c.id));
+  const toggleOne = (id) =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setChecked((prev) => {
+      const next = new Set(prev);
+      shown.forEach((c) => (allChecked ? next.delete(c.id) : next.add(c.id)));
+      return next;
+    });
+  const stopSelecting = () => {
+    setSelecting(false);
+    setChecked(new Set());
+  };
+
   return (
     <section className="inbox__list" aria-label="会话列表">
-      <div className="inbox__list-head">
+      {selecting && (
+        <div className="inbox__list-head">
+          <BulkAssignBar
+            ids={checkedIds}
+            allChecked={allChecked}
+            someChecked={someChecked}
+            onToggleAll={toggleAll}
+            users={users}
+            onCancel={stopSelecting}
+            onAssigned={(ids, assignee) => {
+              setChecked(new Set());
+              onBulkAssigned(ids, assignee);
+            }}
+          />
+        </div>
+      )}
+      <div className="inbox__list-head inbox__list-head--search">
         <div className="input-group">
           <Search className="input-group__icon" aria-hidden="true" />
           <input
@@ -118,6 +176,19 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
             </button>
           )}
         </div>
+        {isAdmin && !selecting && (
+          <Tooltip content="批量分配">
+            <button
+              type="button"
+              className="btn btn--ghost btn--icon btn--sm"
+              onClick={() => setSelecting(true)}
+              disabled={!sorted.length}
+              aria-label="批量分配"
+            >
+              <ListChecks />
+            </button>
+          </Tooltip>
+        )}
       </div>
 
       {pollFailed && (
@@ -133,9 +204,9 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
           <EmptyState
             compact
             icon={MessagesSquare}
-            title={accountFilter ? '这个号还没有会话' : '还没有会话'}
+            title={emptyTitle({ isAdmin, accountFilter, assigneeFilter })}
             desc={
-              noConnected ? (
+              !isAdmin || assigneeFilter ? null : noConnected ? (
                 <>
                   还没有已连接的号码。
                   <Link className="link" to="/whatsapp/numbers">
@@ -153,14 +224,21 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
           shown.map((c) => {
             const last = c.lastMessage;
             const active = c.id === selectedId;
+            const isChecked = selecting && checked.has(c.id);
             return (
               <button
                 key={c.id}
                 type="button"
-                className={`conv${active ? ' is-active' : ''}${c.needsHuman ? ' is-pending' : ''}`}
+                className={`conv${active ? ' is-active' : ''}${c.needsHuman ? ' is-pending' : ''}${isChecked ? ' is-checked' : ''}`}
                 aria-current={active ? 'true' : undefined}
-                onClick={() => onSelect(c.id)}
+                aria-pressed={selecting ? isChecked : undefined}
+                onClick={() => (selecting ? toggleOne(c.id) : onSelect(c.id))}
               >
+                {selecting && (
+                  <span className="conv__check" aria-hidden="true">
+                    {isChecked && <Check />}
+                  </span>
+                )}
                 <Avatar name={c.contactName || c.contactNumber} />
                 <span className="conv__body">
                   <span className="conv__top">
@@ -179,6 +257,7 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
                   </span>
                   <span className="conv__meta">
                     <ConvState conv={c} />
+                    {isAdmin && <AssigneeMark assignee={c.assignee} />}
                     {c.accountName && <span className="conv__acct">{c.accountName}</span>}
                   </span>
                 </span>
@@ -211,18 +290,31 @@ function bubbleKind(msg) {
 const MEDIA_ICON = { voice: Mic, image: ImageIcon };
 const NOTE_TONE = { handoff: 'warning', blocked: 'danger', declined: 'info' };
 
+/** 条目弹窗放在浮层外面：点条目时先关浮层再开弹窗，免得两层叠在一起、在弹窗上按鼠标被当成点了浮层外面 */
 function KnowledgeRefs({ ids }) {
+  const [peek, setPeek] = useState(null);
   return (
-    <Popover
-      label="依据的知识条目"
-      trigger={
-        <button type="button" className="msg__link">
-          依据 {ids.length} 条知识
-        </button>
-      }
-    >
-      <EntryRefs ids={ids} />
-    </Popover>
+    <>
+      <Popover
+        label="依据的知识条目"
+        trigger={
+          <button type="button" className="msg__link">
+            依据 {ids.length} 条知识
+          </button>
+        }
+      >
+        {(close) => (
+          <EntryRefs
+            ids={ids}
+            onOpen={(id) => {
+              close();
+              setPeek(id);
+            }}
+          />
+        )}
+      </Popover>
+      <EntryPeek entryId={peek} onClose={() => setPeek(null)} />
+    </>
   );
 }
 
@@ -620,13 +712,29 @@ function CustomerInfo({ conv }) {
           </div>
         </>
       )}
+
+      <AssignmentHistory conv={conv} />
     </div>
   );
 }
 
 /* ---------- 会话窗口 ---------- */
 
-function ChatPane({ conv, convId, messages, msgError, onBack, onConvUpdate, onSent, onRetry, canSaveToKb, onToggleInfo, infoShown }) {
+function ChatPane({
+  conv,
+  convId,
+  messages,
+  msgError,
+  onBack,
+  onConvUpdate,
+  onSent,
+  onRetry,
+  canSaveToKb,
+  isAdmin,
+  users,
+  onToggleInfo,
+  infoShown,
+}) {
   const [toggling, setToggling] = useState(false);
   const [text, setText] = useState('');
   const [kbMsg, setKbMsg] = useState(null);
@@ -729,7 +837,7 @@ function ChatPane({ conv, convId, messages, msgError, onBack, onConvUpdate, onSe
 
   return (
     <section className="inbox__chat" aria-label={`和 ${name} 的会话`}>
-      <div className="chat-head">
+      <div className={`chat-head${isAdmin && conv ? ' chat-head--assign' : ''}`}>
         <button type="button" className="btn btn--ghost btn--icon chat-head__back" onClick={onBack} aria-label="返回会话列表">
           <ArrowLeft />
         </button>
@@ -739,11 +847,13 @@ function ChatPane({ conv, convId, messages, msgError, onBack, onConvUpdate, onSe
           <div className="chat-head__sub">
             {conv?.contactNumber && conv.contactName && <span className="num">{conv.contactNumber}</span>}
             {conv?.accountName && <span className="chat-head__acct">经 {conv.accountName}</span>}
+            {conv && !isAdmin && <AssigneeText assignee={conv.assignee} />}
             {conv && <ConvState conv={conv} showActive />}
           </div>
         </div>
         {conv && (
           <div className="chat-head__actions">
+            {isAdmin && <AssigneeSelect conv={conv} users={users} onAssigned={onConvUpdate} />}
             <button type="button" className={`btn btn--sm${conv.botPaused ? ' btn--primary' : ''}`} onClick={toggleBot} disabled={toggling}>
               {toggling ? <Spinner /> : conv.botPaused ? <Play /> : <Pause />}
               {conv.botPaused ? '恢复机器人' : '暂停机器人'}
@@ -809,7 +919,9 @@ export default function ChatsTab() {
   const [params, setParams] = useSearchParams();
   const selectedId = readChatParam(params);
   const accountFilter = params.get('account') || '';
-  const { isAdmin } = useAuth();
+  const { user: me, isAdmin } = useAuth();
+  // 按负责人筛选只有 admin 有；agent 只看得到分给自己的会话，不带这个参数
+  const assigneeFilter = isAdmin ? params.get('assignee') || '' : '';
   const { accounts } = useAccounts();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [infoPinned, setInfoPinned] = useState(true); // ≥1280 时右栏是否显示
@@ -820,18 +932,23 @@ export default function ChatsTab() {
   const [pollFailed, setPollFailed] = useState(false);
   const [messages, setMessages] = useState(null);
   const [msgError, setMsgError] = useState(null);
+  const [users, setUsers] = useState(null); // 负责人选项（admin）
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
-  const filterRef = useRef(accountFilter);
-  filterRef.current = accountFilter;
+  const filterRef = useRef(null);
+  filterRef.current = { account: accountFilter, assignee: assigneeFilter };
 
   const loadConvs = useCallback(async () => {
     const want = filterRef.current;
     try {
-      const list = await api.listConversations({ accountId: want || undefined }, { silent: true });
-      if (filterRef.current !== want) return; // 筛选已切换，丢弃旧结果
+      const list = await api.listConversations(
+        { accountId: want.account || undefined, assignee: want.assignee || undefined },
+        { silent: true },
+      );
+      // 筛选已切换，丢弃旧结果
+      if (filterRef.current.account !== want.account || filterRef.current.assignee !== want.assignee) return;
       setConvs(list || []);
-      if (!want) setPendingCount(list || []);
+      if (!want.account && !want.assignee) setPendingCount(list || []);
       setConvError(null);
       setPollFailed(false);
     } catch (e) {
@@ -856,7 +973,16 @@ export default function ChatsTab() {
   useEffect(() => {
     setConvs(null);
     loadConvs();
-  }, [loadConvs, accountFilter]);
+  }, [loadConvs, accountFilter, assigneeFilter]);
+
+  // 成员列表只有 admin 能读，agent 不请求
+  useEffect(() => {
+    if (!isAdmin) return;
+    api
+      .listUsers({ silent: true })
+      .then((list) => setUsers(Array.isArray(list) ? list : []))
+      .catch(() => setUsers([]));
+  }, [isAdmin]);
 
   useEffect(() => {
     setMessages(null);
@@ -886,13 +1012,28 @@ export default function ChatsTab() {
   const back = () => setParams(withParams({ chat: null }));
   // 换号筛选时关掉当前会话，避免右边显示一个列表里没有的会话
   const onFilter = (id) => setParams(withParams({ account: id, chat: null }), { replace: true });
+  const onAssigneeFilter = (v) => setParams(withParams({ assignee: v, chat: null }), { replace: true });
 
-  const conv = convs?.find((c) => c.id === selectedId) || null;
+  // 当前会话改了负责人后可能不在这个筛选里了（比如在「未分配」里分给了别人），右边继续用最后拿到的数据
+  const heldRef = useRef(null);
+  const found = convs?.find((c) => c.id === selectedId) || null;
+  if (found) heldRef.current = found;
+  else if (heldRef.current?.id !== selectedId) heldRef.current = null;
+  const conv = found || heldRef.current;
   const noConnected = Array.isArray(accounts) && !accounts.some(isConnected);
   const pending = (convs || []).filter((c) => c.needsHuman).length;
 
   const onConvUpdate = (next) => {
+    if (heldRef.current?.id === next.id) heldRef.current = { ...heldRef.current, ...next };
     setConvs((prev) => (prev || []).map((c) => (c.id === next.id ? { ...c, ...next } : c)));
+  };
+
+  /** 批量分配完：先把改成功的会话本地改掉，再重新拉列表 */
+  const onBulkAssigned = (ids, assignee) => {
+    const done = new Set(ids);
+    if (heldRef.current && done.has(heldRef.current.id)) heldRef.current = { ...heldRef.current, assignee };
+    setConvs((prev) => (prev || []).map((c) => (done.has(c.id) ? { ...c, assignee } : c)));
+    loadConvs();
   };
 
   const onSent = (msg) => {
@@ -931,16 +1072,32 @@ export default function ChatsTab() {
         title="会话"
         meta={pending > 0 && <StatusDot tone="danger" tinted size="sm">{pending} 个待你处理</StatusDot>}
         actions={
-          accounts?.length > 0 && (
-            <Select
-              size="sm"
-              className="select--auto"
-              value={accountFilter}
-              onChange={onFilter}
-              options={accountOptions}
-              placement="bottom-end"
-              aria-label="按号筛选"
-            />
+          (isAdmin || accounts?.length > 0) && (
+            <>
+              {isAdmin && (
+                <Select
+                  size="sm"
+                  className="select--auto"
+                  value={assigneeFilter}
+                  onChange={onAssigneeFilter}
+                  options={assigneeFilterOptions(users, me)}
+                  placeholder="负责人"
+                  placement="bottom-end"
+                  aria-label="按负责人筛选"
+                />
+              )}
+              {accounts?.length > 0 && (
+                <Select
+                  size="sm"
+                  className="select--auto"
+                  value={accountFilter}
+                  onChange={onFilter}
+                  options={accountOptions}
+                  placement="bottom-end"
+                  aria-label="按号筛选"
+                />
+              )}
+            </>
           )
         }
       />
@@ -955,6 +1112,10 @@ export default function ChatsTab() {
             pollFailed={pollFailed && convs != null}
             noConnected={noConnected}
             accountFilter={accountFilter}
+            assigneeFilter={assigneeFilter}
+            isAdmin={isAdmin}
+            users={users}
+            onBulkAssigned={onBulkAssigned}
           />
           {selectedId ? (
             <ChatPane
@@ -968,6 +1129,8 @@ export default function ChatsTab() {
               onSent={onSent}
               onRetry={() => loadMessages(selectedId)}
               canSaveToKb={isAdmin}
+              isAdmin={isAdmin}
+              users={users}
               onToggleInfo={toggleInfo}
               infoShown={infoShown}
             />

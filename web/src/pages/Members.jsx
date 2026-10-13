@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { KeyRound, MoreHorizontal, Pencil, Plus, Power, Save, Trash2, UserPlus, Users } from 'lucide-react';
+import { ArrowRightLeft, KeyRound, MoreHorizontal, Pencil, Plus, Power, Save, Trash2, UserPlus, Users } from 'lucide-react';
 import { api } from '../api/client.js';
 import { toast } from '../ui/toastBus.js';
 import { Modal, useConfirm } from '../ui/Modal.jsx';
@@ -13,7 +13,7 @@ import { Avatar } from '../ui/Avatar.jsx';
 import { AccountPicker } from '../ui/AccountPicker.jsx';
 import { useAuth } from '../lib/auth.jsx';
 import { useAccounts } from '../lib/accounts.js';
-import { ROLES, roleLabel, userStatus } from '../lib/labels.js';
+import { ROLES, assignErrorText, roleLabel, userStatus } from '../lib/labels.js';
 import { fmtTime } from '../lib/format.js';
 
 /** 成员状态的筛选键：disabled > pending > active（和 userStatus 的判断顺序一致） */
@@ -286,6 +286,109 @@ function AccountNames({ user, accounts }) {
   );
 }
 
+/** 转交结果的一句话提示 */
+function transferText({ moved = 0, skipped = 0 } = {}, fromName, toName) {
+  const parts = [];
+  if (moved > 0 || !skipped) parts.push(`已把 ${moved} 个客户转给 ${toName}`);
+  if (skipped > 0) parts.push(`${skipped} 个没转：${toName} 没有对应号的权限，仍由 ${fromName} 负责`);
+  return parts.join('；');
+}
+
+/**
+ * 转交客户：POST /api/users/:id/transfer {toUserId}。
+ * mode=disable 是停用还负责客户的成员前的提示：可以先转交再停用，也可以跳过直接停用。
+ */
+function TransferModal({ target, users, onClose, onTransferred, onDisable }) {
+  const user = target?.user;
+  const disabling = target?.mode === 'disable';
+  const [toId, setToId] = useState('');
+  const [busy, setBusy] = useState(null); // 'transfer' | 'skip'
+
+  useEffect(() => {
+    if (target) {
+      setToId('');
+      setBusy(null);
+    }
+  }, [target]);
+
+  const options = (users || [])
+    .filter((u) => u.id !== user?.id && !u.disabled)
+    .map((u) => ({ value: u.id, label: u.name || u.email, desc: roleLabel(u.role) }));
+  const fromName = user ? user.name || user.email : '';
+  const count = user?.assignedCount || 0;
+
+  const submit = async (withTransfer) => {
+    if (busy || (withTransfer && !toId)) return;
+    setBusy(withTransfer ? 'transfer' : 'skip');
+    try {
+      if (withTransfer) {
+        const res = await api.transferUserConversations(user.id, toId, { silent: true });
+        const to = users.find((u) => u.id === toId);
+        const text = transferText(res, fromName, to ? to.name || to.email : '对方');
+        if (res?.skipped > 0) toast.info(text, 6000);
+        else toast.success(text);
+      }
+    } catch (e) {
+      toast.error(assignErrorText(e));
+      setBusy(null);
+      return;
+    }
+    // 先停用再刷新列表，免得刷新拿到停用前的旧数据
+    const ok = disabling ? await onDisable(user) : true;
+    if (withTransfer) onTransferred();
+    // 只是停用失败（已提示）时留在弹窗里，可以重试或取消；转交已经做完就直接关
+    if (!ok && !withTransfer) {
+      setBusy(null);
+      return;
+    }
+    onClose();
+  };
+
+  return (
+    <Modal
+      open={!!user}
+      onClose={busy ? () => {} : onClose}
+      title={disabling ? `停用「${fromName}」？` : `转交「${fromName}」的客户`}
+      width={440}
+      footer={
+        <>
+          <button type="button" className="btn" onClick={onClose} disabled={!!busy}>
+            取消
+          </button>
+          {disabling && (
+            <button type="button" className="btn btn--danger" onClick={() => submit(false)} disabled={!!busy}>
+              {busy === 'skip' && <Spinner />}
+              跳过，直接停用
+            </button>
+          )}
+          <button
+            type="button"
+            className={`btn ${disabling ? 'btn--danger-solid' : 'btn--primary'}`}
+            onClick={() => submit(true)}
+            disabled={!!busy || !toId}
+          >
+            {busy === 'transfer' ? <Spinner /> : <ArrowRightLeft />}
+            {disabling ? '转交并停用' : '转交'}
+          </button>
+        </>
+      }
+    >
+      {user && (
+        <div className="vstack members__stack">
+          <p className="muted">
+            {disabling
+              ? `停用后对方立即退出登录，不能再登录后台。${fromName} 还负责 ${count} 个客户，可以先转交给别人；不转交的话客户仍记在他名下，之后再转。`
+              : `${fromName} 现在负责 ${count} 个客户，全部转给另一位成员。`}
+          </p>
+          <Field label="转给" htmlFor="tr-to" hint="对方没有对应号权限的客户不会转。">
+            <Select id="tr-to" value={toId} onChange={setToId} options={options} placeholder="选择成员" />
+          </Field>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 /** 只有图标的"更多"按钮：Menu 的 trigger 要接 ref，Tooltip 套在外层 span 上 */
 function MoreMenu({ items, disabled }) {
   return (
@@ -314,6 +417,7 @@ export default function MembersPage() {
   const [inviting, setInviting] = useState(false);
   const [editing, setEditing] = useState(null);
   const [resetLink, setResetLink] = useState(null); // {user, url}
+  const [transfer, setTransfer] = useState(null); // {user, mode: 'transfer' | 'disable'}
   const [busyId, setBusyId] = useState(null);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('');
@@ -343,9 +447,30 @@ export default function MembersPage() {
     });
   };
 
+  /** 停用或启用，成功返回 true */
+  const setDisabled = async (u, disabling) => {
+    setBusyId(u.id);
+    try {
+      const res = await api.updateUser(u.id, { disabled: disabling });
+      upsert(res && res.id ? res : { ...u, disabled: disabling });
+      toast.success(disabling ? '已停用' : '已启用');
+      return true;
+    } catch {
+      // 已提示（last_admin 等）
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const toggleDisabled = async (u) => {
     const disabling = !u.disabled;
     if (disabling) {
+      // 还负责客户：先问要不要转交（可以跳过）
+      if (u.assignedCount > 0) {
+        setTransfer({ user: u, mode: 'disable' });
+        return;
+      }
       const ok = await confirm({
         title: `停用「${u.name || u.email}」？`,
         message: '停用后对方立即退出登录，不能再登录后台。之后可以重新启用。',
@@ -354,16 +479,7 @@ export default function MembersPage() {
       });
       if (!ok) return;
     }
-    setBusyId(u.id);
-    try {
-      const res = await api.updateUser(u.id, { disabled: disabling });
-      upsert(res && res.id ? res : { ...u, disabled: disabling });
-      toast.success(disabling ? '已停用' : '已启用');
-    } catch {
-      // 已提示（last_admin 等）
-    } finally {
-      setBusyId(null);
-    }
+    await setDisabled(u, disabling);
   };
 
   const makeResetLink = async (u) => {
@@ -381,7 +497,9 @@ export default function MembersPage() {
   const remove = async (u) => {
     const ok = await confirm({
       title: `删除「${u.name || u.email}」？`,
-      message: '删除后对方立即退出登录，账号不能恢复。对方发过的人工消息仍会保留。',
+      message: `删除后对方立即退出登录，账号不能恢复。对方发过的人工消息仍会保留。${
+        u.assignedCount > 0 ? `他负责的 ${u.assignedCount} 个客户会变成未分配。` : ''
+      }`,
       confirmText: '删除',
       danger: true,
     });
@@ -448,6 +566,14 @@ export default function MembersPage() {
       render: (u) => <AccountNames user={u} accounts={accounts} />,
     },
     {
+      key: 'assigned',
+      header: '负责客户',
+      align: 'num',
+      hide: 'sm',
+      sortValue: (u) => u.assignedCount ?? 0,
+      render: (u) => <span className={u.assignedCount ? 'num' : 'num muted'}>{u.assignedCount ?? 0}</span>,
+    },
+    {
       key: 'status',
       header: '状态',
       sortValue: (u) => ['active', 'pending', 'disabled'].indexOf(statusKey(u)),
@@ -470,6 +596,12 @@ export default function MembersPage() {
       render: (u) => {
         const self = me?.id === u.id;
         const busy = busyId === u.id;
+        const transferItem = {
+          label: '转交客户…',
+          icon: ArrowRightLeft,
+          disabled: !(u.assignedCount > 0),
+          onClick: () => setTransfer({ user: u, mode: 'transfer' }),
+        };
         return (
           <RowActions>
             {busy && (
@@ -500,16 +632,19 @@ export default function MembersPage() {
               </button>
             </Tooltip>
             {/* 自己的账号不提供停用和删除，免得把自己锁在外面 */}
-            {!self && (
-              <MoreMenu
-                disabled={busy}
-                items={[
-                  { label: u.disabled ? '启用' : '停用', icon: Power, onClick: () => toggleDisabled(u) },
-                  'sep',
-                  { label: '删除', icon: Trash2, danger: true, onClick: () => remove(u) },
-                ]}
-              />
-            )}
+            <MoreMenu
+              disabled={busy}
+              items={
+                self
+                  ? [transferItem]
+                  : [
+                      transferItem,
+                      { label: u.disabled ? '启用' : '停用', icon: Power, onClick: () => toggleDisabled(u) },
+                      'sep',
+                      { label: '删除', icon: Trash2, danger: true, onClick: () => remove(u) },
+                    ]
+              }
+            />
           </RowActions>
         );
       },
@@ -582,6 +717,13 @@ export default function MembersPage() {
           upsert(u);
           setEditing(null);
         }}
+      />
+      <TransferModal
+        target={transfer}
+        users={users}
+        onClose={() => setTransfer(null)}
+        onTransferred={load}
+        onDisable={(u) => setDisabled(u, true)}
       />
       <Modal
         open={!!resetLink}

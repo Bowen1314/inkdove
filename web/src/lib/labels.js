@@ -271,3 +271,29 @@ export const MEMBER_KIND = {
   phone: '手机回复',
   relay: 'WhatsApp 转发',
 };
+
+// 按客户分配：分配记录的原因（conversation_assignments.reason）
+export const ASSIGN_REASON = {
+  manual: '手动分配',
+  bulk: '批量分配',
+  transfer: '转交客户',
+  migration: '升级时自动分配',
+  campaign: '外联回复',
+  access_removed: '失去号码权限',
+  user_deleted: '成员被删除',
+};
+export const assignReasonLabel = (r) => ASSIGN_REASON[r] || r || '—';
+
+// 分配接口的错误码；其他错误用接口自带的提示
+export const ASSIGN_ERROR = {
+  assignee_invalid: '这个成员不存在或已停用，请换一个',
+  assignee_no_account_access: '对方没有这个号的权限，先在成员页给他加上这个号',
+};
+export const assignErrorText = (e) => ASSIGN_ERROR[e?.code] || e?.message || '操作失败，请重试';
+
+// 批量分配返回的 skipped[].code
+export const ASSIGN_SKIP = {
+  not_found: '会话已不存在',
+  assignee_no_account_access: '对方没有号的权限',
+  unchanged: '负责人没变',
+};

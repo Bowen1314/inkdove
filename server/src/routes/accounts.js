@@ -131,7 +131,7 @@ export function accountsRouter(ctx, auth) {
 
   router.delete('/:id', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
-    await wa.deleteAccount(acc);
+    await wa.deleteAccount(acc, req.user);
     ctx.log.info(`[accounts] ${req.user.email} 删除了号 ${acc.id}`);
     res.json({ ok: true });
   });
