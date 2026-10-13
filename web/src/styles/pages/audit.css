@@ -1,0 +1,73 @@
+/* 操作日志页。见 DESIGN.md 第 5 节（表格加抽屉） */
+
+/* ---- 表格 ---- */
+.audit-page__actor {
+  min-width: 0;
+  max-width: 160px;
+}
+.audit-page__cell {
+  display: block;
+  max-width: 200px;
+}
+.audit-page__cell--wide {
+  max-width: 280px;
+}
+/* 「操作人」那列隐藏后，名字挪到说明下面那行 */
+.audit-page__actor-inline {
+  display: none;
+}
+
+/* DataTable 只带 hide-md / hide-sm，这页再加一档：< 1280（xl）隐藏详情和 IP */
+@media (max-width: 1279px) {
+  .audit-page .table .hide-xl {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .audit-page__actor-inline {
+    display: inline;
+  }
+}
+
+/* 列表底部：加载更多 / 到底了（也是自动加载的触发点） */
+.audit-page__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-4) var(--gutter);
+}
+
+/* ---- 详情抽屉（抽屉挂在 body 下，不在 .audit-page 里面） ---- */
+.audit-drawer {
+  gap: var(--sp-4);
+}
+.audit-drawer__summary {
+  margin: 0;
+  font-weight: 500;
+  color: var(--text);
+  word-break: break-word;
+}
+.audit-drawer__title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.audit-changes {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.audit-changes__label {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.audit-changes__value {
+  margin-top: 2px;
+  word-break: break-word;
+}

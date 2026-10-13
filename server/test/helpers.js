@@ -62,6 +62,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     // 在线更新：不启动定时检查，GitHub 指向连不上的端口，绝不访问外网
     updateCheckIntervalMs: 0,
     githubApiUrl: 'http://127.0.0.1:9',
+    // 操作日志：不起过期清理的定时器（要测时手动调 ctx.audit.cleanup()）
+    auditCleanupIntervalMs: 0,
     ...options,
   });
   const { app, ctx, close } = created;

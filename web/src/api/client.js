@@ -131,6 +131,12 @@ export const api = {
   /** 把 :id 负责的全部会话转给 toUserId → {moved, skipped}；skipped 是目标没有对应号权限、保持原样的会话数 */
   transferUserConversations: (id, toUserId, o) => post(`/api/users/${enc(id)}/transfer`, { toUserId }, o),
 
+  // 操作日志（admin，只读）
+  /** {actorId?, type?, from?, to?, q?, cursor?, limit?} → {items, nextCursor}；按时间倒序，nextCursor 为 null 时没有下一页 */
+  listAuditLogs: (query, o) => get('/api/audit-logs', { ...o, query }),
+  /** 操作类型 → [{value, label}] */
+  auditLogTypes: (o) => get('/api/audit-logs/types', o),
+
   // 全局设置（admin）
   getSettings: (o) => get('/api/settings', o),
   putSettings: (patch, o) => put('/api/settings', patch, o),

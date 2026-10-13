@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAccountStore, migrateLegacy } from './accounts.js';
+import { auditMiddleware } from './audit/middleware.js';
+import { AUDIT_CLEANUP_INTERVAL_MS, createAuditLog } from './audit/store.js';
 import { canAccessAccount, createAuth } from './auth.js';
 import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
@@ -21,6 +23,7 @@ import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
 import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
+import { auditRouter } from './routes/audit.js';
 import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { distillRouter } from './routes/distill.js';
@@ -82,8 +85,11 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   webDist?: string,
  *   translateEndpoints?: Record<string, string>,
  *   translateTimeoutMs?: number,
+ *   auditNow?: () => number,
+ *   auditCleanupIntervalMs?: number,
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
+ *   auditNow：操作日志的时钟（测试过期清理用）；auditCleanupIntervalMs：多久清一次过期的操作日志，为 0 时不起定时器（测试里手动调 ctx.audit.cleanup()）
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -178,6 +184,9 @@ export function createApp(config, options = {}) {
   ctx.update.start(options.updateFirstCheckMs, options.updateCheckIntervalMs);
   // 预约更新：启动时先处理一次重启前留下的预约，之后每分钟看一次到没到点。updateScheduleTickMs 为 0 时都不做（测试里手动调 ctx.update.tick()）
   ctx.update.startSchedule(options.updateScheduleTickMs ?? SCHEDULE_TICK_MS);
+  // 操作日志：谁在什么时候做了什么（audit/）。超过保留天数的每天清一次
+  ctx.audit = createAuditLog(ctx, { retentionDays: config.auditRetentionDays, now: options.auditNow });
+  ctx.audit.start(options.auditCleanupIntervalMs ?? AUDIT_CLEANUP_INTERVAL_MS);
   const auth = createAuth(ctx);
   auth.bootstrapAdmin();
   const ready = ctx.wa.init().catch((err) => log.error(`[relay] 拉起代理中继出错：${err?.stack || err}`));
@@ -202,6 +211,8 @@ export function createApp(config, options = {}) {
 
   const api = express.Router();
   api.use(express.json({ limit: '2mb' }));
+  // 操作日志：所有改东西的请求（和导出）都经过这里，登录前的也算
+  api.use(auditMiddleware(ctx, auth));
 
   // health 不要求登录；登录了才带上有权限看的号
   api.get('/health', async (req, res) => {
@@ -252,6 +263,7 @@ export function createApp(config, options = {}) {
   api.use('/redteam', auth.requireAdmin, redteamRouter(ctx));
   api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
   api.use('/update', auth.requireAdmin, updateRouter(ctx));
+  api.use('/audit-logs', auth.requireAdmin, auditRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));
@@ -308,6 +320,7 @@ export function createApp(config, options = {}) {
       ctx.distill.abortAll();
       ctx.redteam.abortAll();
       await ctx.update.stop();
+      ctx.audit.stop();
       try {
         db.close();
       } catch {

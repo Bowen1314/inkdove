@@ -451,6 +451,39 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
 );
 CREATE INDEX IF NOT EXISTS embeddings_model ON embeddings(model_key, kind);
 `);
+
+  // ---- 操作日志（写入、查询、过期清理见 audit/store.js，哪些接口记、怎么描述见 audit/actions.js） ----
+  // 人做的每个改动类操作一行，只增不改，过期（INKDOVE_AUDIT_RETENTION_DAYS，默认 365 天）的每天清一次。
+  // actor_*：操作人当时的 id、名字、邮箱、角色（人删了也看得懂）；登录失败时 actor_id 是这个邮箱对应的成员，邮箱不存在时为 NULL、
+  //   actor_email 是尝试的邮箱。category 是 action 的前缀（account、member……），按类型筛选用。
+  // target_*：操作的对象（类型、id、当时的名称）。changes：[{field, label, from?, to?, note?, secret?}]（JSON），
+  //   密钥类只有 note（已修改 / 已设置 / 已清空），长文本只有字数。不存请求体、地址里的查询参数和响应。
+  // ok、status：成功与否和 HTTP 状态码（0 是连接中途断开）；error：失败时的错误信息。
+  // 列表按 (at, seq) 倒序、游标分页；三个索引都以 at 结尾，按人、按类型筛选时也不用排序
+  db.exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  actor_id TEXT,
+  actor_name TEXT NOT NULL DEFAULT '',
+  actor_email TEXT NOT NULL DEFAULT '',
+  actor_role TEXT,
+  action TEXT NOT NULL,
+  category TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  target_type TEXT,
+  target_id TEXT,
+  target_name TEXT,
+  changes TEXT NOT NULL DEFAULT '[]',
+  ok INTEGER NOT NULL,
+  status INTEGER NOT NULL,
+  error TEXT,
+  ip TEXT
+);
+CREATE INDEX IF NOT EXISTS audit_logs_at ON audit_logs(at);
+CREATE INDEX IF NOT EXISTS audit_logs_actor ON audit_logs(actor_id, at);
+CREATE INDEX IF NOT EXISTS audit_logs_category ON audit_logs(category, at);
+CREATE INDEX IF NOT EXISTS audit_logs_action ON audit_logs(action, at);
+`);
 }
 
 /**
