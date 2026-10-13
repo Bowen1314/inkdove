@@ -166,10 +166,12 @@ export function createLeadStore(ctx) {
   const advanceWatermark = (convId, seq) =>
     db.prepare('UPDATE conversations SET lead_seq = MAX(COALESCE(lead_seq, 0), ?) WHERE id = ?').run(seq, convId);
 
-  /** 最近 50 条消息（按时间，从早到晚）和会话里最新一条消息的 seq */
+  /** 最近 50 条消息（按时间，从早到晚；撤回过的不算，不进模型）和会话里最新一条消息的 seq */
   function readMessages(convId) {
     const rows = db
-      .prepare('SELECT author, text, attachment, ts FROM messages WHERE conversation_id = ? ORDER BY ts DESC, seq DESC LIMIT ?')
+      .prepare(
+        'SELECT author, text, attachment, ts FROM messages WHERE conversation_id = ? AND revoked_at IS NULL ORDER BY ts DESC, seq DESC LIMIT ?',
+      )
       .all(convId, LEAD_MESSAGE_COUNT)
       .reverse();
     const maxSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ?').get(convId).n;

@@ -357,6 +357,12 @@ export const api = {
   /** F2b：人工消息改写成条目草稿，不落库 → {type, title, content, tags} */
   kbDraft: (convId, messageId) =>
     post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/kb-draft`, {}),
+  /**
+   * 撤回我方的一条消息（对所有人删除，客户那边显示「此消息已删除」），原文保留 → 更新后的消息（revoked 有值）。
+   * 能不能撤回看消息的 revocableUntil；默认不弹 toast，失败原因由调用方显示在消息下面
+   */
+  revokeMessage: (convId, messageId, o) =>
+    post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/revoke`, {}, { silent: true, ...o }),
 
   /** 用表单里当前（可能未保存）的值拉模型列表。总是 200 → {ok:true, models:[{id, label?}]} | {ok:false, error} */
   listLlmModels: (body) => post('/api/settings/llm/models', body),

@@ -42,7 +42,7 @@ const MEDIA_LABEL_RE = /^\[(图片|视频|语音|文件|贴纸|媒体消息|非�
 
 /**
  * 客户最近的文字消息（从早到晚）和最新一条的 seq。语音、图片（含识别后的描述）、导入的非文字占位都不算：
- * 图片描述是模型用中文写的，会把语言判断带偏。
+ * 图片描述是模型用中文写的，会把语言判断带偏。客户撤回了的也不算（撤回过的消息不进模型和翻译接口）。
  * @param {import('better-sqlite3').Database} db
  * @param {string} convId
  * @returns {{texts: string[], latestSeq: number|null}}
@@ -52,6 +52,7 @@ function recentCustomerTexts(db, convId) {
     .prepare(
       `SELECT seq, text FROM messages
        WHERE conversation_id = ? AND direction = 'in' AND author = 'customer' AND kind = 'text' AND media IS NULL AND trim(text) <> ''
+         AND revoked_at IS NULL
        ORDER BY seq DESC LIMIT ?`,
     )
     .all(convId, LANGUAGE_SAMPLE_COUNT);

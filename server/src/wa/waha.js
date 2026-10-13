@@ -119,6 +119,15 @@ export function createWahaClient(config) {
     setPresence(session, chatId, presence) {
       return request('POST', `/api/${enc(session)}/presence`, { body: { chatId, presence }, timeoutMs: 10_000 });
     },
+    /**
+     * 消息撤回（对所有人删除）：DELETE /api/{session}/chats/{chatId}/messages/{messageId}。
+     * messageId 要完整的 `true_<chat>_<ID>`（群里再接 `_<participant>`）：GOWS 的 deleteMessage 用不带 soft 的
+     * parseMessageIdSerialized 解析，只有 ID 会报错；内部发 RevokeMessageRequest（镜像 2026.9.2 的 dist 代码）。
+     * 会话不是 WORKING 时 WAHA 先等一会儿再回 422，所以超时给得和发消息差不多
+     */
+    deleteMessage(session, chatId, messageId) {
+      return request('DELETE', `/api/${enc(session)}/chats/${enc(chatId)}/messages/${enc(messageId)}`, { timeoutMs: 20_000 });
+    },
     /** GET /api/{session}/auth/qr?format=image（Accept: image/png） */
     async getQrPng(name) {
       const res = await request('GET', `/api/${enc(name)}/auth/qr?format=image`, { accept: 'image/png', raw: true, timeoutMs: 5000 });
