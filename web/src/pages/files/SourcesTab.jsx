@@ -1,34 +1,25 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ChevronDown,
-  ClipboardPaste,
-  Eye,
-  FileCode,
-  FileSpreadsheet,
-  FileText,
-  Globe,
-  Link2,
-  Trash2,
-  Type,
-  Upload,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Eye, FileCode, FileSpreadsheet, FileText, Globe, Trash2, Type, Upload } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { toast } from '../../ui/toastBus.js';
-import { Modal, useConfirm } from '../../ui/Modal.jsx';
+import { useConfirm } from '../../ui/Modal.jsx';
 import { Drawer } from '../../ui/Drawer.jsx';
-import { Menu, Tooltip } from '../../ui/Popover.jsx';
+import { Tooltip } from '../../ui/Popover.jsx';
 import { Select } from '../../ui/Select.jsx';
 import { StatusDot } from '../../ui/StatusDot.jsx';
-import { Callout, EmptyState, ErrorState, Field, Spinner, fieldProps } from '../../ui/common.jsx';
+import { Callout, EmptyState, ErrorState, Spinner } from '../../ui/common.jsx';
 import { CellText, DataTable, RowActions, TableToolbar } from '../../ui/DataTable.jsx';
 import { SOURCE_KIND, SOURCE_STATUS } from '../../lib/labels.js';
 import { fmtChars, fmtDay, fmtHm, fmtSize, fmtTime } from '../../lib/format.js';
 import { DistillBar } from '../kb/DistillBar.jsx';
-import { useWindowFileDrop } from '../../hooks/useWindowFileDrop.js';
-
-const MAX_FILE = 20 * 1024 * 1024;
-const ACCEPT = '.pdf,.docx,.xlsx,.csv,.txt,.md,.markdown,.html,.htm';
-const FORMATS_TEXT = '支持 PDF、Word、Excel、CSV、TXT、Markdown、网页文件，可多选，单个不超过 20MB';
+import {
+  SOURCE_FORMATS_TEXT,
+  SourceDropOverlay,
+  SourceUploadButton,
+  SourceUploadDialogs,
+  SourceUploading,
+  useSourceUpload,
+} from './SourceUpload.jsx';
 
 /* ---------- 小工具 ---------- */
 
@@ -68,208 +59,6 @@ function distillState(s) {
   if (s.distilledAt) return 2;
   if (s.status === 'ready') return 1;
   return 0;
-}
-
-/* ---------- 添加网址 ---------- */
-
-function UrlModal({ open, onClose, onAdded }) {
-  const [url, setUrl] = useState('');
-  const [crawl, setCrawl] = useState(false);
-  const [maxPages, setMaxPages] = useState(10);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const openRef = useRef(open);
-  openRef.current = open;
-
-  const reset = () => {
-    setUrl('');
-    setCrawl(false);
-    setMaxPages(10);
-    setErr('');
-  };
-
-  const close = () => {
-    if (!busy) reset();
-    onClose();
-  };
-
-  const submit = async (e) => {
-    e.preventDefault();
-    let u = url.trim();
-    if (!u || busy) return;
-    if (!/^https?:\/\//i.test(u)) u = `https://${u}`;
-    try {
-      // eslint-disable-next-line no-new
-      new URL(u);
-    } catch {
-      setErr('网址格式不正确，例如 https://www.example.com/about');
-      return;
-    }
-    setErr('');
-    setBusy(true);
-    try {
-      const n = Math.min(30, Math.max(1, Number(maxPages) || 10));
-      const src = await api.addUrlSource({ url: u, crawl, maxPages: n });
-      onAdded([src]);
-      if (src?.status === 'error') toast.error('网页没能读取，可在下方列表查看原因');
-      else toast.success('网页已添加');
-      reset();
-      // 抓取期间用户可能已经关掉对话框、又打开了别的
-      if (openRef.current) onClose();
-    } catch {
-      // 已提示
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={close}
-      title="添加网址"
-      width={560}
-      footer={
-        <>
-          <button type="button" className="btn" onClick={close}>
-            取消
-          </button>
-          <button type="submit" form="files-url-form" className="btn btn--primary" disabled={!url.trim() || busy}>
-            {busy ? <Spinner /> : <Globe />}
-            {busy ? '正在抓取…' : '添加网页'}
-          </button>
-        </>
-      }
-    >
-      <form id="files-url-form" className="files-page__form" onSubmit={submit} noValidate>
-        <Field label="网页地址" htmlFor="src-url" error={err}>
-          <div className="input-group">
-            <Link2 className="input-group__icon" aria-hidden="true" />
-            <input
-              {...fieldProps('src-url', err)}
-              className="input"
-              placeholder="https://www.example.com/products"
-              value={url}
-              disabled={busy}
-              onChange={(e) => {
-                setUrl(e.target.value);
-                if (err) setErr('');
-              }}
-              inputMode="url"
-              spellCheck={false}
-            />
-          </div>
-        </Field>
-        <label className="choice">
-          <input
-            type="checkbox"
-            className="checkbox"
-            checked={crawl}
-            disabled={busy}
-            onChange={(e) => setCrawl(e.target.checked)}
-          />
-          <span>同时抓取同一网站的其他页面</span>
-        </label>
-        <label className={`files-page__pages${crawl ? '' : ' is-disabled'}`}>
-          最多
-          <input
-            className="input input--sm num"
-            style={{ width: 72 }}
-            type="number"
-            min={1}
-            max={30}
-            value={maxPages}
-            disabled={!crawl || busy}
-            onChange={(e) => setMaxPages(e.target.value)}
-          />
-          页（最多 30）
-        </label>
-        <div className="field__hint">
-          {busy && crawl
-            ? '正在逐页抓取，页面多时可能需要一两分钟，请不要关闭页面。'
-            : '只能添加公开访问的网页，所有页面会合并成一份资料。'}
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-/* ---------- 粘贴文本 ---------- */
-
-function TextModal({ open, onClose, onAdded }) {
-  const [name, setName] = useState('');
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  const submit = async (e) => {
-    e.preventDefault();
-    if (!text.trim() || busy) return;
-    setBusy(true);
-    try {
-      const src = await api.addTextSource({
-        name: name.trim() || `粘贴的文本 ${new Date().toLocaleString('zh-CN')}`,
-        text,
-      });
-      onAdded([src]);
-      toast.success('文本已添加');
-      setName('');
-      setText('');
-      onClose();
-    } catch {
-      // 已提示
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="粘贴文本"
-      width={560}
-      footer={
-        <>
-          <button type="button" className="btn" onClick={onClose}>
-            取消
-          </button>
-          <button type="submit" form="files-text-form" className="btn btn--primary" disabled={!text.trim() || busy}>
-            {busy ? <Spinner /> : <ClipboardPaste />}
-            {busy ? '正在添加…' : '添加文本'}
-          </button>
-        </>
-      }
-    >
-      <form id="files-text-form" className="files-page__form" onSubmit={submit} noValidate>
-        <Field label="标题" htmlFor="src-name">
-          <input
-            id="src-name"
-            className="input"
-            placeholder="例如：退换货政策、2026 年价格表"
-            value={name}
-            disabled={busy}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={120}
-          />
-        </Field>
-        <Field
-          label="内容"
-          htmlFor="src-text"
-          aside={<span className="muted text-sm num">{text.length.toLocaleString('zh-CN')} 字</span>}
-        >
-          <textarea
-            id="src-text"
-            className="textarea"
-            rows={8}
-            placeholder="把产品介绍、常见问答、售后说明等内容粘贴到这里"
-            value={text}
-            disabled={busy}
-            onChange={(e) => setText(e.target.value)}
-          />
-        </Field>
-      </form>
-    </Modal>
-  );
 }
 
 /* ---------- 详情抽屉（预览） ---------- */
@@ -379,11 +168,8 @@ const STATE_OPTIONS = [
 
 export default function SourcesTab({ header, onChanged }) {
   const confirm = useConfirm();
-  const fileRef = useRef(null);
   const [sources, setSources] = useState(null);
   const [error, setError] = useState(null);
-  const [uploading, setUploading] = useState(null); // 文件名数组
-  const [adding, setAdding] = useState(null); // 'url' | 'text'
   const [open, setOpen] = useState(null); // 抽屉里的资料
   const [deleting, setDeleting] = useState(null); // id
   const [selected, setSelected] = useState(() => new Set());
@@ -416,35 +202,9 @@ export default function SourcesTab({ header, onChanged }) {
     onChanged?.();
   };
 
-  const handleFiles = async (fileList) => {
-    const files = Array.from(fileList || []);
-    if (!files.length || uploading) return;
-    const tooBig = files.filter((f) => f.size > MAX_FILE);
-    const ok = files.filter((f) => f.size <= MAX_FILE);
-    if (tooBig.length) {
-      toast.error(`${tooBig.map((f) => f.name).join('、')} 超过 20MB，无法上传`);
-    }
-    if (!ok.length) return;
-    setUploading(ok.map((f) => f.name));
-    try {
-      const res = (await api.uploadSources(ok)) || [];
-      onAdded(res);
-      const failed = res.filter((s) => s.status === 'error');
-      if (failed.length) {
-        toast.error(`${failed.length} 个文件没能读取，可在下方列表查看原因`);
-      } else {
-        toast.success(`已添加 ${res.length} 个文件`);
-      }
-    } catch {
-      // 错误已由 API 客户端提示
-    } finally {
-      setUploading(null);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
-
-  // 对话框、抽屉开着或正在上传时，不接拖进来的文件
-  const dragging = useWindowFileDrop(!uploading && !adding && !open, handleFiles);
+  // 抽屉开着时也不接拖进来的文件（正在上传、对话框开着的情况 useSourceUpload 自己会管）
+  const upload = useSourceUpload({ onAdded, dropEnabled: !open });
+  const { uploading } = upload;
 
   const removeOne = async (s) => {
     const ok = await confirm({
@@ -633,38 +393,13 @@ export default function SourcesTab({ header, onChanged }) {
     },
   ];
 
-  const pickFiles = () => fileRef.current?.click();
-
-  const actions = (
-    <div className="files-page__split">
-      <button type="button" className="btn btn--primary" onClick={pickFiles} disabled={!!uploading}>
-        {uploading ? <Spinner /> : <Upload />}
-        上传文件
-      </button>
-      <Tooltip content="添加网址或粘贴文本">
-        <span className="files-page__split-more">
-          <Menu
-            trigger={
-              <button type="button" className="btn btn--primary btn--icon" aria-label="更多添加方式">
-                <ChevronDown />
-              </button>
-            }
-            items={[
-              { label: '添加网址', icon: Globe, onClick: () => setAdding('url') },
-              { label: '粘贴文本', icon: ClipboardPaste, onClick: () => setAdding('text') },
-            ]}
-          />
-        </span>
-      </Tooltip>
-    </div>
-  );
+  const actions = <SourceUploadButton upload={upload} primary />;
 
   const total = sources?.length ?? 0;
 
   return (
     <div className="page">
       {header(actions)}
-      <input ref={fileRef} type="file" multiple accept={ACCEPT} hidden onChange={(e) => handleFiles(e.target.files)} />
 
       <div className="files-page__body">
         <DistillBar sources={sources} />
@@ -674,14 +409,7 @@ export default function SourcesTab({ header, onChanged }) {
           onSearch={setQ}
           searchPlaceholder="搜索资料名称"
           count={filtered ? filtered.length : undefined}
-          end={
-            uploading && (
-              <span className="files-page__uploading" title={uploading.join('、')}>
-                <Spinner />
-                正在上传并读取 {uploading.length} 个文件…
-              </span>
-            )
-          }
+          end={uploading && <SourceUploading names={uploading} />}
           selection={{
             count: selected.size,
             onClear: () => setSelected(new Set()),
@@ -731,9 +459,9 @@ export default function SourcesTab({ header, onChanged }) {
                   <EmptyState
                     icon={FileText}
                     title="还没有资料"
-                    desc={`产品手册、价格表、常见问题、售后政策、公司官网都可以。${FORMATS_TEXT}，也可以直接把文件拖进来。`}
+                    desc={`产品手册、价格表、常见问题、售后政策、公司官网都可以。${SOURCE_FORMATS_TEXT}，也可以直接把文件拖进来。`}
                     action={
-                      <button type="button" className="btn btn--primary" onClick={pickFiles} disabled={!!uploading}>
+                      <button type="button" className="btn btn--primary" onClick={upload.pickFiles} disabled={!!uploading}>
                         <Upload />
                         上传文件
                       </button>
@@ -747,18 +475,10 @@ export default function SourcesTab({ header, onChanged }) {
           </div>
         )}
 
-        {dragging && (
-          <div className="drop-overlay files-page__drop" aria-hidden="true">
-            <div className="files-page__drop-text">
-              松开上传
-              <span className="files-page__drop-hint">{FORMATS_TEXT}</span>
-            </div>
-          </div>
-        )}
+        {upload.dragging && <SourceDropOverlay />}
       </div>
 
-      <UrlModal open={adding === 'url'} onClose={() => setAdding(null)} onAdded={onAdded} />
-      <TextModal open={adding === 'text'} onClose={() => setAdding(null)} onAdded={onAdded} />
+      <SourceUploadDialogs upload={upload} />
       <SourceDrawer source={open} onClose={() => setOpen(null)} onDelete={removeOne} deleting={deleting === open?.id} />
     </div>
   );

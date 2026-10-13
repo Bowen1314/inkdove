@@ -16,6 +16,14 @@ import { EntryPeek } from '../../ui/EntryRefs.jsx';
 import { clearEntryCache } from '../../lib/entryCache.js';
 import { ENTRY_ORIGIN, ENTRY_STATUS, ENTRY_TYPES, entryTypeLabel } from '../../lib/labels.js';
 import { fmtTime, parseTags } from '../../lib/format.js';
+import { DistillBar, useDistillActions } from './DistillBar.jsx';
+import {
+  SourceDropOverlay,
+  SourceUploadButton,
+  SourceUploadDialogs,
+  SourceUploading,
+  useSourceUpload,
+} from '../files/SourceUpload.jsx';
 
 /* ---------- 企业画像（标签「企业画像」） ---------- */
 
@@ -352,10 +360,13 @@ const STATUS_OPTIONS = [
   { value: 'disabled', label: '已停用' },
 ];
 const BULK_DONE = { enable: '已启用', disable: '已停用', delete: '已删除' };
+const NO_SOURCES = []; // 业务员不拉资料列表
 
 /**
- * readOnly：业务员只能浏览，点行是只读查看，没有新建、编辑、删除、批量操作。
- * actionsSlot：页面头部右侧的位置，"新建条目"放在那里。
+ * readOnly：业务员只能浏览，点行是只读查看，没有新建、编辑、删除、批量操作，也不能上传资料。
+ * actionsSlot：页面头部右侧的位置，"上传文件"和"新建条目"放在那里。
+ * 管理员可以直接上传资料（存到「文件 → 知识库资料」）。传完不自动整理（整理要调模型），
+ * 有新资料还没整理时表格上方出现整理状态条，平时不显示。
  */
 export default function EntriesTab({ onChanged, readOnly = false, actionsSlot }) {
   const confirm = useConfirm();
@@ -374,6 +385,14 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
   const [bulk, setBulk] = useState(null);
   const reqRef = useRef(0);
   const query = q.trim();
+
+  const distill = useDistillActions(readOnly ? NO_SOURCES : undefined);
+  // 条目抽屉开着时也不接拖进来的文件；业务员不接
+  const upload = useSourceUpload({
+    onAdded: distill.reload,
+    dropEnabled: !readOnly && !editing && !peekId,
+    elsewhere: true,
+  });
 
   const load = useCallback(async () => {
     const my = ++reqRef.current;
@@ -549,10 +568,13 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
       desc={readOnly ? '管理员整理知识库后，这里会显示机器人回复时依据的条目。' : '上传资料并整理后会自动生成条目，也可以手动新建。'}
       action={
         !readOnly && (
-          <button type="button" className="btn btn--primary" onClick={() => setEditing({ ...EMPTY_ENTRY })}>
-            <Plus />
-            新建条目
-          </button>
+          <div className="hstack">
+            <SourceUploadButton upload={upload} primary label="上传资料" />
+            <button type="button" className="btn" onClick={() => setEditing({ ...EMPTY_ENTRY })}>
+              <Plus />
+              新建条目
+            </button>
+          </div>
         )
       }
     />
@@ -563,19 +585,30 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
       {!readOnly &&
         actionsSlot &&
         createPortal(
-          <button type="button" className="btn btn--primary" onClick={() => setEditing({ ...EMPTY_ENTRY })}>
-            <Plus />
-            新建条目
-          </button>,
+          <>
+            <SourceUploadButton upload={upload} compact />
+            <button type="button" className="btn btn--primary" onClick={() => setEditing({ ...EMPTY_ENTRY })}>
+              <Plus />
+              新建条目
+            </button>
+          </>,
           actionsSlot,
         )}
+
+      {!readOnly && distill.pending > 0 && <DistillBar sources={distill.sources} showSourcesLink />}
 
       <TableToolbar
         search={q}
         onSearch={setQ}
         searchPlaceholder="搜索标题、内容或标签"
         count={entries ? entries.length : null}
-        end={loading && entries ? <Spinner className="muted" /> : null}
+        end={
+          upload.uploading ? (
+            <SourceUploading names={upload.uploading} />
+          ) : loading && entries ? (
+            <Spinner className="muted" />
+          ) : null
+        }
         selection={
           readOnly
             ? null
@@ -621,7 +654,10 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
         />
       )}
 
+      {upload.dragging && <SourceDropOverlay />}
+
       {!readOnly && <EntryDrawer entry={editing} onClose={() => setEditing(null)} onSaved={onSaved} onDeleted={onDeleted} />}
+      {!readOnly && <SourceUploadDialogs upload={upload} />}
       {readOnly && <EntryPeek entryId={peekId} onClose={() => setPeekId(null)} />}
     </>
   );

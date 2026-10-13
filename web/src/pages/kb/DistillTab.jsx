@@ -14,6 +14,13 @@ import { JOB_MODE, JOB_STATUS, PHASES } from '../../lib/labels.js';
 import { fmtClock, fmtNum, fmtTime } from '../../lib/format.js';
 import { DistillStatus, useDistillActions } from './DistillBar.jsx';
 import { TimeText } from '../../ui/TimeText.jsx';
+import {
+  SourceDropOverlay,
+  SourceUploadButton,
+  SourceUploadDialogs,
+  SourceUploading,
+  useSourceUpload,
+} from '../files/SourceUpload.jsx';
 
 const isActive = (j) => j && (j.status === 'queued' || j.status === 'running');
 
@@ -125,13 +132,17 @@ const JOB_COLUMNS = [
   },
 ];
 
-/** actionsSlot：页面头部右侧的位置，"全部重建""开始整理"放在那里 */
+/**
+ * actionsSlot：页面头部右侧的位置，"上传文件""全部重建""开始整理"放在那里。
+ * 可以直接上传资料（存到「文件 → 知识库资料」）；传完刷新上面的整理状态，不自动开始整理（整理要调模型）。
+ */
 export default function DistillTab({ onChanged, actionsSlot }) {
   const confirm = useConfirm();
   const [params, setParams] = useSearchParams();
   const jobParam = params.get('job');
   const distill = useDistillActions();
   const reloadSources = distill.reload;
+  const upload = useSourceUpload({ onAdded: reloadSources, elsewhere: true });
 
   const [jobs, setJobs] = useState(null);
   const [selectedId, setSelectedId] = useState(jobParam || null);
@@ -245,38 +256,46 @@ export default function DistillTab({ onChanged, actionsSlot }) {
     }
   };
 
-  // 一份可用资料都没有时不放按钮，下面的空状态会引导去添加资料
+  // 一份可用资料都没有时只放"上传文件"，下面的空状态也会引导上传
   const headerActions =
     actionsSlot &&
-    distill.readyCount > 0 &&
     createPortal(
       <>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => distill.start('rebuild')}
-          disabled={!!distill.distilling || active}
-        >
-          {distill.distilling === 'rebuild' ? <Spinner /> : <RefreshCcw />}
-          全部重建
-        </button>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => distill.start('incremental')}
-          disabled={!!distill.distilling || active || distill.pending === 0}
-        >
-          {distill.distilling === 'incremental' ? <Spinner /> : <Sparkles />}
-          开始整理
-        </button>
+        <SourceUploadButton upload={upload} compact />
+        {distill.readyCount > 0 && (
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => distill.start('rebuild')}
+              disabled={!!distill.distilling || active}
+            >
+              {distill.distilling === 'rebuild' ? <Spinner /> : <RefreshCcw />}
+              全部重建
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => distill.start('incremental')}
+              disabled={!!distill.distilling || active || distill.pending === 0}
+            >
+              {distill.distilling === 'incremental' ? <Spinner /> : <Sparkles />}
+              开始整理
+            </button>
+          </>
+        )}
       </>,
       actionsSlot,
     );
 
-  // 资料的整理状态：一行，和文件页的 DistillBar 同样式
+  // 资料的整理状态：一行，和文件页的 DistillBar 同样式；上传中时换成上传进度
   const sourcesBar = (
     <div className="kb-distillbar">
-      <DistillStatus pending={distill.pending} text={distill.text} />
+      {upload.uploading ? (
+        <SourceUploading names={upload.uploading} />
+      ) : (
+        <DistillStatus pending={distill.pending} text={distill.text} />
+      )}
       <div className="kb-distillbar__actions">
         <Link to="/files/sources" className="btn btn--link btn--muted btn--sm">
           管理资料
@@ -305,13 +324,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
           fill
           icon={ListChecks}
           title="还没有整理过知识库"
-          desc="先在「文件 → 知识库资料」里添加文件、网址或文本，再点「开始整理」，系统会把资料整理成知识条目。"
-          action={
-            <Link to="/files/sources" className="btn btn--primary">
-              去添加资料
-              <ArrowRight />
-            </Link>
-          }
+          desc="先添加资料（文件、网址或粘贴文本都可以），再点「开始整理」，系统会把资料整理成知识条目。文件也可以直接拖进来。"
+          action={<SourceUploadButton upload={upload} primary label="上传资料" />}
         />
       </>
     );
@@ -331,7 +345,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
 
     body = (
       <>
-        {!active && sourcesBar}
+        {(!active || upload.uploading) && sourcesBar}
         <div className="page-body page-body--form kb-distill">
           <div className="kb-distill__head">
             <div className="kb-distill__title">
@@ -435,6 +449,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
     <>
       {headerActions}
       {body}
+      {upload.dragging && <SourceDropOverlay />}
+      <SourceUploadDialogs upload={upload} />
     </>
   );
 }

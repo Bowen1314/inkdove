@@ -29,6 +29,20 @@
 .files-page__split .files-page__split-more > .btn.btn--primary {
   border-left-color: color-mix(in srgb, var(--on-primary) 28%, var(--primary));
 }
+/* 次要样式（知识库页头）：两个按钮的边框叠成一条线 */
+.files-page__split-more > .btn:not(.btn--primary) {
+  margin-left: -1px;
+}
+/* 知识库页头按钮多，窄屏时"上传文件"只留图标（同"测试对话"按钮） */
+@media (max-width: 640px) {
+  .files-page__split--compact > .btn {
+    width: 32px;
+    padding: 0;
+  }
+  .files-page__split--compact .files-page__split-label {
+    display: none;
+  }
+}
 
 /* 名称列吃掉剩余宽度、超长截断，其他列按内容宽；这样窄屏和长文件名都不会把表格撑出横向滚动 */
 .files-page__table .table th:nth-child(2),

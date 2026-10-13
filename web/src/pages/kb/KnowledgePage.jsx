@@ -14,7 +14,7 @@ import RedteamTab from './RedteamTab.jsx';
 import TestChat, { TestChatClear, useTestChat } from './TestChat.jsx';
 
 /**
- * 知识库。资料已搬到「文件 → 知识库资料」（F15）。
+ * 知识库。资料已搬到「文件 → 知识库资料」（F15）；admin 在「条目」「整理」也能直接上传，存的是同一处。
  * admin：条目 / 企业画像 / 缺口 / 整理 / 红线体检；agent：条目和企业画像（只读）。两种角色都能用测试对话。
  * 测试对话面板宽 420，切换标签时保持打开：≥1280 时挤窄内容、不加遮罩；更窄时是带遮罩的抽屉。
  */
