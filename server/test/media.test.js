@@ -1,8 +1,10 @@
 // 客户发来的图片、视频、语音、文件、贴纸：收到就后台下载存盘（不等识别开关），会话页用 GET …/messages/:messageId/media 取。
 // 假 WAHA 的 /api/files 和假 Graph API 当文件来源；大小上限在测试里调小（mediaStoreMaxBytes），不用真造 64MB 的文件。
 // 另有人工回复的号会话页用的两个小接口：标为已处理（只清待处理）、关掉草稿。
-// 和 app.js 一样装上 npm undici 的全局 dispatcher（接管全局 fetch），测试环境和正式环境一致：
-// 以后要是有人把媒体下载改回 fetch，下面的并发回归测试会复现进程崩溃
+// 先 import 'undici'：原来是让 npm undici 接管全局 fetch，和当时的正式环境一致。现在正式环境用 src/builtin-fetch.js 让全局 fetch
+// 走 Node 自带的连接，npm test 也用 --import 先加载了它，这一行就不再接管全局 fetch（只有不带 --import 单独跑这个文件时才会）。
+// 这不影响下面并发回归测试的意义：媒体下载用 node:http（media-download.js 的 httpGet），不经过 fetch，测的是这条下载路径本身
+// 在对方传完就关连接、几个大文件同时边下边写盘时进程不崩、文件完整，和全局 fetch 底下是哪个 undici 无关。
 import 'undici';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';

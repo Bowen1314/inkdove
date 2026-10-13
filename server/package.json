@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test --test-concurrency=1 test/*.test.js"
+    "test": "node --import ./src/builtin-fetch.js --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

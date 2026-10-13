@@ -1,3 +1,4 @@
+import './builtin-fetch.js'; // 必须第一个：见文件里的说明
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';

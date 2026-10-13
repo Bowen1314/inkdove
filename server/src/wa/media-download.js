@@ -1,7 +1,9 @@
 // 客户媒体（WAHA 的 /api/files/…、Meta 的媒体下载地址）用 node:http / node:https 下载，不用 fetch。
 //
-// 为什么不用 fetch：全局 fetch 现在走的是 npm undici 7.30 的连接——app.js 经 wa/proxy-test.js 加载了 undici 包，
+// 为什么不用 fetch：全局 fetch 原来走的是 npm undici 7.30 的连接——app.js 经 wa/proxy-test.js 加载了 undici 包，
 // 它一加载（lib/global.js）就把自己的 Agent 设成全局 dispatcher，Node 自带的 fetch 也就用它收发。
+// 现在 src/builtin-fetch.js 让全局 fetch 改回 Node 自带的连接；媒体下载照旧不用 fetch：文件大、要边下边写盘，
+// 直接用 node:http 的流最简单，也不受哪个 undici 接管全局 fetch 的影响。下面是当时查到的情况：
 // 它有个 bug：响应体还没被读走、解析器因为背压暂停着，这时对方关了连接（HTTP/1.0、Connection: close），socket 的 end
 // 事件里 Parser.finish 的 assert(!this.paused) 失败（client-h1.js:374，经 onHttpSocketEnd），在事件回调里抛出、接不住，
 // 整个进程崩掉。实测稳定复现的条件：
