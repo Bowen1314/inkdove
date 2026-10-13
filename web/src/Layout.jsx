@@ -25,7 +25,7 @@ import { useAuth } from './lib/auth.jsx';
 import { useBranding } from './lib/branding.jsx';
 import { roleLabel } from './lib/labels.js';
 import { setPendingCount, usePendingCount } from './lib/inboxCount.js';
-import { loadUpdateStatus, openUpdateModal, useUpdateState } from './lib/update.js';
+import { loadUpdateStatus, openUpdateModal, scheduleText, useUpdateState } from './lib/update.js';
 import { usePolling } from './hooks/usePolling.js';
 import { ChangePasswordModal } from './ui/ChangePasswordModal.jsx';
 import { StylePromptModal } from './ui/StylePromptModal.jsx';
@@ -103,11 +103,19 @@ function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePasswo
       </nav>
 
       <div className="sidebar__foot">
-        {isAdmin && update?.available && (
-          <button type="button" className="sidebar__note" onClick={onOpenUpdate}>
-            <StatusDot tone="info" />
-            有新版本 v{update.latest.version}
+        {isAdmin && update?.schedule ? (
+          <button type="button" className="sidebar__note sidebar__note--wrap" onClick={onOpenUpdate}>
+            <StatusDot tone="info" pulse={!!update.schedule.startedAt} />
+            <span>{scheduleText(update.schedule)}</span>
           </button>
+        ) : (
+          isAdmin &&
+          update?.available && (
+            <button type="button" className="sidebar__note" onClick={onOpenUpdate}>
+              <StatusDot tone="info" />
+              有新版本 v{update.latest.version}
+            </button>
+          )
         )}
         {mock && (
           <Tooltip content="不会调用真实的 AI 模型，整理结果和回复内容都是模拟的。正式使用前请联系部署人员关闭演示模式。">
@@ -191,8 +199,10 @@ export function Layout() {
     { immediate: true },
   );
 
-  // 管理员：有没有新版本（服务端每 6 小时查一次 GitHub，这里只读它缓存的结果），1 小时补一次
-  usePolling(loadUpdateStatus, 3600_000, isAdmin, { immediate: true });
+  // 管理员：有没有新版本（服务端每 6 小时查一次 GitHub，这里只读它缓存的结果），1 小时补一次；
+  // 有预约更新时每分钟一次，到点开始更新、更新完的结果能及时显示
+  const { status: updateStatus } = useUpdateState();
+  usePolling(loadUpdateStatus, updateStatus?.schedule ? 60_000 : 3600_000, isAdmin, { immediate: true });
 
   useEffect(() => setNavOpen(false), [pathname]);
 

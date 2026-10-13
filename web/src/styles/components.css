@@ -1954,3 +1954,51 @@
   flex: 1 1 240px;
   min-width: 0;
 }
+/* 预约更新：弹窗顶部「已预约 …」一行（右边改时间、取消预约），设置页也用 .update-actions */
+.update-modal__schedule {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.update-modal__schedule-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.update-modal__hint {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+/* 选预约时间：哪天 + 几点 : 几分，窄屏时日子单独一行 */
+.schedule-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.schedule-fields__day {
+  flex: 1 1 200px;
+}
+.schedule-fields__time {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+.schedule-fields__num {
+  width: 72px;
+}
+.schedule-fields__sep {
+  color: var(--text-muted);
+}

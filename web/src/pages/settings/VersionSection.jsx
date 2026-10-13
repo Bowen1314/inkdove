@@ -2,9 +2,20 @@ import { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { fmtFull } from '../../lib/format.js';
-import { SOURCE_REPO_URL, loadUpdateStatus, openUpdateModal, setUpdateStatus, useUpdateState } from '../../lib/update.js';
+import {
+  SOURCE_REPO_URL,
+  cancelUpdateSchedule,
+  loadUpdateStatus,
+  openUpdateModal,
+  scheduleResultOf,
+  scheduleText,
+  setUpdateStatus,
+  useUpdateState,
+} from '../../lib/update.js';
 import { ErrorState, SkeletonRows, Spinner } from '../../ui/common.jsx';
 import { SettingsRow, SettingsSection } from '../../ui/Settings.jsx';
+import { StatusDot } from '../../ui/StatusDot.jsx';
+import { toast } from '../../ui/toastBus.js';
 
 /** 检查结果：成功绿点（有新版本蓝点），失败红点加原因 */
 function resultOf(s) {
@@ -13,12 +24,16 @@ function resultOf(s) {
   return { tone: 'success', text: '已经是最新版本' };
 }
 
-/** 版本：当前版本、上次检查时间、「检查更新」。有新版本时点开 Layout 里的更新弹窗 */
+/**
+ * 版本：当前版本、上次检查时间、「检查更新」。有新版本时点开 Layout 里的更新弹窗。
+ * 预约更新：已预约时显示「已预约 … 更新到 v…」，可以改时间（打开弹窗选时间）、取消预约；下面是最近一次预约执行的结果。
+ */
 export default function VersionSection() {
   const { status: s } = useUpdateState();
   const [loadError, setLoadError] = useState(null);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
 
   const load = () => {
     setLoadError(null);
@@ -38,11 +53,25 @@ export default function VersionSection() {
     }
   };
 
+  const cancelSchedule = async () => {
+    setCancelling(true);
+    try {
+      await cancelUpdateSchedule();
+      toast.success('已取消预约');
+    } catch {
+      // 已弹提示
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   let content;
   if (!s && loadError) content = <ErrorState compact error={loadError} onRetry={load} />;
   else if (!s) content = <SkeletonRows rows={2} />;
   else {
     const result = checkError ? { tone: 'danger', text: checkError } : s.checkedAt || s.error ? resultOf(s) : null;
+    const schedule = s.schedule;
+    const lastRun = scheduleResultOf(s.scheduleResult);
     content = (
       <>
         <SettingsRow label="当前版本">
@@ -82,6 +111,34 @@ export default function VersionSection() {
             </div>
           )}
         </SettingsRow>
+        {(schedule || lastRun) && (
+          <SettingsRow label="预约更新">
+            {schedule && (
+              <div className="settings-page__test">
+                <StatusDot tone="info" pulse={!!schedule.startedAt} wrap>
+                  {scheduleText(schedule)}
+                </StatusDot>
+                {!schedule.startedAt && (
+                  <div className="update-actions">
+                    <button type="button" className="btn btn--sm" onClick={() => openUpdateModal('schedule')}>
+                      改时间
+                    </button>
+                    <button type="button" className="btn btn--sm" onClick={cancelSchedule} disabled={cancelling}>
+                      {cancelling && <Spinner />}
+                      取消预约
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+            {lastRun && (
+              <div className={`test-result status status--${lastRun.tone} settings-page__result`} role="status">
+                <span className="status__dot" aria-hidden="true" />
+                <span>{lastRun.text}</span>
+              </div>
+            )}
+          </SettingsRow>
+        )}
       </>
     );
   }

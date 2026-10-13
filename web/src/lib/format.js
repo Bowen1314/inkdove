@@ -52,6 +52,15 @@ export function fmtFull(iso) {
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** 日期加时间（按浏览器时区）：10月14日 03:00；不是今年时带年份：2027年1月2日 03:00 */
+export function fmtDateTime(iso) {
+  const d = toDate(iso);
+  if (!d) return '';
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const md = `${d.getMonth() + 1}月${d.getDate()}日`;
+  return d.getFullYear() === new Date().getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}年${md} ${hm}`;
+}
+
 export function fmtDay(iso) {
   const d = toDate(iso);
   if (!d) return '';

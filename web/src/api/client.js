@@ -201,7 +201,10 @@ export const api = {
   // 在线更新（admin）
   /**
    * → {current, latest:{version, name, url, publishedAt, notes}|null, available, checkedAt, error, checkEnabled,
-   *    updater:{configured, reachable?}, image, pinned}。notes 是 release 正文，按纯文本显示
+   *    updater:{configured, reachable?}, image, pinned, schedule, scheduleResult}。notes 是 release 正文，按纯文本显示。
+   * schedule：当前的预约 {at, targetVersion, scheduledBy:{id, email}, createdAt}，到点让更新助手更新后多出
+   *   {startedAt, from, to, backup}（等新版本启动）；没有是 null。
+   * scheduleResult：最近一次预约执行的结果 {outcome: success|failed|missed, at, targetVersion, from, to, error, finishedAt, …}|null
    */
   getUpdate: (o) => get('/api/update', o),
   /** 立即检查（60 秒内查过就直接给上次的结果）→ 同 getUpdate。关闭了检查：400 code=update_check_disabled */
@@ -211,6 +214,13 @@ export const api = {
    * 400 updater_not_configured | no_update | image_pinned，409 update_in_progress，500 backup_failed，502 updater_failed
    */
   applyUpdate: (o) => post('/api/update/apply', {}, o),
+  /**
+   * 预约更新（只管这一次，再预约就覆盖）。at 是 ISO 时间，1 分钟之后、7 天之内 → 同 getUpdate。
+   * 400 bad_time | 条件同 applyUpdate，409 update_in_progress
+   */
+  scheduleUpdate: (at, o) => post('/api/update/schedule', { at }, o),
+  /** 取消预约（没有预约也算成功）→ 同 getUpdate。已经开始按预约更新时 409 update_in_progress */
+  cancelUpdateSchedule: (o) => del('/api/update/schedule', o),
 
   // WhatsApp 号码（F7）
   listAccounts: (o) => get('/api/accounts', o),

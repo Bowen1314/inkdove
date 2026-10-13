@@ -2,15 +2,31 @@
 // 时钟注入（createApp 的 updateNow）。覆盖：版本比较和钉版本判断、启动后延迟首查、关闭检测时不发请求、只有 admin、
 // 60 秒内不重查、预发布不提示、GitHub 出错、自定义仓库、数据库备份文件和保留份数、备份失败不更新、
 // 更新助手未配置 / 口令错 / 出错 / 连不上 / 成功、同一时间只允许一个更新。
+// 预约更新（定时检查用 updateScheduleTickMs=0 关掉，手动调 ctx.update.tick()；重启用预先写好 kv 的数据目录模拟）：
+// 权限、时间范围和格式、条件不满足、覆盖旧预约、取消、到点执行（只执行一次、等重启期间不能改、10 分钟没重启记失败）、
+// 到点时有更新的版本、执行失败记原因不重试、立即更新后预约作废、定时器、重启后已经是新版本 / 错过 1 小时以上 /
+// 不到 1 小时照常执行 / 更新了没升上去 / 条件不满足、重启不丢。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import Database from 'better-sqlite3';
 import { loadConfig } from '../src/config.js';
-import { KEEP_BACKUPS, UPDATE_CHECK_MIN_GAP_MS, UPDATE_LOCK_MS, compareVersions, isPinned, parseVersion } from '../src/update.js';
-import { sleep, startApp, waitFor } from './helpers.js';
+import { kvGet, kvSet, openDb } from '../src/db.js';
+import {
+  KEEP_BACKUPS,
+  SCHEDULE_MAX_AHEAD_MS,
+  SCHEDULE_MIN_AHEAD_MS,
+  SCHEDULE_MISS_MS,
+  UPDATE_CHECK_MIN_GAP_MS,
+  UPDATE_LOCK_MS,
+  compareVersions,
+  isPinned,
+  parseVersion,
+} from '../src/update.js';
+import { ADMIN_EMAIL, sleep, startApp, waitFor } from './helpers.js';
 
 const CURRENT = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 const cur = parseVersion(CURRENT);
@@ -263,6 +279,8 @@ describe('检查更新', () => {
       ['GET', '/api/update'],
       ['POST', '/api/update/check'],
       ['POST', '/api/update/apply'],
+      ['POST', '/api/update/schedule'],
+      ['DELETE', '/api/update/schedule'],
     ]) {
       assert.equal((await t.req(method, p, { cookie })).status, 403, `${method} ${p}`);
       assert.equal((await t.req(method, p, { auth: false })).status, 401, `${method} ${p}`);
@@ -523,6 +541,469 @@ describe('一键更新', () => {
       await down.close();
       await pinned.close();
       await minor.close();
+    }
+  });
+});
+
+// ============ 预约更新 ============
+
+const MIN = 60_000;
+const HOUR = 3600_000;
+const iso = (ms) => new Date(ms).toISOString();
+/** 现在之后 ms 的 ISO 时间（UTC） */
+const later = (ms) => iso(clock.now + ms);
+/** 同一个时刻写成带 +HH:MM 的 ISO 时间 */
+function withOffset(ms, offsetMin) {
+  const local = new Date(ms + offsetMin * MIN).toISOString().slice(0, 19);
+  const abs = Math.abs(offsetMin);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return `${local}${offsetMin >= 0 ? '+' : '-'}${p2(Math.floor(abs / 60))}:${p2(abs % 60)}`;
+}
+const scheduleOf = (t) => kvGet(t.ctx.db, 'update_schedule', null);
+const resultOf = (t) => kvGet(t.ctx.db, 'update_schedule_result', null);
+const scheduleAt = (t, at) => t.req('POST', '/api/update/schedule', { body: { at } });
+const getStatus = async (t) => (await t.req('GET', '/api/update')).body;
+
+describe('预约更新', () => {
+  let t;
+  let adminId;
+  before(async () => {
+    t = await boot({ options: { updateScheduleTickMs: 0 } });
+    adminId = (await t.req('GET', '/api/auth/me')).body.user.id;
+  });
+  after(async () => {
+    await t.close();
+  });
+  beforeEach(() => {
+    // 清掉上一个用例留下的预约和结果，上一个用例的更新锁过期
+    kvSet(t.ctx.db, 'update_schedule', null);
+    kvSet(t.ctx.db, 'update_schedule_result', null);
+    clock.now += UPDATE_LOCK_MS;
+  });
+
+  it('预约：存进库，GET /api/update 带上 schedule（没有时是 null）；没到点不更新', async () => {
+    const s0 = await getStatus(t);
+    assert.equal(s0.schedule, null);
+    assert.equal(s0.scheduleResult, null);
+
+    await recheck(t);
+    const at = later(3 * HOUR);
+    const r = await scheduleAt(t, at);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const expected = {
+      at,
+      targetVersion: NEXT,
+      scheduledBy: { id: adminId, email: ADMIN_EMAIL },
+      createdAt: iso(clock.now),
+    };
+    assert.deepEqual(r.body.schedule, expected, '返回的是 GET /api/update 的形状，带上新的预约');
+    assert.equal(r.body.current, CURRENT);
+    assert.deepEqual((await getStatus(t)).schedule, expected);
+    assert.deepEqual(scheduleOf(t), expected);
+    assert.ok(t.log.lines.some((l) => l === `info [update] ${ADMIN_EMAIL} 预约在 ${at} 更新到 v${NEXT}`));
+
+    clock.now += 2 * HOUR;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 0);
+    assert.deepEqual(scheduleOf(t), expected);
+  });
+
+  it('带时区偏移、不带秒、带微秒的 ISO 时间也行，统一存成 UTC', async () => {
+    await recheck(t);
+    const ms = clock.now + 2 * HOUR;
+    let r = await scheduleAt(t, withOffset(ms, 8 * 60));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.schedule.at, iso(ms));
+    r = await scheduleAt(t, withOffset(ms, -4 * 60).slice(0, 16) + '-04:00');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.schedule.at, iso(Math.floor(ms / MIN) * MIN));
+    r = await scheduleAt(t, iso(ms).replace(/Z$/, '456Z'));
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.schedule.at, iso(ms));
+  });
+
+  it('时间要在 1 分钟之后、7 天之内，要写成带时区的 ISO 时间', async () => {
+    await recheck(t);
+    const bad = [
+      undefined,
+      '',
+      12345,
+      'tomorrow',
+      '2026-10-14 03:00',
+      later(2 * HOUR).replace(/Z$/, ''), // 没带时区
+      later(SCHEDULE_MIN_AHEAD_MS - 1000),
+      later(-MIN),
+      later(SCHEDULE_MAX_AHEAD_MS + 1000),
+    ];
+    for (const at of bad) {
+      const r = await scheduleAt(t, at);
+      assert.equal(r.status, 400, `${at}: ${JSON.stringify(r.body)}`);
+      assert.equal(r.body.code, 'bad_time', String(at));
+    }
+    assert.match((await scheduleAt(t, later(-MIN))).body.error, /1 分钟之后、7 天之内/);
+    assert.equal(scheduleOf(t), null);
+    // 边界：正好 1 分钟、正好 7 天都行
+    assert.equal((await scheduleAt(t, later(SCHEDULE_MIN_AHEAD_MS))).status, 200);
+    assert.equal((await scheduleAt(t, later(SCHEDULE_MAX_AHEAD_MS))).status, 200);
+    assert.equal(scheduleOf(t).at, later(SCHEDULE_MAX_AHEAD_MS));
+  });
+
+  it('条件和立即更新一样：没装更新助手、镜像钉了版本、没有新版本时不能预约，什么都不存', async () => {
+    const none = await boot({ env: { INKDOVE_UPDATER_TOKEN: '' }, options: { updateScheduleTickMs: 0 } });
+    const pinned = await boot({ env: { INKDOVE_IMAGE_TAG: CURRENT }, options: { updateScheduleTickMs: 0 } });
+    const fresh = await boot({ options: { updateScheduleTickMs: 0 } });
+    try {
+      await recheck(none);
+      let r = await scheduleAt(none, later(HOUR));
+      assert.equal(r.status, 400);
+      assert.equal(r.body.code, 'updater_not_configured');
+
+      await recheck(pinned);
+      r = await scheduleAt(pinned, later(HOUR));
+      assert.equal(r.status, 400);
+      assert.equal(r.body.code, 'image_pinned');
+
+      // 还没查过 GitHub
+      r = await scheduleAt(fresh, later(HOUR));
+      assert.equal(r.status, 400);
+      assert.equal(r.body.code, 'no_update');
+      // 查过了，已经是最新
+      gh.state.release = release(`v${CURRENT}`);
+      await recheck(fresh);
+      r = await scheduleAt(fresh, later(HOUR));
+      assert.equal(r.body.code, 'no_update');
+
+      for (const x of [none, pinned, fresh]) assert.equal(scheduleOf(x), null);
+    } finally {
+      await none.close();
+      await pinned.close();
+      await fresh.close();
+    }
+  });
+
+  it('再预约就覆盖旧的，同时只有一个；到旧时间不会更新', async () => {
+    await recheck(t);
+    const a = later(2 * HOUR);
+    const b = later(5 * HOUR);
+    assert.equal((await scheduleAt(t, a)).status, 200);
+    const r = await scheduleAt(t, b);
+    assert.equal(r.status, 200);
+    assert.equal(r.body.schedule.at, b);
+    assert.equal(scheduleOf(t).at, b);
+    assert.ok(t.log.lines.some((l) => l.includes(`预约在 ${b} 更新到 v${NEXT}（替换了原来 ${a} 的预约）`)));
+
+    clock.now = Date.parse(a) + MIN;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 0);
+    assert.equal(scheduleOf(t).at, b);
+  });
+
+  it('取消：清掉预约，打日志；没有预约时取消也算成功；到原来的时间不更新', async () => {
+    await recheck(t);
+    const at = later(HOUR);
+    await scheduleAt(t, at);
+    const r = await t.req('DELETE', '/api/update/schedule');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.schedule, null);
+    assert.equal(scheduleOf(t), null);
+    assert.ok(
+      t.log.lines.some((l) => l === `info [update] ${ADMIN_EMAIL} 取消了预约（原定 ${at} 更新到 v${NEXT}，${ADMIN_EMAIL} 预约的）`),
+    );
+    assert.equal((await t.req('DELETE', '/api/update/schedule')).status, 200);
+
+    clock.now += 2 * HOUR;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 0);
+    assert.equal(resultOf(t), null);
+  });
+
+  it('到点执行：先查一次 GitHub、备份数据库、再调更新助手，只执行一次；等重启期间不能取消、改时间或立即更新', async () => {
+    await recheck(t);
+    const at = later(30 * MIN);
+    await scheduleAt(t, at);
+
+    clock.now = Date.parse(at) - 1000;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 0, '还差 1 秒');
+
+    clock.now = Date.parse(at) + 20_000;
+    const ghBefore = gh.state.requests.length;
+    await t.ctx.update.tick();
+    assert.equal(gh.state.requests.length, ghBefore + 1, '到点先查一次 GitHub');
+    assert.equal(updater.state.requests.length, 1);
+    const req = updater.state.requests[0];
+    assert.equal(req.path, '/v1/update');
+    assert.deepEqual(req.query, { image: 'ghcr.io/bowen1314/inkdove', async: 'true' });
+    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
+
+    const s = await getStatus(t);
+    assert.equal(s.schedule.at, at);
+    assert.equal(s.schedule.startedAt, iso(clock.now));
+    assert.equal(s.schedule.from, CURRENT);
+    assert.equal(s.schedule.to, NEXT);
+    assert.match(s.schedule.backup, /^backups\/inkdove-v.+\.db$/);
+    assert.ok(fs.existsSync(path.join(t.dataDir, s.schedule.backup)), '更新前备份了数据库');
+    assert.equal(s.scheduleResult, null, '还在等新版本启动，没有结果');
+    assert.ok(t.log.lines.some((l) => l === `info [update] 到了 ${ADMIN_EMAIL} 预约的时间（${at}），开始更新：v${CURRENT} → v${NEXT}`));
+    assert.ok(t.log.lines.some((l) => l.startsWith(`info [update] 已让更新助手更新到 v${NEXT}`)));
+
+    // 再看几次也不会再调更新助手
+    clock.now += MIN;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 1);
+
+    const del = await t.req('DELETE', '/api/update/schedule');
+    assert.equal(del.status, 409);
+    assert.equal(del.body.code, 'update_in_progress');
+    assert.equal((await scheduleAt(t, later(HOUR))).status, 409);
+    assert.equal((await t.req('POST', '/api/update/apply')).status, 409);
+    assert.equal(scheduleOf(t).startedAt, s.schedule.startedAt);
+
+    // 10 分钟了服务还没重启到新版本：清掉预约、记失败，不再调更新助手
+    clock.now = Date.parse(s.schedule.startedAt) + UPDATE_LOCK_MS;
+    await t.ctx.update.tick();
+    assert.equal(scheduleOf(t), null);
+    const res = resultOf(t);
+    assert.equal(res.outcome, 'failed');
+    assert.equal(res.at, at);
+    assert.equal(res.from, CURRENT);
+    assert.equal(res.to, NEXT);
+    assert.match(res.error, new RegExp(`过了 10 分钟还是 v${CURRENT.replace(/\./g, '\\.')}，没有更新到 v${NEXT.replace(/\./g, '\\.')}`));
+    assert.deepEqual((await getStatus(t)).scheduleResult, res);
+    assert.equal(updater.state.requests.length, 1);
+  });
+
+  it('到点时 GitHub 上已经有更新的版本：更到最新', async () => {
+    await recheck(t);
+    await scheduleAt(t, later(HOUR));
+    const NEWER = `${cur.major}.${cur.minor + 2}.0`;
+    gh.state.release = release(`v${NEWER}`);
+    clock.now += HOUR;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 1);
+    const s = scheduleOf(t);
+    assert.equal(s.targetVersion, NEXT);
+    assert.equal(s.to, NEWER);
+    assert.ok(t.log.lines.some((l) => l.endsWith(`开始更新：v${CURRENT} → v${NEWER}`)));
+  });
+
+  it('执行失败（更新助手出错、备份失败）：清掉预约、记下原因，不自动重试', async () => {
+    await recheck(t);
+    const at = later(HOUR);
+    await scheduleAt(t, at);
+    updater.state.status = 500;
+    clock.now += HOUR;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 1);
+    assert.equal(scheduleOf(t), null);
+    const res = resultOf(t);
+    assert.equal(res.outcome, 'failed');
+    assert.equal(res.at, at);
+    assert.equal(res.targetVersion, NEXT);
+    assert.equal(res.from, CURRENT);
+    assert.equal(res.to, NEXT);
+    assert.deepEqual(res.scheduledBy, { id: adminId, email: ADMIN_EMAIL });
+    assert.match(res.error, /更新助手返回 HTTP 500：something went wrong/);
+    assert.equal(res.finishedAt, iso(clock.now));
+    assert.ok(t.log.lines.some((l) => l.startsWith(`warn [update] ${ADMIN_EMAIL} 预约在 ${at} 更新到 v${NEXT}：失败，更新助手返回 HTTP 500`)));
+
+    clock.now += 5 * MIN;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 1, '不自动重试');
+
+    // 备份失败：不调更新助手
+    updater.state.status = 202;
+    await scheduleAt(t, later(HOUR));
+    const dir = path.join(t.dataDir, 'backups');
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.writeFileSync(dir, '这里本该是目录');
+    try {
+      clock.now += HOUR;
+      await t.ctx.update.tick();
+    } finally {
+      fs.rmSync(dir, { force: true });
+    }
+    assert.equal(updater.state.requests.length, 1);
+    assert.equal(scheduleOf(t), null);
+    assert.match(resultOf(t).error, /备份数据库失败，没有更新/);
+  });
+
+  it('立即更新成功后预约作废；立即更新失败时预约还在', async () => {
+    await recheck(t);
+    const at = later(HOUR);
+    await scheduleAt(t, at);
+    updater.state.status = 500;
+    assert.equal((await t.req('POST', '/api/update/apply')).status, 502);
+    assert.equal(scheduleOf(t).at, at);
+
+    updater.state.status = 202;
+    const r = await t.req('POST', '/api/update/apply');
+    assert.equal(r.status, 200);
+    assert.equal(scheduleOf(t), null);
+    assert.equal(resultOf(t), null);
+    assert.ok(t.log.lines.some((l) => l === `info [update] ${ADMIN_EMAIL} 点了立即更新，${ADMIN_EMAIL} 预约在 ${at} 的更新作废`));
+
+    clock.now += HOUR;
+    await t.ctx.update.tick();
+    assert.equal(updater.state.requests.length, 2, '只有立即更新的两次');
+  });
+
+  it('不手动调时，定时器每隔一段时间自己看一次', async () => {
+    const t2 = await boot({ options: { updateScheduleTickMs: 20 } });
+    try {
+      await recheck(t2);
+      await scheduleAt(t2, later(2 * MIN));
+      await sleep(80);
+      assert.equal(updater.state.requests.length, 0);
+      clock.now += 2 * MIN + 1000;
+      await waitFor(() => updater.state.requests.length === 1, { message: '到点没有自动更新' });
+      await waitFor(() => scheduleOf(t2)?.startedAt);
+    } finally {
+      await t2.close();
+    }
+  });
+});
+
+describe('预约更新：重启之后', () => {
+  /** 先把预约写进一个新的数据目录，再用它启动（启动时会马上看一次预约） */
+  async function bootWith(schedule, { env = {}, options = {} } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-test-'));
+    const db = openDb(dir);
+    kvSet(db, 'update_schedule', schedule);
+    db.close();
+    const t = await boot({ env: { INKDOVE_DATA_DIR: dir, ...env }, options });
+    const close = t.close;
+    t.close = async () => {
+      await close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    };
+    t.dataDir = dir;
+    return t;
+  }
+  const seeded = (over = {}) => ({
+    at: iso(clock.now - 10 * MIN),
+    targetVersion: NEXT,
+    scheduledBy: { id: 'u_admin', email: ADMIN_EMAIL },
+    createdAt: iso(clock.now - 5 * HOUR),
+    ...over,
+  });
+
+  it('预约存在库里，重启不丢；重启后还没查 GitHub 也能改时间和取消', async () => {
+    const s = seeded({ at: iso(clock.now + 2 * HOUR) });
+    gh.state.status = 500;
+    const t = await bootWith(s);
+    try {
+      const st = await getStatus(t);
+      assert.deepEqual(st.schedule, s);
+      assert.equal(st.scheduleResult, null);
+      assert.equal(st.latest, null);
+      const r = await scheduleAt(t, later(3 * HOUR));
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(r.body.schedule.targetVersion, NEXT);
+      assert.equal((await t.req('DELETE', '/api/update/schedule')).body.schedule, null);
+      assert.equal(updater.state.requests.length, 0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('已经是目标版本了（按预约更新后容器重建）：清掉预约、记成功', async () => {
+    const t = await bootWith(
+      seeded({ targetVersion: CURRENT, startedAt: iso(clock.now - 3 * MIN), from: '0.0.1', to: CURRENT, backup: 'backups/x.db' }),
+    );
+    try {
+      const st = await getStatus(t);
+      assert.equal(st.schedule, null);
+      assert.equal(st.scheduleResult.outcome, 'success');
+      assert.equal(st.scheduleResult.from, '0.0.1');
+      assert.equal(st.scheduleResult.to, CURRENT);
+      assert.equal(st.scheduleResult.backup, 'backups/x.db');
+      assert.equal(st.scheduleResult.error, null);
+      assert.ok(t.log.lines.some((l) => l.endsWith(`：已完成，现在是 v${CURRENT}`)));
+      assert.equal(updater.state.requests.length, 0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('没到预约时间就已经用别的办法更新过了：也清掉、记成功', async () => {
+    const t = await bootWith(seeded({ targetVersion: '0.0.1', at: iso(clock.now + HOUR) }));
+    try {
+      const st = await getStatus(t);
+      assert.equal(st.schedule, null);
+      assert.equal(st.scheduleResult.outcome, 'success');
+      assert.equal(st.scheduleResult.from, null);
+      assert.equal(st.scheduleResult.to, CURRENT);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('预约时间已经过了 1 小时以上（服务当时没在运行）：不更新，记「错过了预约时间」', async () => {
+    const at = iso(clock.now - SCHEDULE_MISS_MS - MIN);
+    const t = await bootWith(seeded({ at }));
+    try {
+      const st = await getStatus(t);
+      assert.equal(st.schedule, null);
+      assert.equal(st.scheduleResult.outcome, 'missed');
+      assert.equal(st.scheduleResult.at, at);
+      assert.equal(st.scheduleResult.error, '错过了预约时间，没有更新');
+      assert.ok(t.log.lines.some((l) => l === `warn [update] ${ADMIN_EMAIL} 预约在 ${at} 更新到 v${NEXT}：错过了预约时间，没有更新`));
+      await sleep(50);
+      assert.equal(updater.state.requests.length, 0);
+      assert.deepEqual(backupsOf(t), []);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('过了不到 1 小时：照常执行；GitHub 查不到时按预约里记的版本更新', async () => {
+    gh.state.status = 500;
+    const t = await bootWith(seeded({ at: iso(clock.now - SCHEDULE_MISS_MS + MIN) }));
+    try {
+      await waitFor(() => updater.state.requests.length === 1, { message: '启动后没有执行预约' });
+      const s = await waitFor(() => scheduleOf(t)?.startedAt && scheduleOf(t));
+      assert.equal(s.to, NEXT);
+      assert.equal(s.from, CURRENT);
+      assert.equal(gh.state.requests.length, 1, '执行前查过一次 GitHub');
+      assert.equal(resultOf(t), null);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('让更新助手更新了，重启后版本没变：记失败，不再执行', async () => {
+    const t = await bootWith(seeded({ startedAt: iso(clock.now - 3 * MIN), from: CURRENT, to: NEXT }));
+    try {
+      const st = await getStatus(t);
+      assert.equal(st.schedule, null);
+      assert.equal(st.scheduleResult.outcome, 'failed');
+      assert.match(st.scheduleResult.error, /更新助手收到了请求，但服务重启后还是 v/);
+      await sleep(50);
+      assert.equal(updater.state.requests.length, 0);
+    } finally {
+      await t.close();
+    }
+  });
+
+  it('到点时条件不满足（没装更新助手、镜像钉了版本）：不更新，记失败原因', async () => {
+    const none = await bootWith(seeded(), { env: { INKDOVE_UPDATER_TOKEN: '' } });
+    const pinned = await bootWith(seeded(), { env: { INKDOVE_IMAGE_TAG: CURRENT } });
+    try {
+      for (const [x, re] of [
+        [none, /没有装更新助手/],
+        [pinned, /镜像标签钉在了/],
+      ]) {
+        const res = await waitFor(() => resultOf(x));
+        assert.equal(res.outcome, 'failed');
+        assert.match(res.error, re);
+        assert.equal(scheduleOf(x), null);
+        assert.deepEqual(backupsOf(x), []);
+      }
+      assert.equal(updater.state.requests.length, 0);
+    } finally {
+      await none.close();
+      await pinned.close();
     }
   });
 });

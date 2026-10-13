@@ -142,6 +142,18 @@
 .sidebar__note:hover {
   color: var(--text);
 }
+/* 「已预约 10月14日 03:00 更新到 v0.4.0」比较长，可以折成两行 */
+.sidebar__note--wrap {
+  align-items: flex-start;
+  height: auto;
+  min-height: 28px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  line-height: var(--lh-sm);
+}
+.sidebar__note--wrap > .status {
+  margin-top: 5px;
+}
 .user-chip {
   display: flex;
   align-items: center;
