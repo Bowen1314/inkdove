@@ -4,8 +4,8 @@
 
 - 应用启动 1 分钟后查一次 GitHub 上的最新发布（`GET https://api.github.com/repos/<INKDOVE_UPDATE_REPO>/releases/latest`，匿名，每个 IP 每小时 60 次），之后每 6 小时查一次，结果只存在内存里。预发布不提示。`INKDOVE_UPDATE_CHECK=0` 时完全不访问 GitHub。
 - 有新版本时，管理员在侧栏底部看到「有新版本 vX.Y.Z」，点开是新版本的说明（发布时间、更新说明、GitHub Release 链接）。**设置 → 版本**里能看当前版本、上次检查时间，手动「检查更新」（60 秒内重复点直接给上次的结果）。业务员看不到这些。
-- 装了更新助手时，弹窗里有「立即更新」：确认后应用先把数据库备份到 `./data/backups/`，再调 compose 里的 `updater` 服务（镜像 `nickfedor/watchtower:1.23.0`，`POST /v1/update?image=ghcr.io/bowen1314/inkdove&async=true`，带口令）。它拉同一个标签的新镜像、重建 `inkdove` 容器，期间后台约 1 分钟打不开；`waha` 容器打了不更新的标签，WhatsApp 连接不受影响。页面每 3 秒问一次版本号，变了就自动刷新；5 分钟还没变会提示去服务器上看（`docker compose logs updater`）并给出手动命令。
-- **预约更新**：不想白天更新时，在弹窗里点「预约更新」选个时间（1 分钟之后、7 天之内，5 分钟一档，按浏览器的时区显示）。预约后弹窗、侧栏和设置 → 版本里都显示「已预约 … 更新到 vX.Y.Z」，可以改时间、取消，或者直接立即更新。应用每分钟看一次，到点走和「立即更新」一样的流程（先备份再调更新助手）。预约存在数据库里，重启不丢；到点时应用没在运行、过了 1 小时以上才启动的，这次不更新，记为「错过」；结果（成功、失败原因、错过）在设置 → 版本里看。只能预约一次，再预约就覆盖上一次。接口：`POST /api/update/schedule {at}`（带时区的 ISO 时间）、`DELETE /api/update/schedule`，`GET /api/update` 多返回 `schedule` 和 `scheduleResult`，都只有管理员能用。
+- 装了更新助手时，弹窗里有「立即更新」：确认后应用先把数据库备份到 `./data/backups/`，再调 compose 里的 `updater` 服务（镜像 `nickfedor/watchtower:1.23.0`，`POST /v1/update?image=ghcr.io/bowen1314/inkdove&async=true`，带口令）。它拉同一个标签的新镜像、重建 `inkdove` 容器，期间后台约 1 分钟打不开；`waha` 容器打了不更新的标签，WhatsApp 连接不受影响。页面每 3 秒问一次版本号，变了就自动刷新；5 分钟还没变会提示去服务器上看（`docker compose logs updater`）并给出手动命令。更新助手 15 秒没回话时按「已经发出」处理（它可能正在拉镜像），10 分钟内不能再点更新，避免重复触发。
+- **预约更新**：不想白天更新时，在弹窗里点「预约更新」选个时间（1 分钟之后、7 天之内，5 分钟一档，按浏览器的时区显示）。预约后弹窗、侧栏和设置 → 版本里都显示「已预约 … 更新到 vX.Y.Z」，可以改时间、取消，或者直接立即更新。应用每分钟看一次，到点走和「立即更新」一样的流程（先备份再调更新助手）。预约存在数据库里，重启不丢；到点时应用没在运行、过了 1 小时以上才启动的，这次不更新，记为「错过」；结果（成功、失败原因、错过）在设置 → 版本里看；等新版本超时记了失败、后来其实升上去了的，会自动改记成功。镜像用 `0.3` 这种浮动标签时，到点如果 GitHub 上已经有标签之外的更高版本，就按预约时的目标版本更新。只能预约一次，再预约就覆盖上一次。接口：`POST /api/update/schedule {at}`（带时区的 ISO 时间）、`DELETE /api/update/schedule`，`GET /api/update` 多返回 `schedule` 和 `scheduleResult`，都只有管理员能用。
 - 没装更新助手、连不上它、或者镜像钉了版本号时，弹窗里只显示命令，在 `docker-compose.yml` 所在目录执行：
 
   ```bash
