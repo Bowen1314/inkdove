@@ -484,6 +484,137 @@ describe('推荐回复（只能手动要）', () => {
       }
     });
 
+    it('发送失败的我方消息不算回过：业务员回的那条没发出去，点推荐回复不是跟进、按「客户这次的消息」起草；跟进时也只认发出去的', async () => {
+      const chat = newChat();
+      const convId = await says(manualAcc, chat, '保温杯 A100 多少钱', 1);
+      /** 后台发一条，这条发送失败 */
+      const sendFailing = async (text) => {
+        fake.state.failChats.add(chat);
+        try {
+          const r = await t.req('POST', `${convPath(convId)}/send`, { body: { text } });
+          assert.equal(r.status, 200, JSON.stringify(r.body));
+          assert.equal(r.body.status, 'failed');
+        } finally {
+          fake.state.failChats.delete(chat);
+        }
+      };
+      await sendFailing('59 元，我把目录发你');
+      const r = await manual(convId);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      let a = hooks.args.suggest;
+      assert.equal(a.followUp, false, '客户没收到我方的话：不是跟进');
+      assert.equal(a.message, '保温杯 A100 多少钱', '按客户这次的消息起草');
+      assert.deepEqual(a.ourMessages, []);
+      assert.deepEqual(a.history, [], '发送失败的不进最近对话');
+      assert.match(r.body.draft.text, /59 元/, '回的是客户的问题');
+      assert.deepEqual((await getConv(t, convId)).draft, r.body.draft, '失败的发送在起草之前，推荐照存');
+
+      // 发出去一条、后面又有一条没发出去：跟进，只认发出去的那条
+      assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '59 元一个' } })).body.status, 'sent');
+      await sendFailing('我把目录发你');
+      assert.equal((await manual(convId)).status, 200);
+      a = hooks.args.suggest;
+      assert.equal(a.followUp, true);
+      assert.equal(a.message, '保温杯 A100 多少钱');
+      assert.deepEqual(a.ourMessages, ['59 元一个'], '没发出去的不算我方说过的话');
+      assert.deepEqual(
+        a.history.map((h) => `${h.role}:${h.text}`),
+        ['customer:保温杯 A100 多少钱', 'bot:59 元一个'],
+      );
+
+      // 客户再发：「客户这次的消息」之前的最近对话里也没有发送失败的
+      await says(manualAcc, chat, '那 200 个呢', 2);
+      assert.equal((await manual(convId)).status, 200);
+      a = hooks.args.suggest;
+      assert.equal(a.followUp, false);
+      assert.equal(a.message, '那 200 个呢');
+      assert.deepEqual(
+        a.history.map((h) => `${h.role}:${h.text}`),
+        ['customer:保温杯 A100 多少钱', 'bot:59 元一个'],
+      );
+    });
+
+    it('自动回复和转人工草稿的最近对话照旧带上发送失败的我方消息（只有推荐回复不算它）', async () => {
+      const chat = newChat();
+      const convId = await says(autoAcc, chat, '保温杯 A100 多少钱', 1);
+      await waitFor(() => fake.sentTo(chat).length === 1);
+      fake.state.failChats.add(chat);
+      try {
+        assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '这条没发出去' } })).body.status, 'failed');
+      } finally {
+        fake.state.failChats.delete(chat);
+      }
+      assert.equal((await t.req('POST', `${convPath(convId)}/bot`, { body: { paused: false } })).status, 200);
+      hooks.generate = () => ({ category: 'handoff', reply: '', usedEntryIds: [], sendFileIds: [], handoffType: 'human_request', questionZh: '', reason: '客户要人工' });
+      try {
+        await says(autoAcc, chat, '我要找人工', 2);
+      } finally {
+        hooks.generate = null;
+      }
+      assert.ok(hooks.args.generate.history.some((h) => h.role === 'bot' && h.text === '这条没发出去'), '自动回复');
+      assert.ok(hooks.args.draft.history.some((h) => h.role === 'bot' && h.text === '这条没发出去'), '转人工草稿');
+    });
+
+    it('跟进时【上一条推荐】只认推荐回复：会话里是转人工草稿时不带；不是跟进时照旧带当前草稿（不管哪种）', async () => {
+      const chat = newChat();
+      const convId = await says(manualAcc, chat, '保温杯 A100 有黑色吗', 1);
+      const setDraft = (d) => t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(d), convId);
+      const handoff = { kind: 'handoff', text: '转人工时起草的：有黑色', fileIds: [], createdAt: new Date().toISOString() };
+      setDraft(handoff);
+      assert.equal((await manual(convId)).status, 200);
+      assert.equal(hooks.args.suggest.followUp, false);
+      assert.equal(hooks.args.suggest.previous, handoff.text, '不是跟进：照旧带当前草稿');
+
+      // 手机上回了（只清推荐，转人工草稿会留着）：现在是跟进
+      assert.equal(await ownerSays(manualAcc, chat, '有的，黑白两色'), 'archived_owner');
+      for (const d of [handoff, { text: '老数据没有 kind 的草稿（当转人工草稿）', createdAt: new Date().toISOString() }]) {
+        setDraft(d);
+        const r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.args.suggest.followUp, true);
+        assert.equal(hooks.args.suggest.previous, '', `跟进：转人工草稿回的是客户那条已经回过的消息，不当上一条推荐（${d.text}）`);
+        assert.deepEqual((await getConv(t, convId)).draft, r.body.draft, '新的跟进推荐替换掉转人工草稿');
+      }
+      const last = (await getConv(t, convId)).draft;
+      assert.equal((await manual(convId)).status, 200);
+      assert.equal(hooks.args.suggest.previous, last.text, '跟进时当前是推荐回复：照旧带');
+    });
+
+    it('跟进起草期间客户又发了消息：照样返回这条推荐，但不存进会话；不是跟进时客户又发的照存', async () => {
+      for (const followUp of [true, false]) {
+        const chat = newChat();
+        const convId = await says(manualAcc, chat, '保温杯 A100 有货吗', 1);
+        if (followUp) assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '有货，我查一下几号能发' } })).status, 200);
+        let release;
+        const gate = new Promise((res) => {
+          release = res;
+        });
+        let started = false;
+        hooks.suggest = async (args, mock) => {
+          started = true;
+          await gate;
+          return mock.suggest(args);
+        };
+        let r;
+        try {
+          const pending = manual(convId);
+          await waitFor(() => started);
+          await says(manualAcc, chat, '那 200 个呢', 2);
+          release();
+          r = await pending;
+        } finally {
+          release();
+          hooks.suggest = null;
+        }
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.args.suggest.followUp, followUp);
+        assert.equal(r.body.draft.kind, 'suggest', '结果照样返回给点按钮的人');
+        const stored = (await getConv(t, convId)).draft;
+        if (followUp) assert.equal(stored, null, '跟进：客户又说话了，这条跟进不存');
+        else assert.deepEqual(stored, r.body.draft, '不是跟进：照存（推荐回的仍是客户还没回的消息）');
+      }
+    });
+
     it('我方任何消息发出后清掉推荐：手机上回、外联；转人工草稿不受手机回复影响', async () => {
       const chat = newChat();
       const convId = await says(manualAcc, chat, '保温杯 A100 多少钱', 1);

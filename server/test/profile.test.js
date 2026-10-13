@@ -282,6 +282,148 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
     const reply = buildReplySystemPrompt({ ...base, canary: 'x' });
     assert.ok(!reply.includes('【业务员信息】') && !reply.includes('agent_profile'));
   });
+
+  describe('转人工草稿里是负责人的资料：负责人换成别人就作废', () => {
+    /** 库里存的草稿（带只在服务端用的 agentUserId） */
+    const rawDraft = (convId) => JSON.parse(t.ctx.db.prepare('SELECT draft FROM conversations WHERE id = ?').get(convId).draft ?? 'null');
+    const setDraft = (convId, d) => t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(d), convId);
+    /** 用了某人资料的转人工草稿 */
+    const handoffOf = (userId) => ({ kind: 'handoff', text: '我是 Lina，电话 +86 138 0000 0001', fileIds: [], createdAt: new Date().toISOString(), agentUserId: userId });
+    /** 自动回复的号上新开一个会话（客户先问一句，机器人正常回） */
+    async function newConv() {
+      const chat = newChat();
+      const convId = convIdOf(autoAcc, chat);
+      await wahaSend(t, autoAcc, chat, '保温杯 A100 多少钱');
+      await waitDecided(t, convId, 1);
+      await idle();
+      return { chat, convId };
+    }
+
+    it('用了负责人的资料时库里记下是谁（接口里的草稿结构不变）；改派给别人时清掉；负责人没变、没用资料的草稿都不动', async () => {
+      const chat = newChat();
+      const convId = convIdOf(autoAcc, chat);
+      const shown = async () => (await t.req('GET', convPath(convId))).body.draft;
+
+      await handoffDraft(chat, '我要找人工', 1);
+      assert.equal(rawDraft(convId).kind, 'handoff');
+      assert.ok(!('agentUserId' in rawDraft(convId)), '没分配：没用资料，不记');
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.kind, 'handoff', '没用资料的草稿改派不清');
+
+      const d = await handoffDraft(chat, '还是要人工', 2);
+      assert.deepEqual(d.agentProfile, LINA);
+      assert.equal(rawDraft(convId).agentUserId, agent.user.id, '用了负责人的资料：记下是谁');
+      assert.deepEqual(Object.keys(await shown()).sort(), ['createdAt', 'fileIds', 'kind', 'text'], '接口里的草稿不带 agentUserId');
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.agentUserId, agent.user.id, '负责人没变：不动');
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      assert.equal(rawDraft(convId), null, '改派给别人：草稿里是前一个负责人的名字和电话，清掉');
+      assert.equal(await shown(), null);
+      const history = (await t.req('GET', `${convPath(convId)}/assignments`)).body;
+      assert.equal(history[0].to.id, quiet.user.id, '分配记录照常写');
+
+      // 负责人没填资料时起草的：不记，再改派也不清
+      const q = await handoffDraft(chat, '人呢', 3);
+      assert.equal(q.agentProfile, null);
+      assert.ok(!('agentUserId' in rawDraft(convId)));
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.kind, 'handoff');
+    });
+
+    it('批量分配、转交、取消分配、收回号权限、删除成员让负责人变成别人时同样清掉；草稿就是新负责人的、推荐回复都不动', async () => {
+      const { convId } = await newConv();
+      /** 分给 agent，放一份用了他资料的草稿 */
+      const prime = async () => {
+        assert.equal((await assign(convId, agent.user.id)).status, 200);
+        setDraft(convId, handoffOf(agent.user.id));
+        assert.equal(rawDraft(convId).agentUserId, agent.user.id);
+      };
+
+      await prime();
+      const bulk = await t.req('POST', '/api/wa/conversations/assign', { body: { conversationIds: [convId], userId: quiet.user.id } });
+      assert.equal(bulk.status, 200, JSON.stringify(bulk.body));
+      assert.equal(bulk.body.updated, 1);
+      assert.equal(rawDraft(convId), null, '批量分配');
+
+      await prime();
+      const moved = await t.req('POST', `/api/users/${agent.user.id}/transfer`, { body: { toUserId: quiet.user.id } });
+      assert.equal(moved.status, 200, JSON.stringify(moved.body));
+      assert.equal(rawDraft(convId), null, '转交');
+
+      await prime();
+      assert.equal((await assign(convId, null)).status, 200);
+      assert.equal(rawDraft(convId), null, '取消分配');
+
+      await prime();
+      try {
+        assert.equal((await t.req('PUT', `/api/users/${agent.user.id}`, { body: { accountIds: [manualAcc.id] } })).status, 200);
+        assert.equal(t.ctx.db.prepare('SELECT assignee_id FROM conversations WHERE id = ?').get(convId).assignee_id, null);
+        assert.equal(rawDraft(convId), null, '收回号权限（会话变成未分配）');
+      } finally {
+        await t.req('PUT', `/api/users/${agent.user.id}`, { body: { accountIds: [manualAcc.id, autoAcc.id] } });
+      }
+
+      const temp = await t.addMember({ email: 'profile-ai-temp@example.com', name: '临时', accountIds: [autoAcc.id] });
+      assert.equal((await assign(convId, temp.user.id)).status, 200);
+      setDraft(convId, handoffOf(temp.user.id));
+      assert.equal((await t.req('DELETE', `/api/users/${temp.user.id}`)).status, 200);
+      assert.equal(rawDraft(convId), null, '删除成员（会话变成未分配）');
+
+      // 草稿里就是新负责人的资料：不动
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      setDraft(convId, handoffOf(agent.user.id));
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.agentUserId, agent.user.id, '改派给的就是草稿里那个人');
+
+      // 推荐回复（点按钮那个人的资料，和负责人无关）：不动
+      const suggestDraft = { kind: 'suggest', text: '推荐回复', fileIds: [], createdAt: new Date().toISOString() };
+      setDraft(convId, suggestDraft);
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      assert.deepEqual(rawDraft(convId), suggestDraft);
+    });
+
+    it('起草期间改派给了别人：草稿里是前一个负责人的资料，不存；起草时没用资料的照存', async () => {
+      for (const [from, to, kept] of [
+        [agent, quiet, false],
+        [null, agent, true],
+      ]) {
+        const { chat, convId } = await newConv();
+        if (from) assert.equal((await assign(convId, from.user.id)).status, 200);
+        let release;
+        const gate = new Promise((r) => {
+          release = r;
+        });
+        let started = false;
+        hooks.generate = handoff;
+        hooks.draft = async (args, mock) => {
+          started = true;
+          await gate;
+          return mock.draft(args);
+        };
+        try {
+          await wahaSend(t, autoAcc, chat, '我要找人工');
+          await waitFor(() => started);
+          assert.equal((await assign(convId, to.user.id)).status, 200);
+          release();
+          await waitDecided(t, convId, 2);
+          await idle();
+        } finally {
+          release();
+          hooks.generate = null;
+          hooks.draft = null;
+        }
+        const label = from ? '负责人从 agent 改成 quiet' : '从未分配改成 agent';
+        if (from) assert.deepEqual(hooks.args.draft.agentProfile, LINA, label);
+        else assert.equal(hooks.args.draft.agentProfile, null, label);
+        if (kept) {
+          assert.equal(rawDraft(convId)?.kind, 'handoff', label);
+          assert.ok(!('agentUserId' in rawDraft(convId)), label);
+        } else {
+          assert.equal(rawDraft(convId), null, label);
+        }
+      }
+    });
+  });
 });
 
 /** 本地假 LLM（OpenAI 格式）：记录请求，按 handler 回复 */

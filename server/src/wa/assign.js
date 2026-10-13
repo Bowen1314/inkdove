@@ -31,6 +31,8 @@ const convRow = (db, id) => db.prepare('SELECT id, account_id, assignee_id FROM 
 /**
  * 改一个会话的负责人并写一行分配记录（事务和校验由调用方负责）。和原负责人相同时什么也不做，返回 false。
  * assigned_at 记这次改的时间，取消分配时清空。
+ * 会话的转人工草稿用了某个负责人的「我的资料」（draft.agentUserId）、新负责人不是他时，清掉这份草稿：里面是前一个人的名字和电话。
+ * 没用资料的草稿、推荐回复（用的是点按钮那个人的资料，和负责人无关）都不动。
  * @param {{id:string, assignee_id:string|null}} row 会话行
  * @param {string|null} toUserId
  * @param {{byUserId?: string|null, reason: string, at?: string}} o
@@ -39,6 +41,10 @@ function writeAssignee(db, row, toUserId, { byUserId = null, reason, at = nowIso
   const from = row.assignee_id ?? null;
   if (from === (toUserId ?? null)) return false;
   db.prepare('UPDATE conversations SET assignee_id = ?, assigned_at = ? WHERE id = ?').run(toUserId, toUserId ? at : null, row.id);
+  db.prepare(
+    `UPDATE conversations SET draft = NULL
+      WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.agentUserId') IS NOT NULL AND json_extract(draft, '$.agentUserId') IS NOT ?`,
+  ).run(row.id, toUserId ?? null);
   db.prepare(
     `INSERT INTO conversation_assignments(id, conversation_id, from_user_id, to_user_id, by_user_id, reason, at)
      VALUES(?, ?, ?, ?, ?, ?, ?)`,
