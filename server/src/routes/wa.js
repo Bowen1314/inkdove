@@ -6,7 +6,7 @@ import { canAccessAccount, canAccessConversation, conversationScope, forbidden }
 import { badRequest, notFound } from '../util.js';
 import { assignConversation, assignmentHistory, assignMany, MAX_BULK_ASSIGN } from '../wa/assign.js';
 import { isInlineMime } from '../wa/media.js';
-import { translateForConversation } from '../wa/translate.js';
+import { translateDraft, translateForConversation, translateMessage } from '../wa/translate.js';
 
 /** @param {any} ctx */
 export function waRouter(ctx) {
@@ -116,6 +116,16 @@ export function waRouter(ctx) {
   router.post('/conversations/:id/translate', async (req, res) => {
     const c = loadConv(req);
     res.json(await translateForConversation(ctx, c, req.body?.text));
+  });
+  // 一条消息译成简体中文（按「设置 → 翻译」的方式），权限同看这个会话；译文存进消息，再请求直接返回。不计入会话每日模型次数
+  router.post('/conversations/:id/messages/:messageId/translation', async (req, res) => {
+    const c = loadConv(req);
+    res.json(await translateMessage(ctx, c, String(req.params.messageId)));
+  });
+  // 推荐回复 / 草稿正文的中文意思：{createdAt, text}，草稿没变时译文存进草稿（draft.zh），权限同看这个会话。不计入会话每日模型次数
+  router.post('/conversations/:id/draft/translation', async (req, res) => {
+    const c = loadConv(req);
+    res.json(await translateDraft(ctx, c, req.body));
   });
   // 推荐回复：手动要一条（「推荐回复」「换一条」，推荐回复只能这样要），权限同手动回复；号是人工回复还是自动回复都可以。同步返回 {draft}
   router.post('/conversations/:id/suggest', async (req, res) => {

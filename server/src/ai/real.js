@@ -21,7 +21,7 @@ import {
   SEARCH_TERMS_SYSTEM_PROMPT,
   VOICE_TRANSCRIBE_PROMPT,
 } from '../reply/prompts.js';
-import { buildTranslateUserPrompt, TRANSLATE_SYSTEM_PROMPT } from '../reply/translate.js';
+import { buildTranslateUserPrompt, buildTranslateZhUserPrompt, TRANSLATE_SYSTEM_PROMPT, TRANSLATE_ZH_SYSTEM_PROMPT } from '../reply/translate.js';
 import { buildLeadUserPrompt, LEAD_SYSTEM_PROMPT } from '../leads/prompts.js';
 
 const REPLY_TIMEOUT = 60_000;
@@ -293,6 +293,13 @@ export function createRealAi(getSettings, opts = {}) {
       const data = await callJson('translate', TRANSLATE_SYSTEM_PROMPT, buildTranslateUserPrompt({ text, customerMessages }));
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('翻译结果无法解析');
       return { language: str(data.language, 20), translation: typeof data.translation === 'string' ? data.translation : '' };
+    },
+
+    /** 译成简体中文（会话里点「翻译」的消息、推荐回复的中文意思，用回复模型）：只直译。返回 {translation} */
+    async translateToChinese({ text }) {
+      const data = await callJson('translate', TRANSLATE_ZH_SYSTEM_PROMPT, buildTranslateZhUserPrompt({ text }));
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('翻译结果无法解析');
+      return { translation: typeof data.translation === 'string' ? data.translation : '' };
     },
 
     /** F6：从会话最近的消息里提取客户线索（用回复模型）。返回模型给的对象，字段由 leads/store.js 规范化；不是对象时抛错 */

@@ -423,6 +423,10 @@ CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignm
 CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
 `);
 
+  // ---- 消息译成中文（wa/translate.js 的 translateMessage）：会话里点「翻译」的译文 {text, via, createdAt, truncated?}（JSON），
+  // 存一次大家都看得到、不再调接口。老库启动时自动加列，没译过的为 NULL ----
+  ensureColumn(db, 'messages', 'translation', 'TEXT');
+
   // ---- 可选的向量检索（后台计算和检索见 kb/vectors.js） ----
   // 每个条目按 kb/vectors.js 的 entrySegments 分成一段或几段，每段一行（chunk 从 0 起）。kind 现在只有 entry。
   // model_key：格式 + 接口地址 + 模型名的哈希（ai/embed.js 的 embedModelKey），只用和当前设置一样的行；换了模型，新的算完一行

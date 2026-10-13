@@ -418,6 +418,17 @@
     display: inline-flex;
   }
 }
+/* 「翻译」：桌面上悬停出现（同「存进知识库」），手机上一直显示（看不懂外文的业务员不用先长按）；
+   译文展开时一直显示，点了收起 */
+.msg__action.is-on {
+  opacity: 1;
+}
+@media (hover: none) {
+  .msg__action--touch {
+    display: inline-flex;
+    opacity: 1;
+  }
+}
 .msg__note--warning {
   color: var(--warning);
 }
@@ -545,6 +556,63 @@ a.msg__file:hover {
   max-height: 70vh;
   border-radius: var(--radius-md);
   object-fit: contain;
+}
+
+/* ---- 译成中文：消息下面的「译文」、推荐回复卡片里的「中文意思」 ----
+   比原文小一号、颜色淡一些，左边一条竖线和原文分开 */
+.translation {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+  padding-left: var(--sp-2);
+  border-left: 2px solid var(--border-strong);
+  color: var(--text-muted);
+  font-size: var(--fs-base);
+  line-height: var(--lh-base);
+}
+.translation__label {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+}
+.translation__text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.translation__state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.translation__state--error {
+  color: var(--danger);
+}
+.translation__retry {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 500;
+}
+.translation__retry:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.msg__translation {
+  margin: 2px 0;
+}
+.draft__translation {
+  margin-top: var(--sp-2);
+  max-height: 120px;
+  overflow-y: auto;
+}
+.draft[aria-busy='true'] .draft__translation {
+  opacity: 0.5;
 }
 
 /* ---- 草稿和输入框 ---- */

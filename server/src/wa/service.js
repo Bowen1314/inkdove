@@ -37,6 +37,7 @@ import {
 } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
 import { needsRelay } from './relay.js';
+import { storedTranslation } from './translate.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
 
 const REPLIES_PER_MINUTE_PER_ACCOUNT = 30;
@@ -316,6 +317,7 @@ export const maskPhone = (digits) => `***${String(digits).slice(-4)}`;
  * - agentUserId：草稿用了谁的「我的资料」（转人工草稿是负责人的，推荐回复是点按钮那个人的）。负责人换成别人时作废
  *   （assign.js 的 writeAssignee），这个人被停用、删除时也作废（routes/users.js）；
  * - followUp：推荐回复是按跟进起草的（值为 true，不是跟进的不写）。客户来了新消息就作废（archive），「换一条」时据此挑上一条
+ * 正文译过中文的还有 zh {text, via, createdAt}（「中文意思」，见 translate.js 的 translateDraft），没译过的不带这一项。
  */
 export const parseDraft = (raw) => {
   const d = safeJsonParse(raw, null);
@@ -323,12 +325,14 @@ export const parseDraft = (raw) => {
   const text = typeof d.text === 'string' ? d.text : '';
   const fileIds = normalizeFileIds(d.fileIds).slice(0, MAX_FILES_PER_REPLY);
   if (!text.trim() && !fileIds.length) return null;
+  const zh = text.trim() ? storedTranslation(d.zh) : null;
   return {
     kind: d.kind === 'suggest' ? 'suggest' : 'handoff',
     text,
     fileIds,
     entryIds: normalizeEntryIds(d.entryIds).slice(0, MAX_DRAFT_ENTRIES),
     createdAt: typeof d.createdAt === 'string' ? d.createdAt : null,
+    ...(zh ? { zh } : {}),
   };
 };
 
@@ -602,6 +606,8 @@ export function createWaService(ctx, opts = {}) {
       attachment: safeJsonParse(r.attachment, null),
       status: r.status,
       error: r.error ?? null,
+      // 会话里点「翻译」译成的中文 {text, via, createdAt, truncated?}，没译过的为 null
+      translation: storedTranslation(r.translation),
     };
   }
 

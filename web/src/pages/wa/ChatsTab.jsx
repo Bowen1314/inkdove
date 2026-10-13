@@ -343,6 +343,79 @@ function bubbleKind(msg) {
 
 const NOTE_TONE = { handoff: 'warning', blocked: 'danger', declined: 'info' };
 
+/* ---------- 译成中文（消息的「翻译」、推荐回复的「中文意思」） ---------- */
+
+/** 消息开头的媒体标签，和后端 wa/translate.js 的 MEDIA_LABEL_RE 一致 */
+const MEDIA_LABEL_RE = /^\[(图片|视频|语音|文件|贴纸|媒体消息|非文字消息)\]\s*/;
+
+/**
+ * 消息里要译成中文的文字（规则同后端 wa/translate.js 的 messageSourceText）：语音转写去掉开头的 [语音]；
+ * 识别出来的图片描述（[图片] 后面接描述）本来就是中文，不算；只有 [图片] 这类标签的没有文字
+ */
+function translatableText(msg) {
+  const t = String(msg.text || '').trim();
+  if (t.startsWith('[图片] ')) return '';
+  return t.replace(MEDIA_LABEL_RE, '').trim();
+}
+
+/** 去掉【待你确认：…】后还有汉字以外的文字（拉丁字母、西里尔字母、假名……）才可能要翻译；全是中文、数字、符号的不用 */
+const hasForeignText = (t) => /(?!\p{Script=Han})\p{L}/u.test(String(t || '').replace(TODO_RE, ''));
+
+/** 译文用的哪种方式：AI 翻译或翻译服务的名字 */
+const viaLabel = (via) => (via === 'ai' ? 'AI 翻译' : translationProviderLabel(via));
+
+/**
+ * 中文译文那一块（消息下面的「译文」、推荐回复卡片里的「中文意思」共用）：翻译中、译文、出错（带重试）。
+ * state：{loading, error, data}，data 是接口返回的 {text, via, truncated?, fallbackReason?}；via 是 none 时原文本来就是中文。
+ * 自己这次出错了、同事那边已经译好（轮询拿到）的，显示译文。译文里的【待你确认：…】照样高亮
+ */
+function Translation({ title, state, onRetry, className }) {
+  const { loading, error, data } = state;
+  let body = null;
+  if (loading) {
+    body = (
+      <span className="translation__state">
+        <Spinner size={12} />
+        正在翻译成中文…
+      </span>
+    );
+  } else if (!data && error) {
+    body = (
+      <span className="translation__state translation__state--error">
+        {error.message || '翻译失败'}
+        <button type="button" className="translation__retry" onClick={onRetry}>
+          重试
+        </button>
+      </span>
+    );
+  } else if (data?.via === 'none') {
+    body = <span className="translation__state">原文本来就是中文，不用翻译</span>;
+  } else if (data) {
+    body = (
+      <>
+        <span className="translation__label">
+          {title} · {viaLabel(data.via)}
+          {data.fallbackReason && (
+            <Tooltip content={data.fallbackReason}>
+              <span tabIndex={0}>（翻译接口出错，这次改用 AI 翻译）</span>
+            </Tooltip>
+          )}
+          {data.truncated && '（原文太长，只翻译了前面一部分）'}
+        </span>
+        <span className="translation__text">
+          <TodoText text={data.text} />
+        </span>
+      </>
+    );
+  }
+  if (!body) return null;
+  return (
+    <div className={`translation ${className}`} aria-live="polite" aria-busy={loading || undefined}>
+      {body}
+    </div>
+  );
+}
+
 /** 条目弹窗放在浮层外面：点条目时先关浮层再开弹窗，免得两层叠在一起、在弹窗上按鼠标被当成点了浮层外面 */
 function KnowledgeRefs({ ids }) {
   const [peek, setPeek] = useState(null);
@@ -373,7 +446,8 @@ function KnowledgeRefs({ ids }) {
 
 /**
  * manual：这个号是人工回复，"未处理 · 这个号没开自动回复"和"未处理 · 非文字消息[…]，已通知人工"不显示（每条客户消息都会有，没有信息量）。
- * 客户发来的媒体存了盘的（media.stored 有值）显示在气泡上方；没有说明文字时不再显示 [图片] 这样的标签气泡
+ * 客户发来的媒体存了盘的（media.stored 有值）显示在气泡上方；没有说明文字时不再显示 [图片] 这样的标签气泡。
+ * 有外文的消息（客户、我方、机器人发的都算）可以「翻译」成中文，译文显示在气泡下面；服务端存过的（自己或同事译过）默认展开
  */
 function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLoad }) {
   const { kind, label, campaign } = bubbleKind(msg);
@@ -385,6 +459,15 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
   // 只发了文件、没有文字的人工消息不能存进知识库（后端会报 empty_message）
   const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed' && !!msg.text?.trim();
   const fromUs = kind !== 'customer';
+  // 译成中文：zh 是这次点「翻译」的请求状态；zhOpen 是自己点过「翻译 / 收起译文」后的展开状态，没点过时跟着服务端有没有译文走
+  // （原文本来就是中文的那种不自动展开）
+  const [zh, setZh] = useState({ loading: false, error: null, data: null });
+  const [zhOpen, setZhOpen] = useState(null);
+  const aliveRef = useRef(true);
+  const zhData = zh.data || msg.translation || null;
+  const zhShown = zhOpen ?? (!!msg.translation && msg.translation.via !== 'none');
+  const zhSource = showText ? translatableText(msg) : '';
+  const canTranslate = !!zhSource && (hasForeignText(zhSource) || !!msg.translation);
 
   // 人工消息：悬停（桌面）或长按（手机）时出现"存进知识库"
   const touchProps = actionable
@@ -406,6 +489,33 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
     : {};
 
   useEffect(() => () => clearTimeout(pressRef.current), []);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const translate = async () => {
+    setZh({ loading: true, error: null, data: null });
+    try {
+      const data = await api.translateMessage(convId, msg.id, { silent: true });
+      if (aliveRef.current) setZh({ loading: false, error: null, data });
+    } catch (e) {
+      // 401 已经跳登录页
+      if (aliveRef.current) setZh({ loading: false, error: e?.status === 401 ? null : e, data: null });
+    }
+  };
+  /** 「翻译」展开（还没有译文就去翻译）/「收起译文」 */
+  const toggleTranslation = () => {
+    setShowActions(false);
+    if (zhShown) {
+      setZhOpen(false);
+      return;
+    }
+    setZhOpen(true);
+    if (!zhData && !zh.loading) translate();
+  };
 
   // 人工回复的号本来没有机器人处理，"这个号没开自动回复"和"非文字消息[视频]，已通知人工"都没有信息量（媒体已经直接显示了）。
   // 只看 skipped：识别失败、转人工等其他原因照旧显示
@@ -434,6 +544,9 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
           {msg.text}
         </div>
       )}
+      {canTranslate && zhShown && (
+        <Translation title="译文" state={{ ...zh, data: zhData }} onRetry={translate} className="msg__translation" />
+      )}
       <div className="msg__meta">
         {fromUs && <span>{label}</span>}
         {kind === 'bot' && !campaign && ids.length > 0 && <KnowledgeRefs ids={ids} />}
@@ -446,6 +559,17 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLo
         <Tooltip content={fmtTime(msg.ts)}>
           <span>{fmtHm(msg.ts)}</span>
         </Tooltip>
+        {canTranslate && (
+          <button
+            type="button"
+            className={`msg__link msg__action msg__action--touch${zhShown ? ' is-on' : ''}`}
+            onClick={toggleTranslation}
+            aria-expanded={zhShown}
+          >
+            <Languages aria-hidden="true" />
+            {zhShown ? '收起译文' : '翻译'}
+          </button>
+        )}
         {actionable && (
           <button
             type="button"
@@ -566,8 +690,21 @@ function nextTodoRange(text, from = 0) {
  * 文字下面一行「依据」：起草依据的知识条目（entryIds）和要发的文件，鼠标停上去看内容（DraftBasis）。
  * kept：草稿已经关掉（填入输入框后、或被自己发的消息清掉），只剩前端记住的文件建议；这时不显示文字。
  * 左上角的 × 关掉：草稿时关掉整张卡片（onClose），只剩文件时关掉文件（onDismissKept）。
+ * zh：正文的「中文意思」（Translation 的 state），正文本来就是中文、或者只剩文件时为 null，不显示；onRetryZh 重新翻译。
  */
-function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onClose, onDismissKept, onRegenerate, regenerating }) {
+function DraftBox({
+  draft,
+  kept,
+  onFill,
+  onSendFiles,
+  sendingFiles,
+  onClose,
+  onDismissKept,
+  onRegenerate,
+  regenerating,
+  zh,
+  onRetryZh,
+}) {
   const text = !kept && draft?.text?.trim() ? draft.text : '';
   const fileIds = kept ? kept.fileIds : Array.isArray(draft?.fileIds) ? draft.fileIds : [];
   const entryIds = !kept && Array.isArray(draft?.entryIds) ? draft.entryIds : [];
@@ -613,6 +750,7 @@ function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onClose, onD
           <TodoText text={text} />
         </div>
       )}
+      {text && zh && <Translation title="中文意思" state={zh} onRetry={onRetryZh} className="draft__translation" />}
       <DraftBasis entryIds={entryIds} fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} showLabel={!kept} />
     </div>
   );
@@ -969,6 +1107,43 @@ function ChatPane({
     if (liveDraftAt !== undefined) setKeptFiles((prev) => (prev && prev.draftAt !== liveDraftAt ? null : prev));
   }, [liveDraftAt]);
 
+  // 推荐回复的中文意思（给业务员核对外文实际说了什么）：草稿出来后自动译一次，服务端存进草稿（draft.zh）后轮询、刷新都直接拿到。
+  // 同一份草稿（按 createdAt）只自动请求一次，失败了点「重试」再请求；看着全是中文的（hasForeignText）不请求。
+  // draftZh：createdAt → 这份草稿的请求状态 {loading, error, data}
+  const [draftZh, setDraftZh] = useState({});
+  const zhAskedRef = useRef(new Set());
+  const draftText = !kept && shownDraft?.text?.trim() ? shownDraft.text : '';
+  const zhTarget = draftText && shownDraft.createdAt && !shownDraft.zh && hasForeignText(draftText) ? shownDraft : null;
+  const translateDraft = useCallback(
+    async (d) => {
+      const at = d.createdAt;
+      setDraftZh((m) => ({ ...m, [at]: { loading: true, error: null, data: null } }));
+      try {
+        const data = await api.translateDraft(convId, d, { silent: true });
+        if (aliveRef.current) setDraftZh((m) => ({ ...m, [at]: { loading: false, error: null, data } }));
+      } catch (e) {
+        // 401 已经跳登录页
+        if (aliveRef.current) setDraftZh((m) => ({ ...m, [at]: { loading: false, error: e?.status === 401 ? null : e, data: null } }));
+      }
+    },
+    [convId],
+  );
+  useEffect(() => {
+    if (!zhTarget || zhAskedRef.current.has(zhTarget.createdAt)) return;
+    zhAskedRef.current.add(zhTarget.createdAt);
+    translateDraft(zhTarget);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zhTarget?.createdAt, translateDraft]);
+  // 卡片上显示什么：服务端存的译文优先；正文本来就是中文（via=none）的不显示；还没发出请求的（马上就发）先显示翻译中
+  let draftZhView = null;
+  if (draftText) {
+    const local = draftZh[shownDraft.createdAt];
+    const data = shownDraft.zh || local?.data || null;
+    if (data) draftZhView = data.via === 'none' ? null : { data };
+    else if (local?.loading || local?.error) draftZhView = local;
+    else if (zhTarget && !local) draftZhView = { loading: true };
+  }
+
   /** 自己发出消息或文件：先记住草稿里的文件建议，发出去的那个文件从里面去掉；手动要来的推荐也作废 */
   const handleSent = (msg) => {
     setManual(null);
@@ -1181,6 +1356,8 @@ function ChatPane({
             onDismissKept={() => setKeptFiles(null)}
             onRegenerate={requestSuggest}
             regenerating={suggesting}
+            zh={draftZhView}
+            onRetryZh={() => shownDraft && translateDraft(shownDraft)}
           />
           <Composer
             conv={conv}

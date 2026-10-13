@@ -345,6 +345,15 @@ export const api = {
   suggestReply: (id, o) => post(`/api/wa/conversations/${enc(id)}/suggest`, {}, { silent: true, ...o }),
   /** 输入框一键翻译成客户的语言（只翻译，不发送、不改会话）→ {text, language}，language 是中文语言名 */
   translateText: (id, text, o) => post(`/api/wa/conversations/${enc(id)}/translate`, { text }, o),
+  /**
+   * 一条消息译成简体中文（按「设置 → 翻译」的方式），译文存进消息、同事也看得到，再请求直接返回
+   * → {text, via, createdAt, truncated?, fallbackReason?}；via 是 ai、翻译服务的 id，或 none（原文本来就是中文）
+   */
+  translateMessage: (convId, messageId, o) =>
+    post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/translation`, {}, o),
+  /** 推荐回复 / 草稿正文的中文意思，草稿没变时服务端存进 draft.zh → {text, via, createdAt, fallbackReason?}（via 同上） */
+  translateDraft: (convId, draft, o) =>
+    post(`/api/wa/conversations/${enc(convId)}/draft/translation`, { createdAt: draft.createdAt, text: draft.text }, o),
   /** F2b：人工消息改写成条目草稿，不落库 → {type, title, content, tags} */
   kbDraft: (convId, messageId) =>
     post(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/kb-draft`, {}),

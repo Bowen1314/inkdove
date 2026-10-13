@@ -51,6 +51,8 @@ export const AI_METHOD_PURPOSE = {
   extractLead: 'leads',
   // 会话输入框的一键翻译（另做）：方法名用 translate 就会自动记，不计入会话每日模型次数
   translate: 'translate',
+  // 消息译成中文、推荐回复的中文意思（wa/translate.js，翻译方式选 AI 翻译或者改用 AI 翻译时）：同上，不计入会话每日模型次数
+  translateToChinese: 'translate',
   // 知识库大、命中不足时把客户的话改写成知识库语言的检索词（kb/retrieve.js），在会话里时计入会话每日模型次数
   searchTerms: 'kb_search',
   // 可选的向量检索（kb/vectors.js）：后台算条目的一批、检索时算查询向量都记，不计入会话每日模型次数

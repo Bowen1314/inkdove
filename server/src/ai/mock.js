@@ -231,6 +231,13 @@ export function createMockAi(opts = {}) {
       return { language, translation };
     },
 
+    /** 译成中文 mock：去掉【待你确认：…】后按 mockLanguage 判断是中文的原样返回，否则返回"[译成中文] 原文" */
+    async translateToChinese({ text }) {
+      await wait();
+      const plain = String(text).replace(/【待你确认[^】]*】/g, '');
+      return { translation: mockLanguage(plain) === '中文' ? text : `[译成中文] ${text}` };
+    },
+
     /** F6 mock 线索提取：规则见 mockExtractLead */
     async extractLead({ messages = [] }) {
       await wait();

@@ -11,12 +11,17 @@
 //   3. 出错时：开着「翻译接口出错时改用 AI 翻译」而且回复模型配好了的，这次改用 AI 翻译并说明原因（fallbackReason）；
 //      否则报错，说清楚是哪家、什么问题。
 // 返回 {text, language（中文名）, via（ai 或服务 id）, fallbackReason?}。
+//
+// 另有两处译成简体中文，方式同上（ai 用回复模型的 translateToChinese，api 用选的服务、自动判断源语言），出错时的处理也一样：
+// - 消息的「翻译」：POST …/messages/:messageId/translation，译文存进 messages.translation，再请求直接返回；
+// - 推荐回复 / 草稿的「中文意思」：POST …/draft/translation，译文存进草稿 JSON 的 zh（草稿没变时才存）。
+// 原文去掉【待你确认：…】后本地判断就是中文的不调接口，via 记 none。同样只读会话状态、不计入会话每日模型次数。
 import { llmScope } from '../records.js';
 import { llmConfigured } from '../settings.js';
 import { detectLocal } from '../translate/detect-local.js';
 import { callTranslationProvider, FIELD_LABELS, getTranslationProvider, missingField, TranslateError } from '../translate/index.js';
 import { languageName } from '../translate/languages.js';
-import { badRequest, clip, HttpError } from '../util.js';
+import { badRequest, clip, HttpError, notFound, nowIso, safeJsonParse } from '../util.js';
 
 /** 原文长度上限，和人工发送的上限一致（service.js 的 MAX_OPERATOR_TEXT） */
 export const MAX_TRANSLATE_TEXT = 4096;
@@ -30,6 +35,10 @@ export const LANGUAGE_CACHE_MAX = 500;
 const MAX_TRANSLATION = 20_000;
 /** 判断语言时碰到这些错误说明这家服务现在用不了，不再接着翻译（免得再等一次超时），直接按出错处理 */
 const STOP_KINDS = new Set(['config', 'auth', 'network', 'timeout', 'quota', 'rate_limit', 'server']);
+/** 【待你确认：…】占位（推荐回复和草稿里要人拍板的地方，前端高亮显示），译成中文时要留着 */
+const TODO_RE = /【待你确认[^】]*】/g;
+/** 消息开头的媒体标签（语音转写的 [语音]、没识别的媒体、导入的历史消息），译成中文时去掉 */
+const MEDIA_LABEL_RE = /^\[(图片|视频|语音|文件|贴纸|媒体消息|非文字消息)\]\s*/;
 
 /**
  * 客户最近的文字消息（从早到晚）和最新一条的 seq。语音、图片（含识别后的描述）、导入的非文字占位都不算：
@@ -111,13 +120,19 @@ async function customerLanguage(ctx, conv, meta, provider, cfg, customer) {
   return lang;
 }
 
-/** 用翻译接口翻译。出错抛 TranslateError */
-async function apiTranslate(ctx, conv, source, customer, tr) {
+/** 选的翻译服务和它的配置；没选、没配好抛 TranslateError（config） */
+function apiProvider(tr) {
   const provider = getTranslationProvider(tr.provider);
   if (!provider) throw new TranslateError('还没有选翻译服务', 'config');
   const cfg = tr.providers[provider.id] || {};
   const missing = missingField(provider.id, cfg);
   if (missing) throw new TranslateError(`${provider.label} 还没配好（没填 ${FIELD_LABELS[missing] || missing}）`, 'config');
+  return { provider, cfg };
+}
+
+/** 用翻译接口翻译。出错抛 TranslateError */
+async function apiTranslate(ctx, conv, source, customer, tr) {
+  const { provider, cfg } = apiProvider(tr);
   const meta = { purpose: 'translate', accountId: conv.accountId ?? null, conversationId: conv.id };
   const target = await customerLanguage(ctx, conv, meta, provider, cfg, customer);
   const done = (text) => ({ text: clip(text, MAX_TRANSLATION), language: languageName(target), via: provider.id });
@@ -140,6 +155,24 @@ function apiFailure(err, hint) {
   if (err.kind === 'unsupported_language') return new HttpError(400, 'translation_unsupported_language', message);
   if (err.kind === 'language_unknown') return new HttpError(400, 'language_unknown', message);
   return new HttpError(502, 'translation_api_error', message);
+}
+
+/**
+ * 翻译接口出错（TranslateError）之后，几处翻译共用：开着「改用 AI 翻译」而且回复模型配好了的，这次用 aiFn 翻译，
+ * 返回它的结果加上 via=ai 和原因（fallbackReason）；否则报错（apiFailure）。别的错误原样抛出
+ * @param {() => Promise<object>} aiFn
+ */
+async function afterApiError(ctx, conv, err, tr, canUseAi, aiFn) {
+  if (!(err instanceof TranslateError)) throw err;
+  ctx.log.warn?.(`[translate] 会话 ${conv.id}：${err.message}`);
+  if (!tr.fallbackToAi) throw apiFailure(err, '');
+  if (!canUseAi) throw apiFailure(err, '（回复模型还没配好，没法改用 AI 翻译）');
+  try {
+    return { ...(await aiFn()), via: 'ai', fallbackReason: err.message };
+  } catch (aiErr) {
+    if (aiErr instanceof HttpError) throw new HttpError(aiErr.status, aiErr.code, `翻译接口出错（${err.message}），改用 AI 翻译也失败了：${aiErr.message.replace(/^翻译失败：/, '')}`);
+    throw aiErr;
+  }
 }
 
 /**
@@ -169,15 +202,147 @@ export async function translateForConversation(ctx, conv, text) {
   try {
     return await apiTranslate(ctx, conv, source, customer, tr);
   } catch (err) {
-    if (!(err instanceof TranslateError)) throw err;
-    ctx.log.warn?.(`[translate] 会话 ${conv.id}：${err.message}`);
-    if (!tr.fallbackToAi) throw apiFailure(err, '');
-    if (!canUseAi) throw apiFailure(err, '（回复模型还没配好，没法改用 AI 翻译）');
+    return afterApiError(ctx, conv, err, tr, canUseAi, () => aiTranslate(ctx, conv, source, customer.texts));
+  }
+}
+
+// ---------------- 译成中文：消息的「翻译」、推荐回复的「中文意思」 ----------------
+
+/**
+ * 存着的中文译文（消息的 translation 列、草稿 JSON 的 zh）→ {text, via, createdAt, truncated?}；没有或格式不对的返回 null。
+ * via：ai、翻译服务的 id，或 none（原文本来就是中文，text 是原文）
+ * @param {unknown} raw JSON 字符串或已经解析的对象
+ */
+export function storedTranslation(raw) {
+  const t = typeof raw === 'string' ? safeJsonParse(raw, null) : raw;
+  if (!t || typeof t !== 'object' || typeof t.text !== 'string' || typeof t.via !== 'string' || !t.via) return null;
+  return { text: t.text, via: t.via, createdAt: typeof t.createdAt === 'string' ? t.createdAt : null, ...(t.truncated === true ? { truncated: true } : {}) };
+}
+
+/**
+ * 一条消息里要译成中文的文字（客户、我方、机器人发的都算）：语音转写去掉开头的 [语音]；识别出来的图片描述（[图片] 后面接描述）
+ * 是模型用中文写的，不翻译；还在识别的（kind=media）、只有 [图片] 这类标签的没有文字可译。没有可译的返回 ''
+ * @param {{kind:string, text:string}} row messages 表的行
+ */
+function messageSourceText(row) {
+  if (row.kind !== 'text') return '';
+  const text = String(row.text ?? '').trim();
+  if (text.startsWith('[图片] ')) return '';
+  return text.replace(MEDIA_LABEL_RE, '').trim();
+}
+
+/** 用回复模型译成中文 */
+async function aiToChinese(ctx, conv, source) {
+  let out;
+  try {
+    out = await llmScope({ accountId: conv.accountId ?? null, conversationId: conv.id, purpose: 'translate' }, () =>
+      ctx.ai.translateToChinese({ text: source }),
+    );
+  } catch (err) {
+    throw new HttpError(502, 'llm_error', `翻译失败：${err?.message || err}`);
+  }
+  const translation = typeof out?.translation === 'string' ? out.translation.trim() : '';
+  if (!translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回的结果不完整，请重试');
+  return { text: clip(translation, MAX_TRANSLATION) };
+}
+
+/** 用翻译接口译成中文（让对方自动判断源语言）。对方判断出的源语言就是中文的按原文返回（via=none）。出错抛 TranslateError */
+async function apiToChinese(ctx, conv, source, tr) {
+  const { provider, cfg } = apiProvider(tr);
+  const meta = { purpose: 'translate', accountId: conv.accountId ?? null, conversationId: conv.id };
+  const r = await callTranslationProvider(ctx, meta, 'translate', provider.id, cfg, { text: source, source: 'auto', target: 'zh' });
+  if (r.detectedSource === 'zh') return { text: source, via: 'none' };
+  const out = String(r.text ?? '').trim();
+  if (!out) throw new TranslateError(`${provider.label} 返回的译文是空的`, 'bad_response');
+  return { text: clip(out, MAX_TRANSLATION), via: provider.id };
+}
+
+/** 原文里的【待你确认：…】在译文里找不到原样的（翻译服务可能改了括号或里面的字），补在译文最后一行，业务员照样看得出还有这几处要填 */
+function keepTodos(source, out) {
+  const missing = [...new Set(source.match(TODO_RE) || [])].filter((t) => !out.includes(t));
+  return missing.length ? `${out}\n${missing.join(' ')}` : out;
+}
+
+/**
+ * 把一段文字译成简体中文，方式按「设置 → 翻译」：去掉【待你确认：…】后本地判断就是中文的（或者只剩占位）原样返回、
+ * via=none、不调接口；ai 用回复模型；api 用选的服务，出错时同一键翻译（afterApiError）。
+ * @returns {Promise<{text:string, via:string, fallbackReason?:string}>}
+ */
+async function toChinese(ctx, conv, source) {
+  const plain = source.replace(TODO_RE, ' ').trim();
+  if (!plain || detectLocal(plain) === 'zh') return { text: source, via: 'none' };
+  const settings = ctx.getSettings();
+  const tr = settings.translation;
+  const canUseAi = llmConfigured(settings, ctx.config);
+  let r;
+  if (tr?.mode !== 'api') {
+    if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+    r = { ...(await aiToChinese(ctx, conv, source)), via: 'ai' };
+  } else {
     try {
-      return { ...(await aiTranslate(ctx, conv, source, customer.texts)), via: 'ai', fallbackReason: err.message };
-    } catch (aiErr) {
-      if (aiErr instanceof HttpError) throw new HttpError(aiErr.status, aiErr.code, `翻译接口出错（${err.message}），改用 AI 翻译也失败了：${aiErr.message.replace(/^翻译失败：/, '')}`);
-      throw aiErr;
+      r = await apiToChinese(ctx, conv, source, tr);
+    } catch (err) {
+      r = await afterApiError(ctx, conv, err, tr, canUseAi, () => aiToChinese(ctx, conv, source));
     }
   }
+  return r.via === 'none' ? r : { ...r, text: keepTodos(source, r.text) };
+}
+
+/** 存下的译文加上这次的 fallbackReason（改用了 AI 翻译的原因只在这次返回里，不存） */
+const withReason = (saved, r) => (r.fallbackReason ? { ...saved, fallbackReason: r.fallbackReason } : saved);
+
+/**
+ * 会话里的一条消息译成简体中文。权限由路由检查（同看这个会话）。译文 {text, via, createdAt, truncated?} 存进这条消息的
+ * translation 列：再请求直接返回、不再调接口，同事打开会话也看得到。原文超过 MAX_TRANSLATE_TEXT 字的只译前面这些，truncated=true。
+ * @param {any} ctx
+ * @param {{id:string, accountId:string|null}} conv 路由 loadConv 返回的会话
+ * @param {string} messageId
+ */
+export async function translateMessage(ctx, conv, messageId) {
+  const row = ctx.db.prepare('SELECT id, kind, text, translation FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, conv.id);
+  if (!row) throw notFound('消息不存在');
+  const saved = storedTranslation(row.translation);
+  if (saved) return saved;
+  const full = messageSourceText(row);
+  if (!full) throw badRequest('这条消息没有要翻译的文字（图片描述本来就是中文；语音、图片还在识别的，识别完再翻译）', 'nothing_to_translate');
+  const truncated = full.length > MAX_TRANSLATE_TEXT;
+  // 截断时别把 emoji 这类四字节字符劈成两半
+  const source = truncated ? full.slice(0, MAX_TRANSLATE_TEXT).replace(/[\uD800-\uDBFF]$/, '') : full;
+  const r = await toChinese(ctx, conv, source);
+  const t = { text: r.text, via: r.via, createdAt: nowIso(), ...(truncated ? { truncated: true } : {}) };
+  // 同时有人在译同一条的，先存下的为准
+  ctx.db.prepare('UPDATE messages SET translation = ? WHERE id = ? AND translation IS NULL').run(JSON.stringify(t), row.id);
+  return withReason(t, r);
+}
+
+/**
+ * 推荐回复 / 草稿正文的中文意思，体 {createdAt, text}：text 是卡片上显示的草稿正文，createdAt 是这份草稿的生成时间。
+ * 这是给业务员核对外文实际说了什么的，所以对正文单独翻译（方式同上），不让起草的模型顺便写中文。
+ * 会话当前的草稿就是这一份（createdAt 和正文都一样）时：已经有译文的直接返回；没有的译完存进草稿 JSON 的 zh
+ * （json_set 只加这一项，草稿里只在库里用的 agentUserId、followUp 不动）。翻译期间草稿换了、清掉了，或者这份是没存进会话的
+ * 推荐回复（起草期间我方已经回了），照样返回、但不存；草稿换了 zh 自然就没了。返回 {text, via, createdAt}，改用了 AI 翻译时另带 fallbackReason
+ * @param {any} ctx
+ * @param {{id:string, accountId:string|null}} conv
+ * @param {any} body
+ */
+export async function translateDraft(ctx, conv, body) {
+  const createdAt = body?.createdAt;
+  const text = body?.text;
+  if (typeof createdAt !== 'string' || !createdAt) throw badRequest('createdAt 必须是草稿的生成时间');
+  if (typeof text !== 'string' || !text.trim()) throw badRequest('草稿正文不能为空');
+  if (text.length > MAX_TRANSLATE_TEXT) throw badRequest(`草稿正文不能超过 ${MAX_TRANSLATE_TEXT} 字`, 'text_too_long');
+  const draft = safeJsonParse(ctx.db.prepare('SELECT draft FROM conversations WHERE id = ?').get(conv.id)?.draft, null);
+  if (draft?.createdAt === createdAt && draft.text === text) {
+    const saved = storedTranslation(draft.zh);
+    if (saved) return saved;
+  }
+  const r = await toChinese(ctx, conv, text.trim());
+  const zh = { text: r.text, via: r.via, createdAt: nowIso() };
+  ctx.db
+    .prepare(
+      `UPDATE conversations SET draft = json_set(draft, '$.zh', json(?))
+       WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.createdAt') = ? AND json_extract(draft, '$.text') = ?`,
+    )
+    .run(JSON.stringify(zh), conv.id, createdAt, text);
+  return withReason(zh, r);
 }
