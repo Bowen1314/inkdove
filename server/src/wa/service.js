@@ -59,6 +59,8 @@ const META_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_DRAFT_TEXT = 4000;
 /** 推荐回复：「客户这次的消息」最多合并最近几条 */
 const MAX_SUGGEST_MESSAGES = 20;
+/** 推荐回复跟进时：客户最后那段消息之后我方发的消息，最多单独列出（并参与检索）最近几条 */
+const MAX_FOLLOWUP_MESSAGES = 8;
 const MAX_CAPTION = 1024;
 /** 手机号配对码：同一个号两次申请的最小间隔（连点会让 WhatsApp 风控这个号），等会话进入 SCAN_QR_CODE 的上限 */
 export const PAIR_CODE_INTERVAL_MS = 20_000;
@@ -1416,22 +1418,31 @@ export function createWaService(ctx, opts = {}) {
     }
   }
 
+  /** 一条消息在上下文里的文字：我方发的附件用标签（[文件] 文件名）加上说明文字 */
+  const contextText = (r) => {
+    const label = attachmentLabel(r.attachment);
+    return label ? `${label}${r.text ? ` ${r.text}` : ''}` : r.text;
+  };
+
   /** seq 之前的最近 12 条消息（自动回复、草稿、推荐回复共用的上下文） */
   function historyBefore(convId, seq) {
     return db
       .prepare('SELECT direction, text, attachment FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT 12')
       .all(convId, seq)
       .reverse()
-      .map((r) => {
-        const label = attachmentLabel(r.attachment);
-        return { role: r.direction === 'in' ? 'customer' : 'bot', text: label ? `${label}${r.text ? ` ${r.text}` : ''}` : r.text };
-      });
+      .map((r) => ({ role: r.direction === 'in' ? 'customer' : 'bot', text: contextText(r) }));
   }
 
   // ---------------- 推荐回复（只能手动要：会话页「推荐回复」「换一条」；客户来消息时不会自动起草） ----------------
   /**
-   * 推荐回复的输入：「客户这次的消息」= 我方最后一条消息之后客户发的所有消息（合并，最多最近 20 条），加上它们之前的最近对话。
-   * 我方最后一条之后客户没再发（我方已经回了）时，取最近一段连续的客户消息。会话里一条客户消息都没有时为 null。
+   * 推荐回复的输入，分两种情况：
+   * - 客户在我方最后一条之后还有新消息：「客户这次的消息」= 这些新消息（合并，最多最近 20 条），history 是它们之前的最近对话
+   *   （包括再之前我方说的话）；followUp 为 false。
+   * - 跟进（我方说的是最后一条，客户没再发）：message 是客户最后那段连续的消息（我方已经回过），history 一直取到会话最新一条
+   *   （包括我方最后发的那几条：人工、手机上回的、机器人、外联都算，附件用标签）；followUp 为 true，ourMessages 是客户那段消息
+   *   之后我方发的消息（最多最近 MAX_FOLLOWUP_MESSAGES 条），单独列给模型看，也参与检索。
+   * 会话里一条客户消息都没有时为 null（外联发出去客户没回之类，现状如此，不起草）。
+   * @returns {{message:string, history:any[], followUp:boolean, ourMessages:string[]}|null}
    */
   function suggestInput(convId) {
     const lastOut = db.prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out'").get(convId).n;
@@ -1440,29 +1451,60 @@ export function createWaService(ctx, opts = {}) {
         .prepare("SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND seq > ? AND seq <= ? ORDER BY seq")
         .all(convId, after, upTo);
     let rows = inSince(lastOut, Number.MAX_SAFE_INTEGER);
-    if (!rows.length) {
-      const lastIn = db.prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in'").get(convId).n;
-      if (lastIn == null) return null;
-      const outBefore = db
-        .prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq < ?")
-        .get(convId, lastIn).n;
-      rows = inSince(outBefore, lastIn);
+    if (rows.length) {
+      rows = rows.slice(-MAX_SUGGEST_MESSAGES);
+      return { message: rows.map((r) => r.text).join('\n'), history: historyBefore(convId, rows[0].seq), followUp: false, ourMessages: [] };
     }
-    rows = rows.slice(-MAX_SUGGEST_MESSAGES);
+    const lastIn = db.prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in'").get(convId).n;
+    if (lastIn == null) return null;
+    const outBefore = db
+      .prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq < ?")
+      .get(convId, lastIn).n;
+    rows = inSince(outBefore, lastIn).slice(-MAX_SUGGEST_MESSAGES);
     if (!rows.length) return null;
-    return { message: rows.map((r) => r.text).join('\n'), history: historyBefore(convId, rows[0].seq) };
+    const ours = db
+      .prepare("SELECT text, attachment FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq > ? ORDER BY seq DESC LIMIT ?")
+      .all(convId, lastIn, MAX_FOLLOWUP_MESSAGES)
+      .reverse()
+      .map(contextText);
+    return {
+      message: rows.map((r) => r.text).join('\n'),
+      history: historyBefore(convId, Number.MAX_SAFE_INTEGER),
+      followUp: true,
+      ourMessages: ours,
+    };
   }
 
-  /** 成员的个人话术（推荐回复用）；没有这个人或没填时为空 */
-  const stylePromptOf = (userId) => (userId ? db.prepare('SELECT style_prompt FROM users WHERE id = ?').get(userId)?.style_prompt ?? '' : '');
+  /** 「我的资料」里 AI 要用的字段；全没填时为 null（提示词里就不放【业务员信息】） */
+  const agentProfileOfRow = (u) => {
+    const p = {
+      displayName: u.display_name ?? '',
+      jobTitle: u.job_title ?? '',
+      contactPhone: u.contact_phone ?? '',
+      contactEmail: u.contact_email ?? '',
+      bio: u.bio ?? '',
+    };
+    return Object.values(p).some((v) => String(v).trim()) ? p : null;
+  };
+
+  /**
+   * 成员的个人话术和「我的资料」（起草推荐回复、转人工草稿用）。没有这个人时都是空的；activeOnly 时停用的成员也按没有算。
+   * @returns {{stylePrompt:string, agentProfile:any}}
+   */
+  function memberAiInfo(userId, { activeOnly = false } = {}) {
+    const u = userId ? db.prepare('SELECT * FROM users WHERE id = ?').get(userId) : null;
+    if (!u || (activeOnly && u.disabled)) return { stylePrompt: '', agentProfile: null };
+    return { stylePrompt: u.style_prompt ?? '', agentProfile: agentProfileOfRow(u) };
+  }
 
   /**
    * 调一次模型起草推荐回复（计入会话每日模型次数），返回 {draft, startSeq}，不存。生成失败、结果为空时抛错。
    * startSeq 是开始生成时会话里最大的消息序号，调用方用它判断生成期间我方是不是已经回了。
-   * @param {{message:string, history:any[]}} input suggestInput 的结果
-   * @param {{stylePrompt?:string, previous?:string}} o
+   * 跟进时我方最后那几条（ourMessages）也参与检索（buildReplyContext 的 extraQuery）。
+   * @param {{message:string, history:any[], followUp?:boolean, ourMessages?:string[]}} input suggestInput 的结果
+   * @param {{stylePrompt?:string, agentProfile?:any, previous?:string}} o agentProfile 是点按钮那个人的「我的资料」
    */
-  async function generateSuggestion(acc, convId, input, { stylePrompt = '', previous = '' }) {
+  async function generateSuggestion(acc, convId, input, { stylePrompt = '', agentProfile = null, previous = '' }) {
     const today = localDay();
     const before = getConvRow(convId);
     const startSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ?').get(convId).n;
@@ -1472,7 +1514,8 @@ export function createWaService(ctx, opts = {}) {
       convId,
     );
     const s = settings();
-    const c = buildReplyContext(ctx, input);
+    const followUp = !!input.followUp;
+    const c = buildReplyContext(ctx, { message: input.message, history: input.history, extraQuery: followUp ? input.ourMessages || [] : [] });
     const out = await ctx.ai.suggest({
       message: c.msg,
       history: c.hist,
@@ -1483,7 +1526,10 @@ export function createWaService(ctx, opts = {}) {
       persona: acc.persona && acc.persona.trim() ? acc.persona : s.reply.persona,
       companyPrompt: s.suggest.companyPrompt,
       stylePrompt,
+      agentProfile,
       previous,
+      followUp,
+      ourMessages: c.extra,
     });
     const active = new Set(c.activeFiles.map((f) => f.id));
     const fileIds = normalizeFileIds(out?.fileIds)
@@ -1501,6 +1547,7 @@ export function createWaService(ctx, opts = {}) {
   /**
    * F2a：转人工时给人工起草一条回复（不自动发送）。当天 LLM 次数不够、生成失败时不带草稿；
    * 生成期间人工已经回了或机器人已恢复的，丢掉这份草稿。
+   * 带会话负责人的「我的资料」（草稿是给他发的）；没分配、负责人已停用或没填资料时不带。检索只用客户的话（不传 extraQuery）。
    */
   async function prepareDraft(acc, convId, { message, history, reason, usedToday }) {
     if (closed || usedToday + 1 > DAILY_LLM_LIMIT || !ctx.ai.draft) return;
@@ -1524,6 +1571,7 @@ export function createWaService(ctx, opts = {}) {
         filesTruncated: c.filesTruncated,
         profile: c.profile,
         persona: acc.persona && acc.persona.trim() ? acc.persona : settings().reply.persona,
+        agentProfile: memberAiInfo(before.assignee_id, { activeOnly: true }).agentProfile,
         reason,
       });
       const active = new Set(c.activeFiles.map((f) => f.id));
@@ -2380,9 +2428,9 @@ export function createWaService(ctx, opts = {}) {
     },
 
     /**
-     * 手动要一条推荐回复（会话页「推荐回复」「换一条」）：号是什么回复方式都可以。用点按钮的人（user）的个人话术，
+     * 手动要一条推荐回复（会话页「推荐回复」「换一条」）：号是什么回复方式都可以。用点按钮的人（user）的个人话术和「我的资料」，
      * 当前草稿的文字作为【上一条推荐】要求换个写法。成功后存进 draft 并返回；生成期间我方已经回了的照样返回、但不存。
-     * 不改消息的处理结果，不动防抖。
+     * 我方说的是最后一条时按跟进起草（见 suggestInput）。不改消息的处理结果，不动防抖。
      * @returns {Promise<{draft:any}>}
      */
     async suggestReply(convId, user) {
@@ -2402,7 +2450,7 @@ export function createWaService(ctx, opts = {}) {
       let r;
       try {
         r = await llmScope({ accountId: acc.id, conversationId: convId }, () =>
-          generateSuggestion(acc, convId, input, { stylePrompt: stylePromptOf(user?.id), previous }),
+          generateSuggestion(acc, convId, input, { ...memberAiInfo(user?.id), previous }),
         );
       } catch (err) {
         throw new HttpError(502, 'llm_error', `生成推荐回复失败：${err?.message || err}`);

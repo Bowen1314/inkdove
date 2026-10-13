@@ -196,11 +196,11 @@ export function createRealAi(getSettings, opts = {}) {
       return { verdict: data.verdict.trim().toLowerCase(), reason: typeof data.reason === 'string' ? data.reason : '' };
     },
 
-    /** F2a：给人工起草回复。返回 {text, fileIds}；解析不了时抛错 */
-    async draft({ message, history, entries, files = [], filesTruncated = false, profile, persona, reason }) {
+    /** F2a：给人工起草回复（agentProfile 是会话负责人的「我的资料」，没有就不带）。返回 {text, fileIds}；解析不了时抛错 */
+    async draft({ message, history, entries, files = [], filesTruncated = false, profile, persona, agentProfile = null, reason }) {
       const { text } = await call(
         'draft',
-        buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated }),
+        buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, agentProfile }),
         buildDraftUserPrompt({ message, history, reason }),
       );
       const data = extractJson(text);
@@ -209,14 +209,29 @@ export function createRealAi(getSettings, opts = {}) {
     },
 
     /**
-     * 推荐回复：草稿的提示词骨架，加公司话术、个人话术；previous 是「换一条」时的上一条推荐。
+     * 推荐回复：草稿的提示词骨架，加公司话术、个人话术和点按钮那个人的「我的资料」（agentProfile）；previous 是「换一条」时的
+     * 上一条推荐；followUp / ourMessages 是跟进（我方说的是最后一条）时的说法和我方后来发的消息。
      * 返回 {text, fileIds}；解析不了时抛错
      */
-    async suggest({ message, history, entries, files = [], filesTruncated = false, profile, persona, companyPrompt = '', stylePrompt = '', previous = '' }) {
+    async suggest({
+      message,
+      history,
+      entries,
+      files = [],
+      filesTruncated = false,
+      profile,
+      persona,
+      companyPrompt = '',
+      stylePrompt = '',
+      agentProfile = null,
+      previous = '',
+      followUp = false,
+      ourMessages = [],
+    }) {
       const { text } = await call(
         'suggest',
-        buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, companyPrompt, stylePrompt }),
-        buildSuggestUserPrompt({ message, history, previous }),
+        buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, companyPrompt, stylePrompt, agentProfile }),
+        buildSuggestUserPrompt({ message, history, previous, followUp, ourMessages }),
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('推荐回复输出无法解析');

@@ -110,6 +110,11 @@ export const api = {
     post('/api/auth/password', { currentPassword, newPassword }, { silent: true }),
   /** 改自己的个人话术（推荐回复用，最多 2000 字）→ {user}（同 /api/auth/me，带 stylePrompt） */
   putStylePrompt: (stylePrompt, o) => put('/api/auth/me/style-prompt', { stylePrompt }, { silent: true, ...o }),
+  /**
+   * 改自己的「我的资料」{displayName?, jobTitle?, contactPhone?, contactEmail?, bio?}（只改给了的字段）
+   * → {user}（同 /api/auth/me，带 profile）
+   */
+  putMyProfile: (profile, o) => put('/api/auth/me/profile', profile, { silent: true, ...o }),
   health: (o) => get('/api/health', o),
 
   // 邀请和重置（不需要登录）

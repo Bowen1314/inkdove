@@ -184,9 +184,13 @@ export function createMockAi(opts = {}) {
       return { text: parts.join('\n'), fileIds: matchFiles(message, files) };
     },
 
-    /** 推荐回复 mock：和草稿一样起草；「换一条」（带 previous）时换个开头，保证和上一条不同 */
-    async suggest({ message, entries, files = [], previous = '', signal }) {
-      const d = await ai.draft({ message, entries, files, signal });
+    /**
+     * 推荐回复 mock：和草稿一样起草；跟进时（followUp）照我方最后发的那几条起草（兑现我方说要做的事），不再回客户那条老消息；
+     * 「换一条」（带 previous）时换个开头，保证和上一条不同
+     */
+    async suggest({ message, entries, files = [], previous = '', followUp = false, ourMessages = [], signal }) {
+      const basis = followUp && ourMessages.length ? ourMessages.join('\n') : message;
+      const d = await ai.draft({ message: basis, entries, files, signal });
       if (!previous) return d;
       const text = `换个说法：${d.text}`;
       return { ...d, text: text === previous ? `再换个说法：${d.text}` : text };

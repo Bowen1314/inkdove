@@ -103,6 +103,7 @@ describe('登录和会话', () => {
     assert.match(sc, /Max-Age=2592000/);
     const body = await res.json();
     assert.equal(body.user.email, ADMIN_EMAIL);
+    assert.ok(!('profile' in body.user) && !('stylePrompt' in body.user), '登录返回不带个人话术和「我的资料」');
     const me = await t.req('GET', '/api/auth/me');
     assert.deepEqual(Object.keys(me.body.user).sort(), [
       'accountIds',
@@ -113,9 +114,11 @@ describe('登录和会话', () => {
       'lastLoginAt',
       'name',
       'pending',
+      'profile',
       'role',
       'stylePrompt',
     ]);
+    assert.deepEqual(me.body.user.profile, { displayName: '', jobTitle: '', contactPhone: '', contactEmail: '', bio: '' });
     assert.equal(me.body.user.role, 'admin');
     assert.equal(me.body.user.pending, false);
     assert.ok(me.body.user.lastLoginAt);

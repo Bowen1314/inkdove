@@ -223,6 +223,7 @@ export function createApp(config, options = {}) {
   api.post('/auth/logout', auth.logout);
   api.get('/auth/me', auth.me);
   api.put('/auth/me/style-prompt', auth.setStylePrompt);
+  api.put('/auth/me/profile', auth.setProfile);
   api.post('/auth/password', auth.changePassword);
   api.use('/users', usersRouter(ctx, auth));
   api.use('/accounts', accountsRouter(ctx, auth));

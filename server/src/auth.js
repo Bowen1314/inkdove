@@ -85,9 +85,26 @@ export function rowToUser(r) {
 /** 个人话术最长多少字符 */
 export const MAX_STYLE_PROMPT = 2000;
 
-/** 自己看自己（GET /api/auth/me 等）：比 rowToUser 多个人话术 stylePrompt，成员列表里不带 */
+/**
+ * 「我的资料」的字段：接口字段名 → users 的列和最长字符数。multiline 的可以换行，其余的把连续空白（含换行）合成一个空格。
+ * 起草推荐回复和转人工草稿时作为【业务员信息】用（见 reply/prompts.js 的 agentProfileText）。
+ */
+export const PROFILE_FIELDS = {
+  displayName: { column: 'display_name', max: 60, label: '对客户的称呼' },
+  jobTitle: { column: 'job_title', max: 60, label: '职位' },
+  contactPhone: { column: 'contact_phone', max: 40, label: '联系电话' },
+  contactEmail: { column: 'contact_email', max: 120, label: '联系邮箱' },
+  bio: { column: 'bio', max: 1000, label: '补充介绍', multiline: true },
+};
+
+/** users 行 → 「我的资料」{displayName, jobTitle, contactPhone, contactEmail, bio}，没填的是空串 */
+export function profileOfRow(r) {
+  return Object.fromEntries(Object.entries(PROFILE_FIELDS).map(([k, f]) => [k, r[f.column] ?? '']));
+}
+
+/** 自己看自己（GET /api/auth/me 等）：比 rowToUser 多个人话术 stylePrompt 和「我的资料」profile，成员列表、登录返回里不带 */
 export function selfUser(r) {
-  return { ...rowToUser(r), stylePrompt: r.style_prompt ?? '' };
+  return { ...rowToUser(r), stylePrompt: r.style_prompt ?? '', profile: profileOfRow(r) };
 }
 
 export const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
@@ -294,8 +311,33 @@ export function createAuth(ctx) {
       next();
     },
 
-    /** GET /api/auth/me：当前用户，带个人话术 */
+    /** GET /api/auth/me：当前用户，带个人话术和「我的资料」（user.profile） */
     me(req, res) {
+      res.json({ user: selfUser(getUserRow(req.user.id)) });
+    },
+
+    /**
+     * PUT /api/auth/me/profile {displayName?, jobTitle?, contactPhone?, contactEmail?, bio?}：改自己的「我的资料」，所有角色都能改，
+     * 只能改自己的。只改给了的字段（至少给一个）；都是字符串，去掉首尾空白后按 PROFILE_FIELDS 的长度校验，邮箱填了要像邮箱，
+     * 空串是清空。返回更新后的 user（同 GET /api/auth/me）。
+     */
+    setProfile(req, res) {
+      const b = req.body;
+      if (!b || typeof b !== 'object' || Array.isArray(b)) throw badRequest('请求体必须是 JSON 对象');
+      const keys = Object.keys(PROFILE_FIELDS).filter((k) => b[k] !== undefined);
+      if (!keys.length) throw badRequest(`至少要给一个字段：${Object.keys(PROFILE_FIELDS).join('、')}`);
+      const sets = [];
+      const values = [];
+      for (const k of keys) {
+        const f = PROFILE_FIELDS[k];
+        if (typeof b[k] !== 'string') throw badRequest(`${k} 必须是字符串`);
+        const v = f.multiline ? b[k].trim() : b[k].replace(/\s+/g, ' ').trim();
+        if (v.length > f.max) throw badRequest(`${f.label}太长，最多 ${f.max} 个字符`);
+        if (k === 'contactEmail' && v && !EMAIL_RE.test(v)) throw badRequest('联系邮箱格式不对');
+        sets.push(`${f.column} = ?`);
+        values.push(v);
+      }
+      db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...values, req.user.id);
       res.json({ user: selfUser(getUserRow(req.user.id)) });
     },
 

@@ -37,18 +37,21 @@ export function normalizeFileIds(ids) {
 
 /**
  * 回复和草稿共用的上下文：最近对话、相关条目、可发送文件（超过 50 个时按 BM25 取前 50）。
+ * 检索查询默认只用客户的话（最近 3 条客户消息 + message）。extraQuery 只有推荐回复跟进时才传：我方在客户最后那段消息之后
+ * 发的消息，一起参与检索（比如"我来讲一下怎么注册"能找到注册的条目），裁剪后作为 extra 返回；自动回复和转人工草稿不传，检索不变。
  * @param {any} ctx
- * @param {{message:string, history?:{role:'customer'|'bot', text:string}[]}} input
+ * @param {{message:string, history?:{role:'customer'|'bot', text:string}[], extraQuery?:string[]}} input
  */
-export function buildReplyContext(ctx, { message, history = [] }) {
+export function buildReplyContext(ctx, { message, history = [], extraQuery = [] }) {
   const msg = clip(message, MAX_CUSTOMER_MESSAGE);
   const hist = history.slice(-12).map((h) => ({ role: h.role, text: clip(h.text, MAX_CUSTOMER_MESSAGE) }));
   const recentCustomer = hist.filter((h) => h.role === 'customer').slice(-3).map((h) => h.text);
-  const query = [...recentCustomer, msg].join('\n');
+  const extra = extraQuery.map((s) => clip(s, MAX_CUSTOMER_MESSAGE));
+  const query = [...recentCustomer, msg, ...extra].join('\n');
   const entries = selectContextEntries(ctx.kb.activeEntries(), query);
   const activeFiles = ctx.files ? ctx.files.activeFiles() : [];
   const { files, truncated } = selectContextFiles(activeFiles, query);
-  return { msg, hist, recentCustomer, entries, files, filesTruncated: truncated, activeFiles, profile: ctx.kb.getProfile() };
+  return { msg, hist, recentCustomer, extra, entries, files, filesTruncated: truncated, activeFiles, profile: ctx.kb.getProfile() };
 }
 
 /**

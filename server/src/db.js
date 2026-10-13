@@ -395,6 +395,12 @@ CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignm
 
   // ---- 推荐回复：业务员个人话术（每个成员自己改，起草推荐回复时拼进提示词） ----
   ensureColumn(db, 'users', 'style_prompt', "TEXT NOT NULL DEFAULT ''");
+
+  // ---- 我的资料（每个成员自己改）：对客户的称呼、职位、联系电话、联系邮箱、补充介绍。起草推荐回复和转人工草稿时作为
+  // 【业务员信息】拼进提示词，自动回复不用；只在 /api/auth/me 里返回，成员列表、登录不带。老库启动时自动加列 ----
+  for (const col of ['display_name', 'job_title', 'contact_phone', 'contact_email', 'bio']) {
+    ensureColumn(db, 'users', col, "TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 /**
