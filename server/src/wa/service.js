@@ -309,7 +309,10 @@ export const maskPhone = (digits) => `***${String(digits).slice(-4)}`;
 /**
  * 会话草稿 {kind, text, fileIds, createdAt}（F2a / F15 / 推荐回复）。kind：handoff 是转人工时起草的，suggest 是推荐回复；
  * 老数据没有 kind，当 handoff。A 段存的 {text, createdAt} 也认，fileIds 记 []；文字和文件都没有时视为没有草稿。
- * 库里的转人工草稿用了负责人的「我的资料」时还有 agentUserId（改派时据此作废，见 assign.js 的 writeAssignee），只在服务端用，这里不往外给
+ * 库里还可能有两个只在服务端用的字段，这里不往外给：
+ * - agentUserId：草稿用了谁的「我的资料」（转人工草稿是负责人的，推荐回复是点按钮那个人的）。负责人换成别人时作废
+ *   （assign.js 的 writeAssignee），这个人被停用、删除时也作废（routes/users.js）；
+ * - followUp：推荐回复是按跟进起草的（值为 true，不是跟进的不写）。客户来了新消息就作废（archive），「换一条」时据此挑上一条
  */
 export const parseDraft = (raw) => {
   const d = safeJsonParse(raw, null);
@@ -746,6 +749,23 @@ export function createWaService(ctx, opts = {}) {
     db.prepare("UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest'").run(convId);
   }
 
+  /**
+   * 客户发来了新消息（实时收到的，导入的历史不算）：清掉跟进推荐（kind=suggest、followUp 为 true）。
+   * 跟进是按「客户没再发」写的，客户说话了它就不对了。不是跟进的推荐回的仍是客户还没回的那些消息，不清；转人工草稿也不动。
+   * JSON 里的 true 用 json_extract 取出来是 1
+   */
+  function clearFollowUpSuggestion(convId) {
+    db.prepare(
+      "UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest' AND json_extract(draft, '$.followUp') = 1",
+    ).run(convId);
+  }
+
+  /** 草稿里记的那个人（draft.agentUserId）已经停用或删除了：起草期间被停用、删除的，草稿不存（存下之后的由 routes/users.js 清） */
+  const memberGone = (userId) => {
+    const u = db.prepare('SELECT disabled FROM users WHERE id = ?').get(userId);
+    return !u || !!u.disabled;
+  };
+
   /** 人工接管：会话进入 botPaused，草稿清空，取消防抖和拟真发送 */
   function operatorTakeover(convId) {
     db.prepare('UPDATE conversations SET bot_paused = 1, draft = NULL WHERE id = ?').run(convId);
@@ -981,6 +1001,7 @@ export function createWaService(ctx, opts = {}) {
           storedMediaJson(m.media),
         );
       if (res.changes === 0) return 'ignored_duplicate';
+      clearFollowUpSuggestion(convId);
       abortSending(convId, 'new_message');
       // 存盘和识别共用一次下载：识别等存盘的结果，存成了就读文件
       const saved = startMediaStore(acc, msgId, m.media);
@@ -1013,6 +1034,8 @@ export function createWaService(ctx, opts = {}) {
         m.media ? storedMediaJson(m.media) : null,
       );
     if (res.changes === 0) return 'ignored_duplicate';
+    // 客户又说话了：跟进推荐作废（文字和媒体都算）
+    clearFollowUpSuggestion(convId);
     // 客户发来的媒体：后台下载存盘，不等结果
     if (m.media) startMediaStore(acc, msgId, m.media);
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
@@ -1579,7 +1602,8 @@ export function createWaService(ctx, opts = {}) {
    * 生成期间人工已经回了或机器人已恢复的，丢掉这份草稿。
    * 带会话负责人的「我的资料」（草稿是给他发的）；没分配、负责人已停用或没填资料时不带。检索只用客户的话（不传 extraQuery）。
    * 用了负责人的资料时草稿里记下 agentUserId（只在库里，parseDraft 不往外给）：改派、批量分配、转交、收回让负责人变成别人时
-   * 清掉这份草稿（assign.js 的 writeAssignee）；生成期间负责人变成了别人的，按同样的规则不存。
+   * 清掉这份草稿（assign.js 的 writeAssignee），这个人被停用、删除时也清（routes/users.js）；生成期间负责人变成了别人、
+   * 或者这个人被停用、删除了的，按同样的规则不存。
    */
   async function prepareDraft(acc, convId, { message, history, reason, usedToday }) {
     if (closed || usedToday + 1 > DAILY_LLM_LIMIT || !ctx.ai.draft) return;
@@ -1629,6 +1653,11 @@ export function createWaService(ctx, opts = {}) {
     // 生成期间改派给了别人：草稿里是前一个负责人的资料，和存下之后再改派一样作废（没用资料的草稿照存）
     if (draft.agentUserId && draft.agentUserId !== (conv.assignee_id ?? null)) {
       log.info(`[wa] 会话 ${convId} 起草期间换了负责人，草稿里是前一个负责人的资料，不存`);
+      return;
+    }
+    // 生成期间负责人被停用了（删除的话上面已经因为会话变成未分配不存了）：和存下之后再停用一样作废
+    if (draft.agentUserId && memberGone(draft.agentUserId)) {
+      log.info(`[wa] 会话 ${convId} 起草期间负责人被停用或删除了，草稿里是他的资料，不存`);
       return;
     }
     db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
@@ -2469,9 +2498,14 @@ export function createWaService(ctx, opts = {}) {
 
     /**
      * 手动要一条推荐回复（会话页「推荐回复」「换一条」）：号是什么回复方式都可以。用点按钮的人（user）的个人话术和「我的资料」，
-     * 当前草稿的文字作为【上一条推荐】要求换个写法（跟进时只认推荐回复：转人工草稿回的是客户那条已经回过的消息，不能拿来"换个写法"）。
+     * 当前草稿的文字作为【上一条推荐】要求换个写法，只拿同一种的：跟进时只认跟进推荐（转人工草稿回的是客户那条已经回过的消息，
+     * 不能拿来"换个写法"）；不是跟进时认非跟进的推荐和转人工草稿，不认跟进推荐。
      * 成功后存进 draft 并返回；生成期间我方已经回了的照样返回、但不存。
      * 我方说的是最后一条时按跟进起草（见 suggestInput）；跟进起草期间客户又发了消息的，同样照样返回、但不存。
+     * 存库时多记两项（只在库里，parseDraft 不往外给）：用了点按钮那个人的资料时记 agentUserId（负责人换成别人、这个人被停用或删除时作废），
+     * 跟进时记 followUp: true（客户来了新消息就作废，见 clearFollowUpSuggestion）。
+     * 用了资料的，起草期间负责人变了、又不是点按钮的那个人，或者这个人被停用、删除了，照样返回、但不存
+     * （点按钮的人本来就可能不是负责人，比如管理员替业务员的会话点，负责人没变时照存）。
      * 不改消息的处理结果，不动防抖。
      * @returns {Promise<{draft:any}>}
      */
@@ -2489,22 +2523,37 @@ export function createWaService(ctx, opts = {}) {
         throw new HttpError(429, 'llm_daily_limit', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次），明天再试`);
       }
       const current = parseDraft(conv.draft);
-      const previous = input.followUp ? (current?.kind === 'suggest' ? current.text : '') : current?.text ?? '';
+      // 当前草稿是不是跟进推荐：followUp 只在库里，parseDraft 去掉了，读原始 JSON（老数据的推荐没有这一项，当不是跟进）
+      const currentFollowUp = current?.kind === 'suggest' && safeJsonParse(conv.draft, null)?.followUp === true;
+      const previous = (input.followUp ? currentFollowUp : !currentFollowUp) ? current?.text ?? '' : '';
+      const assigneeBefore = conv.assignee_id ?? null;
+      const info = memberAiInfo(user?.id);
       let r;
       try {
         r = await llmScope({ accountId: acc.id, conversationId: convId }, () =>
-          generateSuggestion(acc, convId, input, { ...memberAiInfo(user?.id), previous }),
+          generateSuggestion(acc, convId, input, { ...info, previous }),
         );
       } catch (err) {
         throw new HttpError(502, 'llm_error', `生成推荐回复失败：${err?.message || err}`);
       }
+      const draft = { ...r.draft };
+      // 草稿里写了点按钮那个人的名字、电话这些，记下是谁的（没用资料就不记）
+      if (info.agentProfile) draft.agentUserId = user.id;
+      if (input.followUp) draft.followUp = true;
       // 不存的两种：生成期间我方已经回了；跟进时客户又发了消息（这条跟进没看到客户的新消息）。
-      // 不是跟进时客户又发的照存：推荐回的仍是客户还没回的那些消息（客户来消息本来也不清推荐），「换一条」会把新消息一起合进来
+      // 不是跟进时客户又发的照存：推荐回的仍是客户还没回的那些消息（客户来消息只清跟进推荐），「换一条」会把新消息一起合进来
       const stale = repliedSince(convId, r.startSeq) || (input.followUp && customerSince(convId, r.startSeq));
-      if (getConvRow(convId) && !stale) {
-        db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(r.draft), convId);
+      const now = getConvRow(convId);
+      // 用了资料的：起草期间负责人换了、新负责人又不是点按钮的人（和存下之后再改派一样作废），或者这个人被停用、删除了，不存
+      const assigneeNow = now?.assignee_id ?? null;
+      const foreign =
+        !!draft.agentUserId && ((assigneeNow !== assigneeBefore && draft.agentUserId !== assigneeNow) || memberGone(draft.agentUserId));
+      if (now && !stale && foreign) {
+        log.info(`[wa] 会话 ${convId} 起草推荐回复期间换了负责人，或者点按钮的人被停用、删除了，推荐里是他的资料，不存`);
+      } else if (now && !stale) {
+        db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
       }
-      return { draft: parseDraft(JSON.stringify(r.draft)) };
+      return { draft: parseDraft(JSON.stringify(draft)) };
     },
 
     /**

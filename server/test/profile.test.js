@@ -1,5 +1,6 @@
 // 我的资料（对客户的称呼、职位、联系电话、联系邮箱、补充介绍）：PUT /api/auth/me/profile 的校验和权限、老库自动加列、
-// 只在 /api/auth/me 里返回；AI 怎么用——推荐回复用点按钮的人的，转人工草稿用会话负责人的，自动回复不用。
+// 只在 /api/auth/me 里返回；AI 怎么用——推荐回复用点按钮的人的，转人工草稿用会话负责人的，自动回复不用；
+// 用了谁的资料草稿里就记下是谁，负责人换成别人、这个人被停用或删除时作废。
 // 模型都用 mock（aiHooks 记下参数），最后一组用本地假 LLM 服务看真实实现拼出的提示词，不调真实模型。
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -283,12 +284,29 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
     assert.ok(!reply.includes('【业务员信息】') && !reply.includes('agent_profile'));
   });
 
-  describe('转人工草稿里是负责人的资料：负责人换成别人就作废', () => {
+  describe('草稿里是谁的资料（转人工草稿是负责人的，推荐回复是点按钮那个人的）：负责人换成别人、这个人被停用或删除就作废', () => {
     /** 库里存的草稿（带只在服务端用的 agentUserId） */
     const rawDraft = (convId) => JSON.parse(t.ctx.db.prepare('SELECT draft FROM conversations WHERE id = ?').get(convId).draft ?? 'null');
     const setDraft = (convId, d) => t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(d), convId);
     /** 用了某人资料的转人工草稿 */
     const handoffOf = (userId) => ({ kind: 'handoff', text: '我是 Lina，电话 +86 138 0000 0001', fileIds: [], createdAt: new Date().toISOString(), agentUserId: userId });
+    /** 用了某人资料的推荐回复（他点的） */
+    const suggestOf = (userId) => ({ kind: 'suggest', text: '我是 Lina，有黑色', fileIds: [], createdAt: new Date().toISOString(), agentUserId: userId });
+    const adminId = async () => (await t.req('GET', '/api/auth/me')).body.user.id;
+    /** 让 hooks[name] 卡在起草中，直到 release()（started 表示已经开始起草） */
+    function hold(name) {
+      let release;
+      const gate = new Promise((r) => {
+        release = r;
+      });
+      const h = { started: false, release: () => release() };
+      hooks[name] = async (args, mock) => {
+        h.started = true;
+        await gate;
+        return mock[name](args);
+      };
+      return h;
+    }
     /** 自动回复的号上新开一个会话（客户先问一句，机器人正常回） */
     async function newConv() {
       const chat = newChat();
@@ -330,7 +348,7 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
       assert.equal(rawDraft(convId)?.kind, 'handoff');
     });
 
-    it('批量分配、转交、取消分配、收回号权限、删除成员让负责人变成别人时同样清掉；草稿就是新负责人的、推荐回复都不动', async () => {
+    it('批量分配、转交、取消分配、收回号权限、删除成员让负责人变成别人时同样清掉；草稿就是新负责人的、没用资料的推荐回复都不动', async () => {
       const { convId } = await newConv();
       /** 分给 agent，放一份用了他资料的草稿 */
       const prime = async () => {
@@ -375,7 +393,7 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
       assert.equal((await assign(convId, agent.user.id)).status, 200);
       assert.equal(rawDraft(convId)?.agentUserId, agent.user.id, '改派给的就是草稿里那个人');
 
-      // 推荐回复（点按钮那个人的资料，和负责人无关）：不动
+      // 没用资料的推荐回复（没记 agentUserId）：不动。用了资料的见下一条
       const suggestDraft = { kind: 'suggest', text: '推荐回复', fileIds: [], createdAt: new Date().toISOString() };
       setDraft(convId, suggestDraft);
       assert.equal((await assign(convId, quiet.user.id)).status, 200);
@@ -421,6 +439,169 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
         } else {
           assert.equal(rawDraft(convId), null, label);
         }
+      }
+    });
+
+    it('推荐回复用了点按钮那个人的资料：库里也记下是谁（接口不带）；改派给别人清掉、改派给他本人保留；管理员替业务员点的，负责人不变时保留；没填资料的不记', async () => {
+      const { convId } = await newConv();
+      const shown = async () => (await t.req('GET', convPath(convId))).body.draft;
+      const admin = await adminId();
+      // 前面停用又启用过 agent，他原来的登录已经失效
+      const agentCookie = await t.loginAs('profile-ai-agent@example.com', agent.password);
+
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      const mine = await suggest(convId, agentCookie);
+      assert.equal(mine.status, 200, JSON.stringify(mine.body));
+      assert.deepEqual(hooks.args.suggest.agentProfile, LINA);
+      assert.equal(rawDraft(convId).kind, 'suggest');
+      assert.equal(rawDraft(convId).agentUserId, agent.user.id, '负责人自己点的：记下是他');
+      assert.ok(!('agentUserId' in mine.body.draft), '返回的草稿不带 agentUserId');
+      assert.ok(!('agentUserId' in (await shown())), '会话接口里也不带');
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      assert.equal(rawDraft(convId), null, '改派给别人：清掉（里面是前一个人的名字和电话）');
+
+      // 管理员替业务员（quiet）的会话点
+      assert.equal((await suggest(convId)).status, 200);
+      assert.deepEqual(hooks.args.suggest.agentProfile, ADMIN_PROFILE);
+      assert.equal(rawDraft(convId).agentUserId, admin, '记的是点按钮的管理员，不是负责人');
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.agentUserId, admin, '负责人没变：保留');
+      assert.equal((await assign(convId, admin)).status, 200);
+      assert.equal(rawDraft(convId)?.agentUserId, admin, '改派给的正好是点按钮的人：保留');
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId), null, '再改派给业务员：清掉（里面是管理员的资料）');
+
+      // 没填资料的人点的：不记，改派也不清
+      assert.equal((await assign(convId, quiet.user.id)).status, 200);
+      assert.equal((await suggest(convId, quiet.cookie)).status, 200);
+      assert.equal(hooks.args.suggest.agentProfile, null);
+      assert.equal(rawDraft(convId).kind, 'suggest');
+      assert.ok(!('agentUserId' in rawDraft(convId)), '没填资料：不记');
+      assert.equal((await assign(convId, agent.user.id)).status, 200);
+      assert.equal(rawDraft(convId)?.kind, 'suggest', '改派不清');
+    });
+
+    it('起草推荐回复期间换了负责人：新负责人不是点按钮的人就不存（照样返回给他）；换成的正好是点按钮的人、没用资料的照存', async () => {
+      const admin = await adminId();
+      for (const [label, owner, clicker, to, kept, who] of [
+        ['管理员替业务员点，期间改派给另一个业务员', agent, undefined, quiet.user.id, false, null],
+        ['管理员替业务员点，期间改派给管理员自己', agent, undefined, admin, true, admin],
+        ['没填资料的人点，期间改派给别人', quiet, quiet.cookie, agent.user.id, true, null],
+      ]) {
+        const { convId } = await newConv();
+        assert.equal((await assign(convId, owner.user.id)).status, 200);
+        const h = hold('suggest');
+        let r;
+        try {
+          const pending = suggest(convId, clicker);
+          await waitFor(() => h.started);
+          assert.equal((await assign(convId, to)).status, 200, label);
+          h.release();
+          r = await pending;
+        } finally {
+          h.release();
+          hooks.suggest = null;
+        }
+        assert.equal(r.status, 200, `${label} ${JSON.stringify(r.body)}`);
+        assert.equal(r.body.draft.kind, 'suggest', `${label}：照样返回`);
+        if (!kept) {
+          assert.equal(rawDraft(convId), null, label);
+          continue;
+        }
+        assert.deepEqual((await t.req('GET', convPath(convId))).body.draft, r.body.draft, label);
+        if (who) assert.equal(rawDraft(convId).agentUserId, who, label);
+        else assert.ok(!('agentUserId' in rawDraft(convId)), label);
+      }
+    });
+
+    it('停用成员：清掉所有用了他资料的草稿（他负责的会话上的、他在别人会话上点的推荐），别人的和没用资料的不动，重新启用也不恢复；删除成员同样', async () => {
+      for (const how of ['disable', 'delete']) {
+        const email = `profile-ai-${how}@example.com`;
+        const gone = await t.addMember({ email, name: how === 'disable' ? '要停用的' : '要删除的', accountIds: [autoAcc.id] });
+        /** 分给 assignee 的新会话，放上草稿 d */
+        const convWith = async (assignee, d) => {
+          const { convId } = await newConv();
+          assert.equal((await assign(convId, assignee.user.id)).status, 200);
+          setDraft(convId, d);
+          return convId;
+        };
+        const own = await convWith(gone, handoffOf(gone.user.id));
+        const elsewhere = await convWith(quiet, suggestOf(gone.user.id));
+        const othersDraft = await convWith(agent, handoffOf(agent.user.id));
+        const plain = { kind: 'handoff', text: '没用资料的草稿', fileIds: [], createdAt: new Date().toISOString() };
+        const noProfile = await convWith(gone, plain);
+        const kept = { othersDraft: rawDraft(othersDraft), noProfile: rawDraft(noProfile) };
+
+        if (how === 'disable') {
+          assert.equal((await t.req('PUT', `/api/users/${gone.user.id}`, { body: { name: '改个名' } })).status, 200);
+          assert.equal(rawDraft(own)?.agentUserId, gone.user.id, '只改名字不清');
+        }
+        const r =
+          how === 'disable'
+            ? await t.req('PUT', `/api/users/${gone.user.id}`, { body: { disabled: true } })
+            : await t.req('DELETE', `/api/users/${gone.user.id}`);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(rawDraft(own), null, `${how}：他负责的会话上用了他资料的草稿`);
+        assert.equal(rawDraft(elsewhere), null, `${how}：他在别人会话上点的推荐`);
+        assert.deepEqual(rawDraft(othersDraft), kept.othersDraft, `${how}：别人的资料不动`);
+        assert.deepEqual(rawDraft(noProfile), kept.noProfile, `${how}：没用资料的不动`);
+        const line =
+          how === 'disable' ? `停用了成员 ${email}，清掉 2 份用了他资料的草稿` : `删除了成员 ${email}，2 个会话变成未分配，清掉 2 份用了他资料的草稿`;
+        assert.ok(
+          t.log.lines.some((l) => l.includes(line)),
+          `${how}：日志写清楚清了几份\n${t.log.lines.filter((l) => l.includes('[users]')).join('\n')}`,
+        );
+        if (how === 'disable') {
+          assert.equal((await t.req('PUT', `/api/users/${gone.user.id}`, { body: { disabled: false } })).status, 200);
+          assert.equal(rawDraft(own), null, '重新启用不恢复');
+          assert.equal(rawDraft(elsewhere), null, '重新启用不恢复');
+        }
+      }
+    });
+
+    it('起草期间草稿里的那个人被停用、删除：不存（推荐回复照样返回给点按钮的人）', async () => {
+      const PROFILE = { ...EMPTY, displayName: 'Temp Zhao', contactPhone: '+86 138 0000 0009' };
+      for (const [kind, how] of [
+        ['suggest', 'disable'],
+        ['suggest', 'delete'],
+        ['handoff', 'disable'],
+      ]) {
+        const label = `${kind === 'suggest' ? '推荐回复' : '转人工草稿'}，起草期间${how === 'disable' ? '停用' : '删除'}`;
+        const hook = kind === 'suggest' ? 'suggest' : 'draft';
+        const m = await t.addMember({ email: `profile-ai-mid-${kind}-${how}@example.com`, name: '起草中', accountIds: [autoAcc.id] });
+        assert.equal((await t.req('PUT', '/api/auth/me/profile', { body: PROFILE, cookie: m.cookie })).status, 200);
+        const { chat, convId } = await newConv();
+        assert.equal((await assign(convId, m.user.id)).status, 200);
+        const h = hold(hook);
+        let pending = null;
+        try {
+          if (kind === 'suggest') pending = suggest(convId, m.cookie);
+          else {
+            hooks.generate = handoff;
+            await wahaSend(t, autoAcc, chat, '我要找人工');
+          }
+          await waitFor(() => h.started);
+          const r =
+            how === 'disable'
+              ? await t.req('PUT', `/api/users/${m.user.id}`, { body: { disabled: true } })
+              : await t.req('DELETE', `/api/users/${m.user.id}`);
+          assert.equal(r.status, 200, label);
+          h.release();
+          if (pending) {
+            const res = await pending;
+            assert.equal(res.status, 200, `${label} ${JSON.stringify(res.body)}`);
+            assert.equal(res.body.draft.kind, 'suggest', `${label}：照样返回给点按钮的人`);
+          } else {
+            await waitDecided(t, convId, 2);
+            await idle();
+          }
+        } finally {
+          h.release();
+          hooks[hook] = null;
+          hooks.generate = null;
+        }
+        assert.deepEqual(hooks.args[hook].agentProfile, PROFILE, `${label}：起草时用了他的资料`);
+        assert.equal(rawDraft(convId), null, `${label}：不存`);
       }
     });
   });

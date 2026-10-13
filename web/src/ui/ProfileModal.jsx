@@ -117,10 +117,13 @@ export function ProfileModal({ open, onClose }) {
     </span>
   );
 
+  // 保存请求还没回来时不能关（×、Esc、点遮罩都不起作用，取消按钮是禁用的）：关掉了就看不到存没存上、哪部分没存
+  const close = busy ? () => {} : onClose;
+
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={close}
       title="我的资料"
       width={560}
       footer={

@@ -1,9 +1,10 @@
 // F8 成员管理（仅 admin）。邀请和重置链接由管理员自己复制发给对方，系统不发邮件。
 // 按客户分配：每个成员带 assignedCount；删成员、agent 失去号的权限时他负责的会话变成未分配；转交把他的会话全部给另一个人。
+// 停用、删成员时清掉用了他「我的资料」的草稿（转人工草稿和他点的推荐回复，不管在谁的会话上）。
 import express from 'express';
 import { normalizeEmail, ROLES, rowToUser } from '../auth.js';
 import { badRequest, HttpError, isPlainObject, newId, notFound, nowIso } from '../util.js';
-import { assignedCounts, releaseAll, releaseLostAccess, transferAll } from '../wa/assign.js';
+import { assignedCounts, clearMemberDrafts, releaseAll, releaseLostAccess, transferAll } from '../wa/assign.js';
 
 /**
  * @param {any} ctx
@@ -73,7 +74,9 @@ export function usersRouter(ctx, auth) {
       next.disabled = b.disabled;
     }
     // 降级或停用最后一个启用中的 admin → 400 last_admin
-    if ((row.role === 'admin' && next.role !== 'admin') || (!row.disabled && next.disabled)) auth.assertNotLastAdmin(row);
+    const disabling = !row.disabled && next.disabled;
+    if ((row.role === 'admin' && next.role !== 'admin') || disabling) auth.assertNotLastAdmin(row);
+    let cleared = 0;
     db.transaction(() => {
       db.prepare('UPDATE users SET name = ?, role = ?, account_ids = ?, disabled = ? WHERE id = ?').run(
         next.name,
@@ -85,7 +88,10 @@ export function usersRouter(ctx, auth) {
       // agent 的 accountIds 去掉了某个号（或者 admin 降级成 agent）：他在没有权限的号上负责的会话变成未分配。
       // 停用不动负责关系，等管理员转交
       releaseLostAccess(db, row.id, req.user);
+      // 停用：用了他资料的草稿作废（里面是他的名字和电话，他已经不在了）。重新启用不恢复
+      if (disabling) cleared = clearMemberDrafts(db, row.id);
     })();
+    if (disabling) ctx.log.info(`[users] ${req.user.email} 停用了成员 ${row.email}${cleared ? `，清掉 ${cleared} 份用了他资料的草稿` : ''}`);
     // 停用后这个人的所有会话立即失效
     if (next.disabled) auth.dropSessions(row.id);
     res.json(view(auth.getUserRow(row.id)));
@@ -95,14 +101,19 @@ export function usersRouter(ctx, auth) {
     const row = load(req.params.id);
     auth.assertNotLastAdmin(row);
     let released = 0;
+    let cleared = 0;
     db.transaction(() => {
+      // 用了他资料的草稿作废（他在别人会话上点的推荐也算）。先清再收回，清掉的份数才数得全（收回时也会清他负责的会话上的）
+      cleared = clearMemberDrafts(db, row.id);
       // 他负责的会话变成未分配（要在删用户行之前）
       released = releaseAll(db, row.id, req.user);
       db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(row.id);
       db.prepare('DELETE FROM invites WHERE user_id = ?').run(row.id);
       db.prepare('DELETE FROM users WHERE id = ?').run(row.id);
     })();
-    ctx.log.info(`[users] ${req.user.email} 删除了成员 ${row.email}${released ? `，${released} 个会话变成未分配` : ''}`);
+    ctx.log.info(
+      `[users] ${req.user.email} 删除了成员 ${row.email}${released ? `，${released} 个会话变成未分配` : ''}${cleared ? `，清掉 ${cleared} 份用了他资料的草稿` : ''}`,
+    );
     res.json({ ok: true });
   });
 

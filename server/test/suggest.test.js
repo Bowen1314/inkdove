@@ -6,7 +6,7 @@ import { CONTEXT_CHAR_LIMIT, formatEntryForContext } from '../src/kb/search.js';
 import { buildReplyContext } from '../src/reply/engine.js';
 import { buildDraftSystemPrompt, buildSuggestUserPrompt } from '../src/reply/prompts.js';
 import { DAILY_LLM_LIMIT, localDay } from '../src/wa/service.js';
-import { filesForm } from './fixtures.js';
+import { filesForm, metaEvent } from './fixtures.js';
 import {
   aiHooks,
   convIdOf,
@@ -19,6 +19,7 @@ import {
   startFakeWaha,
   waitDecided,
   waitFor,
+  wahaHistoryMessage,
   wahaMessage,
   wahaSend,
 } from './helpers.js';
@@ -665,6 +666,126 @@ describe('推荐回复（只能手动要）', () => {
         const stored = (await getConv(t, convId)).draft;
         if (followUp) assert.equal(stored, null, '跟进：客户又说话了，这条跟进不存');
         else assert.deepEqual(stored, r.body.draft, '不是跟进：照存（推荐回的仍是客户还没回的消息）');
+      }
+    });
+
+    it('跟进推荐库里记 followUp（接口不带）；客户实时发来新消息就清掉，文字、媒体都算；不是跟进的推荐、转人工草稿不清', async () => {
+      const rawDraft = (convId) => JSON.parse(convRow(convId).draft ?? 'null');
+      const KEYS = ['createdAt', 'fileIds', 'kind', 'text'];
+      const chat = newChat();
+      const convId = await says(manualAcc, chat, '保温杯 A100 有黑色吗', 1);
+      const plain = await manual(convId);
+      assert.equal(plain.status, 200);
+      assert.equal(hooks.args.suggest.followUp, false);
+      assert.ok(!('followUp' in rawDraft(convId)), '不是跟进：不记 followUp');
+      await says(manualAcc, chat, '要 100 个', 2);
+      assert.deepEqual((await getConv(t, convId)).draft, plain.body.draft, '不是跟进的推荐：客户再发不清（推荐回的仍是客户还没回的消息）');
+
+      assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '有的，黑白两色' } })).status, 200);
+      const follow = await manual(convId);
+      assert.equal(follow.status, 200, JSON.stringify(follow.body));
+      assert.equal(hooks.args.suggest.followUp, true);
+      assert.equal(rawDraft(convId).followUp, true, '跟进：库里记下');
+      assert.deepEqual(Object.keys(follow.body.draft).sort(), KEYS, '返回的草稿不带 followUp');
+      assert.deepEqual(Object.keys((await getConv(t, convId)).draft).sort(), KEYS, '会话接口里也不带');
+      await says(manualAcc, chat, '好的，发货要几天', 3);
+      assert.equal((await getConv(t, convId)).draft, null, '客户发来文字：跟进推荐清掉');
+
+      // 媒体也算
+      assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '三天左右' } })).status, 200);
+      assert.equal((await manual(convId)).status, 200);
+      assert.equal(rawDraft(convId).followUp, true);
+      await postWaha(t, wahaMessage({ from: chat, hasMedia: true, media: wahaFile(manualAcc, Buffer.from('fake-jpeg-bytes'), 'image/jpeg'), session: manualAcc.waha.sessionName }));
+      await waitDecided(t, convId, 4);
+      await idle();
+      assert.equal((await getConv(t, convId)).draft, null, '客户发来图片：跟进推荐清掉');
+
+      // 转人工草稿不清（跟进时手动放一份）
+      assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '收到图片了' } })).status, 200);
+      const handoff = { kind: 'handoff', text: '转人工时起草的', fileIds: [], createdAt: new Date().toISOString() };
+      t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(handoff), convId);
+      await says(manualAcc, chat, '还有白色吗', 5);
+      assert.deepEqual(rawDraft(convId), handoff, '转人工草稿不清');
+    });
+
+    it('跟进推荐：Meta 号收到客户消息同样清掉（和 WAHA 走同一段入站处理）', async () => {
+      const PNID = '1098765432100';
+      const FROM = '8613500000077';
+      const macc = await t.createAccount({
+        name: '推荐 Meta 号',
+        channel: 'meta',
+        meta: { phoneNumberId: PNID, verifyToken: 'v', accessToken: 'meta-token', appSecret: 'meta-secret' },
+      });
+      const metaSays = async (body) => {
+        const r = await t.ctx.wa.handleMetaWebhook(macc.id, metaEvent(PNID, FROM, { type: 'text', text: { body } }));
+        assert.deepEqual(r, ['archived']);
+      };
+      await metaSays('你好，A100 有货吗');
+      const convId = convIdOf(macc, FROM);
+      const setDraft = (d) => t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(d), convId);
+      // Meta 号没有手机回复，这里直接放一份跟进推荐、一份不是跟进的推荐
+      const base = { kind: 'suggest', text: '跟进：目录发您了吗', fileIds: [], createdAt: new Date().toISOString() };
+      setDraft(base);
+      await metaSays('还有别的颜色吗');
+      assert.deepEqual((await getConv(t, convId)).draft, { ...base }, '不是跟进的推荐不清');
+      setDraft({ ...base, followUp: true });
+      await metaSays('多少钱');
+      assert.equal((await getConv(t, convId)).draft, null, '跟进推荐清掉');
+    });
+
+    it('跟进推荐：重连后导入的历史消息不清', async () => {
+      const session = manualAcc.waha.sessionName;
+      const chat = newChat();
+      const convId = await says(manualAcc, chat, '保温杯 A100 有货吗', 1);
+      assert.equal((await t.req('POST', `${convPath(convId)}/send`, { body: { text: '有货，我把报价单发你' } })).status, 200);
+      assert.equal((await manual(convId)).status, 200);
+      const draft = convRow(convId).draft;
+      assert.equal(JSON.parse(draft).followUp, true);
+      const imports = () => t.log.lines.filter((l) => l.includes(`号 ${manualAcc.id} 导入已有聊天：1 个聊天、1 条消息`)).length;
+      const n = imports();
+      fake.state.chats.set(session, [{ id: chat, name: '老客户', messages: [wahaHistoryMessage({ chatId: chat, body: '昨天问过的价格' })] }]);
+      try {
+        for (const status of ['STARTING', 'WORKING']) await t.ctx.wa.handleWahaWebhook({ event: 'session.status', session, payload: { status } });
+        await waitFor(() => imports() > n, { message: '导入迟迟没跑完' });
+      } finally {
+        fake.state.chats.delete(session);
+      }
+      assert.ok((await getMessages(t, convId)).some((m) => m.via === 'import' && m.text === '昨天问过的价格'), '历史消息导进来了');
+      assert.equal(convRow(convId).draft, draft, '导入的客户消息不算客户新发的，跟进推荐不清');
+    });
+
+    it('「换一条」的【上一条推荐】只拿同一种：跟进时只拿跟进推荐，不是跟进时不拿跟进推荐（老数据的推荐没有 followUp，当不是跟进）', async () => {
+      const chat = newChat();
+      const convId = await says(manualAcc, chat, '保温杯 A100 有黑色吗', 1);
+      const setDraft = (d) => t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(d), convId);
+      const at = new Date().toISOString();
+      const followUpDraft = { kind: 'suggest', text: '跟进推荐：颜色图发您了', fileIds: [], createdAt: at, followUp: true };
+      const plainDraft = { kind: 'suggest', text: '不是跟进的推荐（老数据也是这样）：有黑色', fileIds: [], createdAt: at };
+      const handoff = { kind: 'handoff', text: '转人工草稿：有黑色', fileIds: [], createdAt: at };
+
+      // 不是跟进（客户的消息还没回）
+      for (const [d, previous, what] of [
+        [followUpDraft, '', '跟进推荐不当上一条'],
+        [plainDraft, plainDraft.text, '不是跟进的推荐照旧带'],
+        [handoff, handoff.text, '转人工草稿照旧带'],
+      ]) {
+        setDraft(d);
+        assert.equal((await manual(convId)).status, 200, what);
+        assert.equal(hooks.args.suggest.followUp, false, what);
+        assert.equal(hooks.args.suggest.previous, previous, `不是跟进：${what}`);
+      }
+
+      // 跟进（手机上回了，客户没再发）
+      assert.equal(await ownerSays(manualAcc, chat, '有的，黑白两色'), 'archived_owner');
+      for (const [d, previous, what] of [
+        [followUpDraft, followUpDraft.text, '跟进推荐照旧带'],
+        [plainDraft, '', '不是跟进的推荐（含老数据）不当上一条'],
+        [handoff, '', '转人工草稿不当上一条'],
+      ]) {
+        setDraft(d);
+        assert.equal((await manual(convId)).status, 200, what);
+        assert.equal(hooks.args.suggest.followUp, true, what);
+        assert.equal(hooks.args.suggest.previous, previous, `跟进：${what}`);
       }
     });
 

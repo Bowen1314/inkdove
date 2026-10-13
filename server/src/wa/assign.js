@@ -31,8 +31,9 @@ const convRow = (db, id) => db.prepare('SELECT id, account_id, assignee_id FROM 
 /**
  * 改一个会话的负责人并写一行分配记录（事务和校验由调用方负责）。和原负责人相同时什么也不做，返回 false。
  * assigned_at 记这次改的时间，取消分配时清空。
- * 会话的转人工草稿用了某个负责人的「我的资料」（draft.agentUserId）、新负责人不是他时，清掉这份草稿：里面是前一个人的名字和电话。
- * 没用资料的草稿、推荐回复（用的是点按钮那个人的资料，和负责人无关）都不动。
+ * 会话的草稿用了某个人的「我的资料」（draft.agentUserId）、新负责人不是他时，清掉这份草稿：里面是别人的名字和电话。
+ * 转人工草稿记的是当时的负责人；推荐回复记的是点按钮的那个人（可能不是负责人，比如管理员替业务员点的），
+ * 负责人不变时不动，换成别人时一样清掉，改派给的正好是他时保留。没用资料的草稿都不动。
  * @param {{id:string, assignee_id:string|null}} row 会话行
  * @param {string|null} toUserId
  * @param {{byUserId?: string|null, reason: string, at?: string}} o
@@ -110,6 +111,17 @@ export function transferAll(db, fromUserId, toUserId, by) {
     }
     return { moved, skipped };
   })();
+}
+
+/**
+ * 成员被停用或删除：清掉所有用了他「我的资料」的草稿（draft.agentUserId 是他），不管会话是不是他负责的——
+ * 他点的推荐回复可能在别人的会话上。重新启用不恢复。在改用户行的同一个事务里调。
+ * @returns {number} 清了几份
+ */
+export function clearMemberDrafts(db, userId) {
+  return db
+    .prepare("UPDATE conversations SET draft = NULL WHERE json_valid(draft) AND json_extract(draft, '$.agentUserId') = ?")
+    .run(userId).changes;
 }
 
 /**
