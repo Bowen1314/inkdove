@@ -10,11 +10,13 @@ import {
   buildReplyUserPrompt,
   buildReviewSystemPrompt,
   buildReviewUserPrompt,
+  buildSearchTermsUserPrompt,
   buildSuggestUserPrompt,
   FILE_DESCRIBE_SYSTEM_PROMPT,
   IMAGE_DESCRIBE_PROMPT,
   KB_DRAFT_SYSTEM_PROMPT,
   profileText,
+  SEARCH_TERMS_SYSTEM_PROMPT,
   VOICE_TRANSCRIBE_PROMPT,
 } from '../reply/prompts.js';
 import { buildTranslateUserPrompt, TRANSLATE_SYSTEM_PROMPT } from '../reply/translate.js';
@@ -23,16 +25,18 @@ import { buildLeadUserPrompt, LEAD_SYSTEM_PROMPT } from '../leads/prompts.js';
 const REPLY_TIMEOUT = 60_000;
 const DISTILL_TIMEOUT = 180_000;
 const MEDIA_TIMEOUT = 120_000;
+/** 检索改写挡在生成回复前面，等太久不如不改写 */
+const SEARCH_TIMEOUT = 20_000;
 
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' || typeof x === 'number').map(String) : []);
 const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose：reply、review、draft、suggest、kb_draft、translate、leads、media、file_describe、distill、test。F12 的 llm_calls 由 records.js 的
- * withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
+ * purpose：reply、review、draft、suggest、kb_draft、kb_search、translate、leads、media、file_describe、distill、test。F12 的 llm_calls
+ * 由 records.js 的 withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
- * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number}} [opts]
+ * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number}} [opts]
  */
 export function createRealAi(getSettings, opts = {}) {
   const replyTimeout = opts.replyTimeoutMs ?? REPLY_TIMEOUT;
@@ -44,6 +48,7 @@ export function createRealAi(getSettings, opts = {}) {
     draft: replyTimeout,
     suggest: replyTimeout,
     kb_draft: replyTimeout,
+    kb_search: opts.searchTimeoutMs ?? SEARCH_TIMEOUT,
     translate: replyTimeout,
     leads: replyTimeout,
     test: replyTimeout,
@@ -51,7 +56,7 @@ export function createRealAi(getSettings, opts = {}) {
     file_describe: distillTimeout,
     media: mediaTimeout,
   };
-  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
+  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, kb_search: 300, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
   const modelFor = (purpose, s, withAttachments) => {
     if (purpose === 'media' || (purpose === 'file_describe' && withAttachments)) return s.media.mediaModel || s.llm.model;
@@ -243,6 +248,17 @@ export function createRealAi(getSettings, opts = {}) {
       const data = await callJson('kb_draft', KB_DRAFT_SYSTEM_PROMPT, buildKbDraftUserPrompt({ question, answer }));
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('改写结果无法解析');
       return data;
+    },
+
+    /**
+     * 知识库检索改写（用回复模型，输出上限 300 token）：把要检索的话改写成知识库语言的检索词。返回 {terms}；
+     * 解析不了时抛错（kb/retrieve.js 接住，退回只用原话检索）
+     */
+    async searchTerms({ query, sampleTitles = [] }) {
+      const data = await callJson('kb_search', SEARCH_TERMS_SYSTEM_PROMPT, buildSearchTermsUserPrompt({ query, sampleTitles }));
+      const list = Array.isArray(data) ? data : data?.terms;
+      if (!Array.isArray(list)) throw new LlmError('检索词改写结果无法解析');
+      return { terms: strList(list) };
     },
 
     /** 会话输入框的一键翻译（用回复模型）：按客户最近的文字消息判断语言，直译业务员写的话。返回 {language, translation} */

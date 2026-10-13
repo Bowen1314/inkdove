@@ -2,7 +2,7 @@
 // 描述（description）告诉机器人这个文件是什么、什么时候该发；上传后排队自动生成（并发 1），管理员改过就记 manual。
 import fs from 'node:fs';
 import path from 'node:path';
-import { bm25Rank } from '../kb/search.js';
+import { bm25Rank, createTokenCache } from '../kb/search.js';
 import { llmConfigured } from '../settings.js';
 import { KIND_MIME, parseBuffer } from '../sources/parse.js';
 import { clip, newId, nowIso, safeJsonParse } from '../util.js';
@@ -60,13 +60,16 @@ export const isImageMime = (mime) => /^image\/(jpeg|png|webp)$/.test(String(mime
 /** 文件在检索和提示词里用的文本 */
 export const fileSearchText = (f) => `${f.name}\n${f.filename}\n${f.description}\n${(f.tags || []).join(' ')}`;
 
+/** 文件切好的词按文本缓存：文件超过 50 个时每次回复都要排，不用每次把所有文件重新切一遍 */
+const fileTokens = createTokenCache();
+
 /**
  * 回复上下文里的文件：不超过 50 个就全放；超过时按和客户消息的 BM25 相关度取前 50，不够 50 个再按发送次数补齐。
  * @returns {{files:any[], truncated:boolean}}
  */
 export function selectContextFiles(files, query, limit = MAX_CONTEXT_FILES) {
   if (files.length <= limit) return { files, truncated: false };
-  const ranked = bm25Rank(query, files, fileSearchText).map((r) => r.doc);
+  const ranked = bm25Rank(query, files, fileSearchText, { tokenCache: fileTokens }).map((r) => r.doc);
   const picked = new Set(ranked.slice(0, limit));
   if (picked.size < limit) {
     const rest = files.filter((f) => !picked.has(f)).sort((a, b) => b.sendCount - a.sendCount);

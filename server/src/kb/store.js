@@ -1,6 +1,6 @@
-import { kvGet, kvSet } from '../db.js';
-import { badRequest, isPlainObject, newId, nowIso, safeJsonParse } from '../util.js';
-import { normKey, similarity } from './search.js';
+import { ENTRIES_FTS_DDL, kvGet, kvSet } from '../db.js';
+import { badRequest, clip, isPlainObject, newId, nowIso, safeJsonParse } from '../util.js';
+import { contextLength, entryIndexText, ftsMatchQuery, normKey, similarity } from './search.js';
 
 export const ENTRY_TYPES = ['faq', 'product', 'policy', 'fact'];
 export const ENTRY_STATUSES = ['active', 'disabled'];
@@ -53,9 +53,97 @@ export function normalizeTags(tags) {
   return out.slice(0, 12);
 }
 
-/** @param {import('better-sqlite3').Database} db */
-export function createKbStore(db) {
+/**
+ * 全文索引的版本：切词规则（kb/search.js 的 tokenize、entryIndexText）或索引表结构改了就加 1，下次启动整个重建。
+ * 存在 kv 的 entries_fts_version。2：entries_fts 改成 contentless，索引对应的条目版本挪到 entries_fts_state
+ */
+export const ENTRY_INDEX_VERSION = 2;
+
+/**
+ * 整个重建全文索引：删掉两张索引表重建，按 rowid 分批读条目、一个事务里写完。返回写了多少条。
+ * @param {import('better-sqlite3').Database} db
+ */
+export function rebuildEntryIndex(db) {
+  let n = 0;
+  db.transaction(() => {
+    db.exec('DROP TABLE IF EXISTS entries_fts; DROP TABLE IF EXISTS entries_fts_state;');
+    db.exec(ENTRIES_FTS_DDL);
+    const page = db.prepare('SELECT rowid AS rid, id, title, content, tags, updated_at FROM entries WHERE rowid > ? ORDER BY rowid LIMIT 500');
+    const put = db.prepare('INSERT INTO entries_fts(rowid, body) VALUES(?, ?)');
+    const putState = db.prepare('INSERT INTO entries_fts_state(entry_rowid, entry_id, updated_at) VALUES(?, ?, ?)');
+    for (let last = 0; ; ) {
+      const rows = page.all(last);
+      if (!rows.length) break;
+      for (const r of rows) {
+        put.run(r.rid, entryIndexText({ title: r.title, content: r.content, tags: safeJsonParse(r.tags, []) }));
+        putState.run(r.rid, r.id, r.updated_at);
+      }
+      n += rows.length;
+      last = rows[rows.length - 1].rid;
+    }
+    // 批量写完合并一下索引段，之后查得快些
+    db.exec("INSERT INTO entries_fts(entries_fts) VALUES('optimize')");
+    kvSet(db, 'entries_fts_version', ENTRY_INDEX_VERSION);
+  })();
+  return n;
+}
+
+/**
+ * 启动自检：索引记的条目版本（entries_fts_state）和条目逐行对一遍（rowid、id、updated_at 都要相同，条数也要相同），
+ * 全文索引的行数、索引版本也要对。对不上就整个重建，日志写一行。为的是发现「旧版本写了条目但没更新索引」：回滚到不认识
+ * 索引的版本用一阵再升级回来，那段时间加的、改的（内容或状态，都会改 updated_at）、删的条目都会对不上。
+ * 索引版本不对（新装第一次启动、索引结构改过）时也整个重建；条目和索引都是空的就不写日志。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{info: Function}} [log] 不传就不写日志
+ * @returns {{rebuilt: boolean, entries: number}}
+ */
+export function ensureEntryIndex(db, log) {
+  const c = db
+    .prepare(
+      `SELECT (SELECT COUNT(*) FROM entries) AS entries,
+              (SELECT COUNT(*) FROM entries_fts) AS indexed,
+              (SELECT COUNT(*) FROM entries_fts_state) AS states,
+              (SELECT COUNT(*) FROM entries e JOIN entries_fts_state s
+                 ON s.entry_rowid = e.rowid AND s.entry_id = e.id AND s.updated_at = e.updated_at) AS matched`,
+    )
+    .get();
+  const versionOk = kvGet(db, 'entries_fts_version', null) === ENTRY_INDEX_VERSION;
+  if (versionOk && c.entries === c.indexed && c.entries === c.states && c.entries === c.matched) return { rebuilt: false, entries: c.entries };
+  const started = Date.now();
+  const n = rebuildEntryIndex(db);
+  if (c.entries || c.indexed || c.states) {
+    log?.info?.(
+      `[kb] 知识库全文索引和条目对不上（条目 ${c.entries} 条，索引 ${c.indexed} 条，一致 ${c.matched} 条${versionOk ? '' : '，索引版本不对'}），已重建 ${n} 条，用时 ${Date.now() - started}ms`,
+    );
+  }
+  return { rebuilt: true, entries: n };
+}
+
+/**
+ * 创建时总是先做一次全文索引自检（ensureEntryIndex），对不上就重建。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{log?: {info: Function, warn: Function}}} [opts] log：自检重建、检索出错时写日志，不传就不写
+ */
+export function createKbStore(db, { log } = {}) {
+  ensureEntryIndex(db, log);
   const getEntryRow = db.prepare('SELECT * FROM entries WHERE id = ?');
+  const rowidOf = db.prepare('SELECT rowid FROM entries WHERE id = ?').pluck();
+  const ftsDelete = db.prepare('DELETE FROM entries_fts WHERE rowid = ?');
+  const ftsInsert = db.prepare('INSERT INTO entries_fts(rowid, body) VALUES(?, ?)');
+  const stateDelete = db.prepare('DELETE FROM entries_fts_state WHERE entry_rowid = ?');
+  const stateUpsert = db.prepare('INSERT OR REPLACE INTO entries_fts_state(entry_rowid, entry_id, updated_at) VALUES(?, ?, ?)');
+  /**
+   * 条目写进全文索引，和改 entries 在同一个事务里调。一定先删掉同一 rowid 的旧行再插：contentless 表插重复的 rowid
+   * 不报错，会留下两份，旧内容的词还能查到（删一个不存在的 rowid 没关系）
+   */
+  const indexEntry = (rowid, e) => {
+    ftsDelete.run(rowid);
+    ftsInsert.run(rowid, entryIndexText(e));
+    stateUpsert.run(rowid, e.id, e.updatedAt);
+  };
+  const activeInOrder = db.prepare("SELECT * FROM entries WHERE status = 'active' ORDER BY created_at, rowid");
+  const activeTitlesInOrder = db.prepare("SELECT title FROM entries WHERE status = 'active' ORDER BY created_at, rowid").pluck();
+  const countActive = db.prepare("SELECT COUNT(*) FROM entries WHERE status = 'active'").pluck();
 
   const store = {
     getEntry(id) {
@@ -86,7 +174,102 @@ export function createKbStore(db) {
     },
 
     activeEntries() {
-      return db.prepare("SELECT * FROM entries WHERE status = 'active' ORDER BY created_at, rowid").all().map(rowToEntry);
+      return activeInOrder.all().map(rowToEntry);
+    },
+
+    /**
+     * 全部 active 条目按提示词里的字数（contextLength）加起来不超过 limitChars 时，按创建时间返回全部；超过返回 null。
+     * 按创建时间一条条读，一超就停，不会为了判断把整个知识库读出来。
+     * @param {number} limitChars
+     * @returns {any[]|null}
+     */
+    activeEntriesWithin(limitChars) {
+      const out = [];
+      let total = 0;
+      for (const r of activeInOrder.iterate()) {
+        const e = rowToEntry(r);
+        total += contextLength(e);
+        if (total > limitChars) return null;
+        out.push(e);
+      }
+      return out;
+    },
+
+    /**
+     * 全文检索：按 FTS5 的 bm25 从相关到不相关，分数相同的按创建时间。terms 是切好、限好量的词（kb/search.js 的
+     * pickQueryTerms），没有词返回空。状态按 entries 表过滤（不靠索引）。
+     * @param {string[]} terms
+     * @param {{limit?:number, status?:string|null, exclude?:Iterable<string>}} [o]
+     *   status：只要这个状态的，null 是不管状态；exclude：不要这些 id
+     * @returns {any[]}
+     */
+    searchEntries(terms, { limit = 60, status = 'active', exclude = [] } = {}) {
+      if (!terms.length || limit <= 0) return [];
+      const where = [];
+      const params = [ftsMatchQuery(terms)];
+      if (status) {
+        where.push('e.status = ?');
+        params.push(status);
+      }
+      const skip = [...exclude];
+      if (skip.length) {
+        where.push('e.id NOT IN (SELECT value FROM json_each(?))');
+        params.push(JSON.stringify(skip));
+      }
+      let rowids;
+      try {
+        // 先只按索引排好、取 rowid（不读条目内容），再把选中的几十条整行读出来
+        rowids = db
+          .prepare(
+            `SELECT e.rowid FROM (SELECT rowid, bm25(entries_fts) AS score FROM entries_fts WHERE entries_fts MATCH ?) f
+             JOIN entries e ON e.rowid = f.rowid${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
+             ORDER BY f.score, e.created_at, e.rowid LIMIT ?`,
+          )
+          .pluck()
+          .all(...params, limit);
+      } catch (err) {
+        log?.warn?.(`[kb] 全文检索出错，按没有命中处理：${err?.message || err}`);
+        return [];
+      }
+      if (!rowids.length) return [];
+      const rows = db.prepare('SELECT rowid AS rid, * FROM entries WHERE rowid IN (SELECT value FROM json_each(?))').all(JSON.stringify(rowids));
+      const byRowid = new Map(rows.map((r) => [r.rid, r]));
+      return rowids.map((rid) => byRowid.get(rid)).filter(Boolean).map(rowToEntry);
+    },
+
+    /**
+     * active 条目的标题样本：不超过 n 条时全给（按创建时间），超过时按创建时间均匀地挑 n 条，每条截到 maxLen 字。
+     * 只读标题，不读内容。
+     * @param {number} n
+     * @param {number} [maxLen]
+     * @returns {string[]}
+     */
+    sampleTitles(n, maxLen = 100) {
+      const total = countActive.get();
+      if (!total || n <= 0) return [];
+      const want = new Set(Array.from({ length: Math.min(n, total) }, (_, i) => Math.floor((i * total) / Math.min(n, total))));
+      const out = [];
+      let i = 0;
+      for (const t of activeTitlesInOrder.iterate()) {
+        if (want.has(i)) out.push(clip(String(t ?? ''), maxLen));
+        i++;
+        if (out.length >= want.size) break;
+      }
+      return out;
+    },
+
+    /**
+     * 指定类型的 active 条目的类型和标题（F5 红线体检抽正常题用）。不超过 cap 条时全给（按创建时间），超过时随机取 cap 条。
+     * @param {string[]} types
+     * @param {number} [cap]
+     * @returns {{type:string, title:string}[]}
+     */
+    activeTitlesOfTypes(types, cap = 500) {
+      const where = `status = 'active' AND type IN (SELECT value FROM json_each(?))`;
+      const t = JSON.stringify(types);
+      const n = db.prepare(`SELECT COUNT(*) FROM entries WHERE ${where}`).pluck().get(t);
+      const order = n <= cap ? 'ORDER BY created_at, rowid' : 'ORDER BY random() LIMIT ?';
+      return db.prepare(`SELECT type, title FROM entries WHERE ${where} ${order}`).all(...(n <= cap ? [t] : [t, cap]));
     },
 
     /**
@@ -106,46 +289,69 @@ export function createKbStore(db) {
         createdAt: now,
         updatedAt: now,
       };
-      db.prepare(
-        `INSERT INTO entries(id, type, title, content, tags, source_refs, status, origin, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        entry.id,
-        entry.type,
-        entry.title,
-        entry.content,
-        JSON.stringify(entry.tags),
-        JSON.stringify(entry.sourceRefs),
-        entry.status,
-        entry.origin,
-        now,
-        now,
-      );
+      db.transaction(() => {
+        const { lastInsertRowid } = db
+          .prepare(
+            `INSERT INTO entries(id, type, title, content, tags, source_refs, status, origin, created_at, updated_at)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            entry.id,
+            entry.type,
+            entry.title,
+            entry.content,
+            JSON.stringify(entry.tags),
+            JSON.stringify(entry.sourceRefs),
+            entry.status,
+            entry.origin,
+            now,
+            now,
+          );
+        indexEntry(lastInsertRowid, entry);
+      })();
       return entry;
     },
 
-    /** 更新条目（字段已校验） */
+    /** 更新条目（字段已校验）。改状态也走这里，索引里的 updated_at 跟着变 */
     updateEntry(id, patch) {
       const cur = store.getEntry(id);
       if (!cur) return null;
       const next = { ...cur, ...patch, updatedAt: nowIso() };
-      db.prepare(
-        `UPDATE entries SET type=?, title=?, content=?, tags=?, source_refs=?, status=?, updated_at=? WHERE id=?`,
-      ).run(
-        next.type,
-        next.title,
-        next.content,
-        JSON.stringify(next.tags),
-        JSON.stringify(next.sourceRefs),
-        next.status,
-        next.updatedAt,
-        id,
-      );
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE entries SET type=?, title=?, content=?, tags=?, source_refs=?, status=?, updated_at=? WHERE id=?`,
+        ).run(
+          next.type,
+          next.title,
+          next.content,
+          JSON.stringify(next.tags),
+          JSON.stringify(next.sourceRefs),
+          next.status,
+          next.updatedAt,
+          id,
+        );
+        indexEntry(rowidOf.get(id), next);
+      })();
       return next;
     },
 
     deleteEntry(id) {
-      return db.prepare('DELETE FROM entries WHERE id = ?').run(id).changes > 0;
+      return db.transaction(() => {
+        const rowid = rowidOf.get(id);
+        if (rowid === undefined) return false;
+        ftsDelete.run(rowid);
+        stateDelete.run(rowid);
+        return db.prepare('DELETE FROM entries WHERE rowid = ?').run(rowid).changes > 0;
+      })();
+    },
+
+    /** 全部重建前删掉所有蒸馏出来的条目（连同索引），返回删了几条 */
+    deleteDistillEntries() {
+      return db.transaction(() => {
+        db.prepare("DELETE FROM entries_fts WHERE rowid IN (SELECT rowid FROM entries WHERE origin = 'distill')").run();
+        db.prepare("DELETE FROM entries_fts_state WHERE entry_rowid IN (SELECT rowid FROM entries WHERE origin = 'distill')").run();
+        return db.prepare("DELETE FROM entries WHERE origin = 'distill'").run().changes;
+      })();
     },
 
     stats() {

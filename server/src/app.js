@@ -105,7 +105,8 @@ export function createApp(config, options = {}) {
       ctx.setSettings(next);
       return next;
     },
-    kb: createKbStore(db),
+    // 创建时先自检知识库全文索引，和条目对不上（比如回滚到旧版本用过一阵）就整个重建
+    kb: createKbStore(db, { log }),
     accounts,
     // F12：处理记录、模型调用、转人工记录
     records: createRecords(db, log),

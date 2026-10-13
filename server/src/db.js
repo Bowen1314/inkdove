@@ -143,6 +143,15 @@ export function ensureColumn(db, table, column, ddl) {
   if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
 
+/**
+ * 知识库全文索引的两张表。重建时先 DROP 再用它建（kb/store.js 的 rebuildEntryIndex）。
+ * - entries_fts：contentless 的 FTS5 表（content=''），只存倒排索引、不存一份原文，库小很多；contentless_delete=1 才能按
+ *   rowid 删掉一行（改条目是先删再插）。存进去的列读不出来（读出来是 NULL），只能 MATCH、取 rowid 和 bm25；
+ * - entries_fts_state：索引里每一行是按条目的哪个版本建的（rowid、id、updated_at），启动自检拿它和 entries 对。
+ */
+export const ENTRIES_FTS_DDL = `CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(body, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS entries_fts_state(entry_rowid INTEGER PRIMARY KEY, entry_id TEXT NOT NULL, updated_at TEXT NOT NULL);`;
+
 function migrate(db) {
   ensureColumn(db, 'auth_sessions', 'user_id', 'TEXT');
   // 第一期的会话没有 user_id，全部作废
@@ -401,6 +410,18 @@ CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignm
   for (const col of ['display_name', 'job_title', 'contact_phone', 'contact_email', 'bio']) {
     ensureColumn(db, 'users', col, "TEXT NOT NULL DEFAULT ''");
   }
+
+  // ---- 知识库全文索引（读写和启动自检见 kb/store.js） ----
+  // entries_fts：每个条目一行（不管什么状态都进），rowid 和 entries 的 rowid 相同；body 是 kb/search.js 的 entryIndexText
+  //   （中文先切成两字一组再用空格连起来，unicode61 才能按词匹配）。检索时 JOIN entries 按 status 过滤，不靠索引判断状态。
+  // entries_fts_state：和 entries_fts 一行对一行，记建索引时条目的 rowid、id 和更新时间，两张表总在同一个事务里一起写。
+  //   启动时拿它和 entries 逐行对一遍，对不上就整个重建。
+  // 已经有旧结构的 entries_fts（带 entry_id、updated_at 列的那一版）时 CREATE ... IF NOT EXISTS 不动它，启动自检发现
+  //   索引版本不对，整个重建成新结构。
+  // entries_status：按状态 + 创建时间取条目（回复时判断能不能全带、整理资料时取标题样本）不用扫全表、不用排序
+  db.exec(`${ENTRIES_FTS_DDL}
+CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
+`);
 }
 
 /**

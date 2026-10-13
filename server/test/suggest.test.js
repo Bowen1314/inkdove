@@ -1059,8 +1059,7 @@ describe('推荐回复跟进：我方最后说的话参与检索（知识库超�
     await fake.close();
   });
 
-  it('buildReplyContext：extraQuery 里的词能检索到条目和文件（文件超过 50 个时）；不传时只用客户的话，[我方] 历史里的词不参与', () => {
-    const entries = t.ctx.kb.activeEntries();
+  it('buildReplyContext：extraQuery 里的词能检索到条目和文件（文件超过 50 个时）；不传时只用客户的话，[我方] 历史里的词不参与', async () => {
     const files = Array.from({ length: 60 }, (_, i) => ({
       id: `f${i}`,
       name: i === 7 ? 'NIMORI register guide' : `brochure ${i}`,
@@ -1069,23 +1068,24 @@ describe('推荐回复跟进：我方最后说的话参与检索（知识库超�
       tags: [],
       sendCount: i === 7 ? 0 : 100 - i,
     }));
-    const ctx = { kb: { activeEntries: () => entries, getProfile: () => ({}) }, files: { activeFiles: () => files } };
+    // 条目用真的知识库（走全文索引），文件用假的 60 个
+    const ctx = { kb: t.ctx.kb, files: { activeFiles: () => files } };
     const history = [
       { role: 'customer', text: 'Do you hire part-time?' },
       { role: 'bot', text: 'I will explain to you how to register for NIMORI' },
     ];
     // 自动回复、转人工草稿的调法：只传 message 和 history
-    const plain = buildReplyContext(ctx, { message: 'Do you hire part-time?', history });
+    const plain = await buildReplyContext(ctx, { message: 'Do you hire part-time?', history });
     assert.deepEqual(plain.entries.map((e) => e.id), [partTimeId], '[我方] 说的 register 不参与检索');
     assert.ok(!plain.files.some((f) => f.id === 'f7'), '文件同样只按客户的话挑（按发送次数补齐也轮不到它）');
     assert.deepEqual(plain.extra, []);
-    assert.deepEqual(buildReplyContext(ctx, { message: 'Do you hire part-time?', history, extraQuery: [] }).entries, plain.entries);
+    assert.deepEqual((await buildReplyContext(ctx, { message: 'Do you hire part-time?', history, extraQuery: [] })).entries, plain.entries);
     // 推荐回复跟进：带上我方最后那几条
-    const follow = buildReplyContext(ctx, { message: 'Do you hire part-time?', history, extraQuery: ['I will explain to you how to register for NIMORI'] });
+    const follow = await buildReplyContext(ctx, { message: 'Do you hire part-time?', history, extraQuery: ['I will explain to you how to register for NIMORI'] });
     assert.deepEqual(new Set(follow.entries.map((e) => e.id)), new Set([partTimeId, registerId]));
     assert.ok(follow.files.some((f) => f.id === 'f7'));
     assert.deepEqual(follow.extra, ['I will explain to you how to register for NIMORI']);
-    assert.equal(buildReplyContext(ctx, { message: 'x', extraQuery: ['y'.repeat(5000)] }).extra[0].length, 2000, 'extraQuery 每条裁到 2000 字');
+    assert.equal((await buildReplyContext(ctx, { message: 'x', extraQuery: ['y'.repeat(5000)] })).extra[0].length, 2000, 'extraQuery 每条裁到 2000 字');
   });
 
   it('人工回复的号：我方说「how to register for NIMORI」后点推荐回复，注册条目进上下文，推荐照它写（mock 按我方最后的话起草）', async () => {

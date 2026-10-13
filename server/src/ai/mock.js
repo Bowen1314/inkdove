@@ -206,6 +206,15 @@ export function createMockAi(opts = {}) {
       return { type: 'faq', title: clip(String(question || answer).replace(/\s+/g, ' ').trim(), 40), content, tags: ['会话'] };
     },
 
+    /** 检索改写 mock：按 MOCK_SEARCH_TERMS 这张小词表把话里的外语词换成中文检索词，没有命中返回空数组 */
+    async searchTerms({ query }) {
+      await wait();
+      const words = new Set(String(query || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').split(/[^\p{L}\p{N}]+/u));
+      const terms = [];
+      for (const [word, zh] of MOCK_SEARCH_TERMS) if (words.has(word)) for (const t of zh) if (!terms.includes(t)) terms.push(t);
+      return { terms };
+    },
+
     /** 一键翻译 mock：按客户消息里的字符判断语言（见 mockLanguage）；和原文同一种语言时原样返回，否则返回"[译成 X] 原文" */
     async translate({ text, customerMessages = [] }) {
       await wait();
@@ -242,6 +251,24 @@ export function createMockAi(opts = {}) {
   };
   return ai;
 }
+
+/** 检索改写 mock 的词表：[外语词（小写、去掉重音符号）, 中文检索词] */
+const MOCK_SEARCH_TERMS = [
+  ['precio', ['价格', '报价']],
+  ['price', ['价格', '报价']],
+  ['envio', ['运费', '物流']],
+  ['shipping', ['运费', '物流']],
+  ['garantia', ['保修', '质保']],
+  ['warranty', ['保修', '质保']],
+  ['pago', ['付款方式']],
+  ['payment', ['付款方式']],
+  ['muestra', ['样品']],
+  ['sample', ['样品']],
+  ['minimo', ['起订量']],
+  ['moq', ['起订量']],
+  ['termo', ['保温杯']],
+  ['thermos', ['保温杯']],
+];
 
 /** 翻译 mock 的语言判断：按特有字符或常见词，依次看日文假名、韩文、汉字、阿拉伯字母、西里尔字母、西班牙语、葡萄牙语，其余算英语 */
 const MOCK_LANGUAGE_RULES = [

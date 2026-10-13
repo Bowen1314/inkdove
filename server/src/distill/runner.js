@@ -1,4 +1,4 @@
-import { bm25Rank, entrySearchText, selectContextEntries } from '../kb/search.js';
+import { fitToBudget, pickQueryTerms } from '../kb/search.js';
 import { ENTRY_TYPES, normalizeTags, PROFILE_FIELDS } from '../kb/store.js';
 import { clip, HttpError, mapLimit, newId, nowIso, safeJsonParse } from '../util.js';
 import { llmConfigured } from '../settings.js';
@@ -6,6 +6,16 @@ import { llmConfigured } from '../settings.js';
 const CHUNK_SIZE = 6000;
 const CONSOLIDATE_BATCH = 15;
 const MAX_LOG = 500;
+/**
+ * 画像和列问题时给模型看的条目标题：最多 200 条、每条截到 100 字（总共不超过约 2 万字）。知识库条目多时按创建时间
+ * 均匀地挑，而不是只取最早的 200 条，这样各份资料、各个主题都有代表（模型只是借标题了解知识库大概有什么）
+ */
+export const PROMPT_TITLES = 200;
+export const PROMPT_TITLE_CHARS = 100;
+/** 判断问题能不能答时带的条目：总共不超过 40000 字、最多 40 条；知识库大时每个问题各检索前几条，轮流放 */
+const JUDGE_CHARS = 40000;
+const JUDGE_TOP_K = 40;
+const JUDGE_PER_QUESTION = 10;
 
 /** 按约 6000 字符切块，尽量在段落/行边界切 */
 export function chunkText(text, size = CHUNK_SIZE) {
@@ -167,7 +177,7 @@ export function createDistillRunner(ctx) {
       log(job, 'info', `开始${job.mode === 'rebuild' ? '全部重建' : '增量蒸馏'}，共 ${sources.length} 份资料`);
 
       if (job.mode === 'rebuild') {
-        const e = db.prepare("DELETE FROM entries WHERE origin = 'distill'").run().changes;
+        const e = kb.deleteDistillEntries();
         // F2c：会话里客户问出来的缺口不是蒸馏产物，重建时保留
         const g = db.prepare("DELETE FROM gaps WHERE status = 'open' AND origin = 'distill'").run().changes;
         log(job, 'info', `已清空 ${e} 条蒸馏条目和 ${g} 个蒸馏发现的待处理缺口（手动、缺口、会话来源的条目和会话里问出的缺口保留）`);
@@ -238,12 +248,12 @@ export function createDistillRunner(ctx) {
         check();
         const batch = batchIds.map((id) => kb.getEntry(id)).filter(Boolean);
         if (batch.length) {
-          const inBatch = new Set(batch.map((e) => e.id));
-          const others = kb.listEntries({}).filter((e) => !inBatch.has(e.id));
+          // 每条新条目用全文索引找最像的 3 条已有条目（不管状态，排除本批）当合并候选，最多 30 条
+          const inBatch = batch.map((e) => e.id);
           const cand = new Map();
           for (const e of batch) {
-            for (const r of bm25Rank(`${e.title}\n${e.content}`, others, entrySearchText).slice(0, 3)) {
-              if (cand.size < 30) cand.set(r.doc.id, r.doc);
+            for (const doc of kb.searchEntries(pickQueryTerms([`${e.title}\n${e.content}`]), { limit: 3, status: null, exclude: inBatch })) {
+              if (cand.size < 30) cand.set(doc.id, doc);
             }
           }
           try {
@@ -264,10 +274,10 @@ export function createDistillRunner(ctx) {
       log(job, 'info', '【画像】生成或更新企业画像');
       const per = Math.max(1000, Math.floor(12000 / sources.length));
       const material = sources.map((s) => `### ${s.name}\n${clip(s.text, per)}`).join('\n\n');
-      const active = kb.activeEntries();
       try {
         const curProfile = kb.getProfile();
-        const p = await ctx.ai.profile({ current: curProfile, material, entryTitles: active.map((e) => e.title), signal });
+        const entryTitles = kb.sampleTitles(PROMPT_TITLES, PROMPT_TITLE_CHARS);
+        const p = await ctx.ai.profile({ current: curProfile, material, entryTitles, signal });
         check();
         const patch = {};
         for (const f of PROFILE_FIELDS) if (typeof p?.[f] === 'string' && p[f].trim()) patch[f] = p[f].trim();
@@ -285,13 +295,12 @@ export function createDistillRunner(ctx) {
       log(job, 'info', '【缺口】列出客户最可能问的 25 个问题');
       try {
         const profile = kb.getProfile();
-        const entries = kb.activeEntries();
-        const questions = await ctx.ai.listQuestions({ profile, entryTitles: entries.map((e) => e.title), signal });
+        const entryTitles = kb.sampleTitles(PROMPT_TITLES, PROMPT_TITLE_CHARS);
+        const questions = await ctx.ai.listQuestions({ profile, entryTitles, signal });
         check();
         tick(job);
         log(job, 'info', `【缺口】逐条判断知识库能否回答（${questions.length} 个问题）`);
-        const ctxEntries = selectContextEntries(entries, questions.join('\n'), 40000, 40);
-        const results = await ctx.ai.judgeQuestions({ questions, entries: ctxEntries, signal });
+        const results = await ctx.ai.judgeQuestions({ questions, entries: judgeEntries(questions), signal });
         check();
         let n = 0;
         for (const r of results) {
@@ -332,6 +341,28 @@ export function createDistillRunner(ctx) {
         log(job, 'error', `任务失败：${job.error}`);
       }
     }
+  }
+
+  /**
+   * 判断问题能不能答时带的条目：全部 active 条目不超过 40000 字就全带（按创建时间）；超过时每个问题各检索前 10 条，
+   * 按"每个问题的第 1 条、每个问题的第 2 条……"轮流排，去重后按总字数截断，最多 40 条
+   */
+  function judgeEntries(questions) {
+    const all = kb.activeEntriesWithin(JUDGE_CHARS);
+    if (all) return all;
+    const lists = questions.map((q) => kb.searchEntries(pickQueryTerms([q]), { limit: JUDGE_PER_QUESTION }));
+    const seen = new Set();
+    const ranked = [];
+    for (let i = 0; i < JUDGE_PER_QUESTION; i++) {
+      for (const list of lists) {
+        const e = list[i];
+        if (e && !seen.has(e.id)) {
+          seen.add(e.id);
+          ranked.push(e);
+        }
+      }
+    }
+    return fitToBudget(ranked, JUDGE_CHARS, JUDGE_TOP_K);
   }
 
   function applyConsolidation(job, result, newIds) {

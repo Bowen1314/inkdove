@@ -1340,7 +1340,8 @@ export function createWaService(ctx, opts = {}) {
       flagNeedsHuman(acc, convId, 'rate_limit', detail, { pause: true, code: 'rate_limit', pendingReason: reason });
       return;
     }
-    // 第 4 层：每会话每天 LLM 调用上限（一轮至少 2 次：生成 + 审核；命中套话时再加 1 次重写）
+    // 第 4 层：每会话每天 LLM 调用上限（一轮至少 2 次：生成 + 审核；知识库大、命中不足时可能多 1 次检索改写，
+    // 命中套话时再加 1 次重写。剩下的次数够不够做这两次由 decideReply 按 llmBudget 判断）
     const today = localDay();
     const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
     if (usedToday + 2 > DAILY_LLM_LIMIT) {
@@ -1372,7 +1373,7 @@ export function createWaService(ctx, opts = {}) {
       message,
       history,
       persona: acc.persona,
-      allowRewrite: usedToday + 3 <= DAILY_LLM_LIMIT,
+      llmBudget: DAILY_LLM_LIMIT - usedToday,
       fileQuota: Math.max(0, DAILY_FILE_LIMIT - filesToday),
     });
 
@@ -1547,6 +1548,18 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
+   * 会话今天的模型调用次数加 n（按服务器本地日期，跨天从 0 算）。返回加之前今天已经用了几次
+   */
+  function addLlmCalls(convId, n) {
+    const today = localDay();
+    const conv = getConvRow(convId);
+    if (!conv) return 0;
+    const used = conv.llm_day === today ? conv.llm_calls : 0;
+    db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(today, used + n, convId);
+    return used;
+  }
+
+  /**
    * 调一次模型起草推荐回复（计入会话每日模型次数），返回 {draft, startSeq}，不存。生成失败、结果为空时抛错。
    * startSeq 是开始生成时会话里最大的消息序号，调用方用它判断生成期间我方是不是已经回了。
    * 跟进时我方最后那几条（ourMessages）也参与检索（buildReplyContext 的 extraQuery）。
@@ -1554,17 +1567,18 @@ export function createWaService(ctx, opts = {}) {
    * @param {{stylePrompt?:string, agentProfile?:any, previous?:string}} o agentProfile 是点按钮那个人的「我的资料」
    */
   async function generateSuggestion(acc, convId, input, { stylePrompt = '', agentProfile = null, previous = '' }) {
-    const today = localDay();
-    const before = getConvRow(convId);
+    const usedToday = addLlmCalls(convId, 1);
     const startSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ?').get(convId).n;
-    db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(
-      today,
-      (before.llm_day === today ? before.llm_calls : 0) + 1,
-      convId,
-    );
     const s = settings();
     const followUp = !!input.followUp;
-    const c = buildReplyContext(ctx, { message: input.message, history: input.history, extraQuery: followUp ? input.ourMessages || [] : [] });
+    // 检索改写也算一次，今天剩下的次数够起草 + 改写（2 次）才改写（起草那次上面已经记了）
+    const c = await buildReplyContext(ctx, {
+      message: input.message,
+      history: input.history,
+      extraQuery: followUp ? input.ourMessages || [] : [],
+      searchRewrite: usedToday + 2 <= DAILY_LLM_LIMIT,
+    });
+    if (c.searchCalls) addLlmCalls(convId, c.searchCalls);
     const out = await ctx.ai.suggest({
       message: c.msg,
       history: c.hist,
@@ -1607,18 +1621,16 @@ export function createWaService(ctx, opts = {}) {
    */
   async function prepareDraft(acc, convId, { message, history, reason, usedToday }) {
     if (closed || usedToday + 1 > DAILY_LLM_LIMIT || !ctx.ai.draft) return;
-    const today = localDay();
     const before = getConvRow(convId);
     if (!before) return;
     const startSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ?').get(convId).n;
-    db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(
-      today,
-      (before.llm_day === today ? before.llm_calls : 0) + 1,
-      convId,
-    );
+    addLlmCalls(convId, 1);
     let draft;
     try {
-      const c = buildReplyContext(ctx, { message, history });
+      // 检索改写也算一次，今天剩下的次数够起草 + 改写（2 次）才改写。同一段话刚在生成回复时改写过的，直接用那次的结果，
+      // 不再调模型（kb/retrieve.js 的缓存），也就不计数
+      const c = await buildReplyContext(ctx, { message, history, searchRewrite: usedToday + 2 <= DAILY_LLM_LIMIT });
+      if (c.searchCalls) addLlmCalls(convId, c.searchCalls);
       const { agentProfile } = memberAiInfo(before.assignee_id, { activeOnly: true });
       const out = await ctx.ai.draft({
         message: c.msg,

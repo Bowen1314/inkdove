@@ -7,7 +7,7 @@
 // （task|chitchat|injection|other），没给或不认识的都记 other。F11：模型判客户明确拒绝时 category 为 declined，code 也是 declined。
 // F15：模型可以带 send_file_ids 发产品资料库里的文件；文件规则（bad_file、file_limit、"条目或文件至少一样"）也在第 2 层。
 import { selectContextFiles, MAX_FILES_PER_REPLY } from '../files/store.js';
-import { selectContextEntries } from '../kb/search.js';
+import { selectEntries } from '../kb/retrieve.js';
 import { OFFTOPIC_TYPES } from '../codes.js';
 import { clip } from '../util.js';
 import { HANDOFF_TYPES } from './prompts.js';
@@ -36,34 +36,52 @@ export function normalizeFileIds(ids) {
 }
 
 /**
- * 回复和草稿共用的上下文：最近对话、相关条目、可发送文件（超过 50 个时按 BM25 取前 50）。
+ * 回复和草稿共用的上下文：最近对话、相关条目（怎么挑见 kb/retrieve.js）、可发送文件（超过 50 个时按 BM25 取前 50）。
  * 检索查询默认只用客户的话（最近 3 条客户消息 + message）。extraQuery 只有推荐回复跟进时才传：我方在客户最后那段消息之后
  * 发的消息，一起参与检索（比如"我来讲一下怎么注册"能找到注册的条目），裁剪后作为 extra 返回；自动回复和转人工草稿不传，检索不变。
+ * 检索词的优先级：message 和 extraQuery 最先，再是最近的客户消息（越近越先）。
+ * searchRewrite：知识库大、命中不足时允不允许调一次模型改写检索词（跨语言），调了的话 searchCalls 是 1，调用方要计入会话的
+ * 每日模型次数；改写出来的词（searchTerms）也用来挑文件。
  * @param {any} ctx
- * @param {{message:string, history?:{role:'customer'|'bot', text:string}[], extraQuery?:string[]}} input
+ * @param {{message:string, history?:{role:'customer'|'bot', text:string}[], extraQuery?:string[], searchRewrite?:boolean}} input
  */
-export function buildReplyContext(ctx, { message, history = [], extraQuery = [] }) {
+export async function buildReplyContext(ctx, { message, history = [], extraQuery = [], searchRewrite = false }) {
   const msg = clip(message, MAX_CUSTOMER_MESSAGE);
   const hist = history.slice(-12).map((h) => ({ role: h.role, text: clip(h.text, MAX_CUSTOMER_MESSAGE) }));
   const recentCustomer = hist.filter((h) => h.role === 'customer').slice(-3).map((h) => h.text);
   const extra = extraQuery.map((s) => clip(s, MAX_CUSTOMER_MESSAGE));
-  const query = [...recentCustomer, msg, ...extra].join('\n');
-  const entries = selectContextEntries(ctx.kb.activeEntries(), query);
+  const found = await selectEntries(ctx, { texts: [[msg, ...extra].join('\n'), ...[...recentCustomer].reverse()], rewrite: searchRewrite });
+  const query = [...recentCustomer, msg, ...extra, ...found.rewriteTerms].join('\n');
   const activeFiles = ctx.files ? ctx.files.activeFiles() : [];
   const { files, truncated } = selectContextFiles(activeFiles, query);
-  return { msg, hist, recentCustomer, extra, entries, files, filesTruncated: truncated, activeFiles, profile: ctx.kb.getProfile() };
+  return {
+    msg,
+    hist,
+    recentCustomer,
+    extra,
+    entries: found.entries,
+    files,
+    filesTruncated: truncated,
+    activeFiles,
+    profile: ctx.kb.getProfile(),
+    searchCalls: found.llmCalls,
+    searchTerms: found.rewriteTerms,
+  };
 }
 
 /**
  * @param {any} ctx
- * @param {{message: string, history?: {role:'customer'|'bot', text:string}[], persona?: string, allowRewrite?: boolean, fileQuota?: number}} input
- *   persona：号的 persona（为空时由调用方传全局 persona）；allowRewrite：今天的 LLM 次数还够不够做一次套话重写；
- *   fileQuota：这个会话今天还能自动发几个文件（F15，每天 5 个；/api/kb/ask 不限）
+ * @param {{message: string, history?: {role:'customer'|'bot', text:string}[], persona?: string, allowRewrite?: boolean, fileQuota?: number,
+ *   llmBudget?: number}} input
+ *   persona：号的 persona（为空时由调用方传全局 persona）；allowRewrite：允不允许做套话重写；
+ *   fileQuota：这个会话今天还能自动发几个文件（F15，每天 5 个；/api/kb/ask 不限）；
+ *   llmBudget：这个会话今天还能调几次模型（/api/kb/ask、红线体检不限）。生成 + 审核要 2 次；检索改写（kb/retrieve.js）
+ *   要剩 3 次以上才做（改写 + 生成 + 审核）；套话重写要在用掉前面的之后还剩 2 次以上（重写 + 审核）
  * @returns {Promise<{decision:'replied'|'offtopic'|'handoff'|'blocked'|'declined', code:string, reply:string, usedEntryIds:string[],
  *   sendFileIds:string[], handoffType:string|null, offtopicType:string|null, questionZh:string, reason:string, latencyMs:number,
  *   llmCalls:number, rewritten:boolean}>}
  */
-export async function decideReply(ctx, { message, history = [], persona, allowRewrite = true, fileQuota = Infinity }) {
+export async function decideReply(ctx, { message, history = [], persona, allowRewrite = true, fileQuota = Infinity, llmBudget = Infinity }) {
   const started = Date.now();
   let llmCalls = 0;
   let rewritten = false;
@@ -83,7 +101,8 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
   });
 
   const settings = ctx.getSettings();
-  const c = buildReplyContext(ctx, { message, history });
+  const c = await buildReplyContext(ctx, { message, history, searchRewrite: llmBudget >= 3 });
+  llmCalls += c.searchCalls;
   const { profile, msg, recentCustomer } = c;
   const byId = new Map(c.entries.map((e) => [e.id, e]));
   const activeFileById = new Map(c.activeFiles.map((f) => [f.id, f]));
@@ -134,7 +153,7 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
   if (cliches.length) {
     const original = { category, reply, ids, fileIds };
     let next = null;
-    if (allowRewrite) {
+    if (allowRewrite && llmBudget - llmCalls >= 2) {
       try {
         llmCalls++;
         rewritten = true;

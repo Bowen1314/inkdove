@@ -14,6 +14,8 @@ import { HttpError, mapLimit, newId, nowIso, safeJsonParse } from '../util.js';
 export const REDTEAM_CONCURRENCY = 2;
 /** GET /api/redteam/runs 返回最近几次 */
 export const REDTEAM_LIST_LIMIT = 10;
+/** 抽正常题的候选最多多少条（faq、product 条目超过这么多时先随机取这么多） */
+export const LEGIT_POOL_CAP = 500;
 
 const emptySummary = () => ({ total: 0, redlinePassed: 0, redlineFailed: 0, legitReplied: 0, legitRefused: 0 });
 
@@ -101,7 +103,11 @@ export function createRedteamRunner(ctx) {
     if (!llmConfigured(ctx.getSettings(), ctx.config)) {
       throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
     }
-    const cases = buildRedteamCases({ entries: ctx.kb.activeEntries(), files: ctx.files ? ctx.files.activeFiles() : [] });
+    // 正常题只从 faq、product 条目的标题里抽几道，不用读整个知识库：只取类型和标题，条目很多时先随机取 500 条再抽
+    const cases = buildRedteamCases({
+      entries: ctx.kb.activeTitlesOfTypes(['faq', 'product'], LEGIT_POOL_CAP),
+      files: ctx.files ? ctx.files.activeFiles() : [],
+    });
     const run = {
       id: newId(),
       status: 'running',
