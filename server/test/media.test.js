@@ -133,6 +133,8 @@ describe('客户媒体存盘和显示', () => {
       [m] = await getMessages(t, cid(chat));
       assert.deepEqual(m.media, { type: 'image', mime: 'image/jpeg', size: img.length, filename: null, stored: 'ok', error: null });
       assert.equal(m.botDecision, 'skipped', '人工回复的号照旧只存消息');
+      assert.equal(m.decisionReason, '这个号没开自动回复');
+      assert.equal((await getConv(t, cid(chat))).needsHuman, false, '人工回复的号收到媒体不标待处理');
       const raw = rawMedia(m.id);
       assert.match(raw.fileKey, /^[a-f0-9]{32}$/);
       assert.ok(storedFiles().includes(raw.fileKey), '文件在 <dataDir>/media/<fileKey>');
@@ -295,6 +297,13 @@ describe('客户媒体存盘和显示', () => {
       const a = await postMeta(from, { type: 'audio', audio: { id: 'AUD1', mime_type: 'audio/ogg; codecs=opus', voice: true } });
       assert.equal(a.media.type, 'voice');
       assert.equal(a.media.stored, 'ok');
+      // 人工回复的号：Meta 和 WAHA 走同一段入站处理，媒体和文字一样只存下来，不标待处理、不记转人工
+      for (const m of [v, d, s, a]) {
+        assert.equal(m.botDecision, 'skipped', m.text);
+        assert.equal(m.decisionReason, '这个号没开自动回复', m.text);
+      }
+      assert.equal((await getConv(t, conv)).needsHuman, false);
+      assert.equal(t.ctx.db.prepare('SELECT COUNT(*) n FROM handoffs WHERE conversation_id = ?').get(conv).n, 0);
       const res = await fetchMedia(conv, d.id);
       assert.equal(res.status, 200);
       assert.match(res.headers.get('content-disposition'), /^attachment; filename="?catalog\.pdf"?$/);
@@ -722,12 +731,21 @@ describe('人工回复的号：标为已处理、关掉草稿', () => {
     await fake.close();
   });
 
-  /** 客户发一张图（没 caption）：人工回复的号也会标待处理 */
+  /**
+   * 造一个待处理的会话：人工回复的号收到媒体不再标待处理，所以先把号临时改成自动回复，客户发一张图（没 caption）
+   * 标上待处理、记一条转人工，再改回人工回复——就是号从自动回复改成人工回复时留下的待处理（升级前库里留下的也一样）
+   */
   async function pendingConv() {
     const chat = newChat();
-    await postWaha(t, wahaMessage({ from: chat, hasMedia: true, media: { url: null, mimetype: 'image/jpeg' }, session: acc.waha.sessionName }));
-    await waitFor(async () => (await getConv(t, cid(chat)))?.needsHuman, { message: '会话迟迟没有待处理' });
-    await waitFor(() => t.ctx.wa.idle());
+    assert.equal((await t.req('PUT', `/api/accounts/${acc.id}`, { body: { replyMode: 'auto' } })).status, 200);
+    try {
+      await postWaha(t, wahaMessage({ from: chat, hasMedia: true, media: { url: null, mimetype: 'image/jpeg' }, session: acc.waha.sessionName }));
+      await waitFor(async () => (await getConv(t, cid(chat)))?.needsHuman, { message: '会话迟迟没有待处理' });
+      await waitFor(() => t.ctx.wa.idle());
+    } finally {
+      await t.req('PUT', `/api/accounts/${acc.id}`, { body: { replyMode: 'off' } });
+    }
+    assert.equal((await t.req('GET', `/api/accounts/${acc.id}`)).body.replyMode, 'off');
     return cid(chat);
   }
 

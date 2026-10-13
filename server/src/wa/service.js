@@ -988,9 +988,11 @@ export function createWaService(ctx, opts = {}) {
       return 'converting';
     }
     const willProcess = isText && botOn;
+    // 人工回复的号先判：没配文字的媒体也和文字一样只存下来（媒体照常存盘，会话里直接看），不标待处理、不通知、不记转人工。
+    // 自动回复的号不变：非文字消息先于会话暂停判，暂停中收到媒体也照旧标待处理
     let skipReason = null;
-    if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，已通知人工`;
-    else if (acc.replyMode !== 'auto') skipReason = '这个号没开自动回复';
+    if (acc.replyMode !== 'auto') skipReason = '这个号没开自动回复';
+    else if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，已通知人工`;
     else if (conv.bot_paused) skipReason = '会话已暂停（人工接管中）';
     const msgId = newId();
     const res = db
@@ -1016,8 +1018,11 @@ export function createWaService(ctx, opts = {}) {
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
     abortSending(convId, 'new_message');
     if (!isText) {
-      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）
-      flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
+      // 自动回复的号没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）。
+      // 人工回复的号本来就是人来看，不转人工
+      if (acc.replyMode === 'auto') {
+        flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
+      }
       return 'archived_media';
     }
     if (willProcess) {

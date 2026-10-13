@@ -41,6 +41,15 @@ describe('推荐回复（只能手动要）', () => {
   const decisions = [];
   const notices = () => fake.sentTo(BOSS_CHAT).map((m) => m.text).filter((x) => x.startsWith('[待人工]'));
   const convRow = (convId) => t.ctx.db.prepare('SELECT * FROM conversations WHERE id = ?').get(convId);
+  /** 这个会话的转人工记录（F12 handoffs）条数 */
+  const handoffCount = (convId) => t.ctx.db.prepare('SELECT COUNT(*) n FROM handoffs WHERE conversation_id = ?').get(convId).n;
+  let fileSeq = 0;
+  /** 在假 WAHA 上放一个文件，返回 WAHA 风格的 media 对象（客户媒体要从这里下载存盘） */
+  function wahaFile(acc, buffer, mimetype, filename = null) {
+    const p = `${acc.waha.sessionName}/SUGMEDIA${++fileSeq}`;
+    fake.state.files.set(p, { buffer, mime: mimetype.split(';')[0] });
+    return { url: `http://waha:3000/api/files/${p}`, mimetype, filename };
+  }
   const llmCalls = (convId, purpose) =>
     purpose
       ? t.ctx.db.prepare('SELECT COUNT(*) n FROM llm_calls WHERE conversation_id = ? AND purpose = ?').get(convId, purpose).n
@@ -275,24 +284,63 @@ describe('推荐回复（只能手动要）', () => {
       assert.equal((await getConv(t, convId)).draft, null);
     });
 
-    it('非文字消息：人工回复的号（含库里还是 suggest 的）照旧标待处理并通知，不调用模型', async () => {
-      const image = { url: 'http://waha:3000/api/files/x/IMG1.jpeg', mimetype: 'image/jpeg', filename: null };
-      const send = (acc, chat) => postWaha(t, wahaMessage({ from: chat, hasMedia: true, media: image, session: acc.waha.sessionName }));
+    it('没配文字的图片、文件：人工回复的号（含库里还是 suggest 的）和文字一样只存下来——skipped「这个号没开自动回复」，不标待处理、不通知、不记转人工、不调用模型；媒体照常存盘', async () => {
+      const cases = [
+        { type: 'image', label: '[图片]', mime: 'image/jpeg', buffer: Buffer.from('fake-jpeg-bytes'), filename: null },
+        { type: 'document', label: '[文件]', mime: 'application/pdf', buffer: Buffer.from('%PDF-1.4 fake'), filename: 'catalog.pdf' },
+      ];
       for (const acc of [manualAcc, legacyAcc]) {
-        const before = callCounts();
-        const n = notices().length;
-        const chat = newChat();
-        await send(acc, chat);
-        const [m] = await waitDecided(t, convIdOf(acc, chat), 1);
-        assert.equal(m.botDecision, 'skipped', acc.name);
-        assert.match(m.decisionReason, /^非文字消息.*已通知人工$/, acc.name);
-        assert.equal((await getConv(t, convIdOf(acc, chat))).needsHuman, true, acc.name);
-        await waitFor(() => notices().length === n + 1);
-        assert.deepEqual(hooks.calls, before, acc.name);
+        for (const c of cases) {
+          const what = `${acc.name} ${c.label}`;
+          const before = callCounts();
+          const n = notices().length;
+          const chat = newChat();
+          const convId = convIdOf(acc, chat);
+          await postWaha(t, wahaMessage({ from: chat, hasMedia: true, media: wahaFile(acc, c.buffer, c.mime, c.filename), session: acc.waha.sessionName }));
+          await waitDecided(t, convId, 1);
+          await sleep(150); // 通知是 setImmediate 发的：等一会儿，确认后面也没有
+          await idle();
+          const [m] = await getMessages(t, convId);
+          assert.equal(m.text, c.label, what);
+          assert.equal(m.botDecision, 'skipped', what);
+          assert.equal(m.decisionReason, '这个号没开自动回复', what);
+          assert.equal(m.media.type, c.type, what);
+          assert.equal(m.media.stored, 'ok', `${what}：媒体照常存盘`);
+          const conv = await getConv(t, convId);
+          assert.equal(conv.needsHuman, false, what);
+          assert.equal(conv.pendingReason, null, what);
+          assert.equal(conv.botPaused, false, what);
+          assert.equal(notices().length, n, `${what}：不发通知`);
+          assert.equal(handoffCount(convId), 0, `${what}：不记转人工`);
+          assert.deepEqual(hooks.calls, before, what);
+          assert.equal(fake.sentTo(chat).length, 0, what);
+          assert.ok(!decisions.some((d) => d.conversationId === convId), what);
+        }
       }
     });
 
-    it('开了语音识别：人工回复的号也不识别（不调用模型），照旧标待处理并通知', async () => {
+    it('带说明文字的图片：人工回复的号照旧按文字只存下来（skipped「这个号没开自动回复」），不标待处理、不通知', async () => {
+      const chat = newChat();
+      const convId = convIdOf(manualAcc, chat);
+      const before = callCounts();
+      const n = notices().length;
+      const media = wahaFile(manualAcc, Buffer.from('fake-jpeg-caption'), 'image/jpeg');
+      await postWaha(t, wahaMessage({ from: chat, body: '这个杯子多少钱', hasMedia: true, media, session: manualAcc.waha.sessionName }));
+      await waitDecided(t, convId, 1);
+      await sleep(150);
+      await idle();
+      const [m] = await getMessages(t, convId);
+      assert.equal(m.text, '这个杯子多少钱');
+      assert.equal(m.botDecision, 'skipped');
+      assert.equal(m.decisionReason, '这个号没开自动回复');
+      assert.equal(m.media.stored, 'ok');
+      assert.equal((await getConv(t, convId)).needsHuman, false);
+      assert.equal(notices().length, n);
+      assert.equal(handoffCount(convId), 0);
+      assert.deepEqual(hooks.calls, before);
+    });
+
+    it('开了语音识别：人工回复的号也不识别（不调用模型），和文字一样只存下来，不标待处理、不通知；语音照常存盘', async () => {
       assert.equal((await t.req('PUT', '/api/settings', { body: { media: { voice: true, transcribeModel: 'whisper-1' } } })).status, 200);
       try {
         const chat = newChat();
@@ -303,12 +351,17 @@ describe('推荐回复（只能手动要）', () => {
         const n = notices().length;
         await postWaha(t, wahaMessage({ from: chat, hasMedia: true, media, session: manualAcc.waha.sessionName }));
         const convId = convIdOf(manualAcc, chat);
-        const [m] = await waitDecided(t, convId, 1);
+        await waitDecided(t, convId, 1);
+        await sleep(150);
         await idle();
+        const [m] = await getMessages(t, convId);
         assert.equal(m.botDecision, 'skipped');
-        assert.match(m.decisionReason, /已通知人工/);
-        assert.equal((await getConv(t, convId)).needsHuman, true);
-        await waitFor(() => notices().length === n + 1);
+        assert.equal(m.decisionReason, '这个号没开自动回复');
+        assert.equal(m.media.type, 'voice');
+        assert.equal(m.media.stored, 'ok');
+        assert.equal((await getConv(t, convId)).needsHuman, false);
+        assert.equal(notices().length, n);
+        assert.equal(handoffCount(convId), 0);
         assert.deepEqual(hooks.calls, before, '没有转写，也没有起草');
         assert.equal(convRow(convId).llm_calls, 0);
       } finally {
