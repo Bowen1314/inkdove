@@ -30,7 +30,8 @@ export const REFRESH_RETRY_MS = 60 * 60 * 1000;
 const REFRESH_CHECK_MS = 10 * 60 * 1000;
 const TEST_TIMEOUT_MS = 15_000;
 
-const NODES_KEY = 'proxy_nodes';
+/** kv 里存节点的键：{subscription, config}，各是 {proxies, skipped, invalid, updatedAt} 或 null（操作日志只取个数和时间） */
+export const NODES_KEY = 'proxy_nodes';
 const META_KEY = 'proxy_meta';
 
 /** 扫码号是不是在用全局代理 */

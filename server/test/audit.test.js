@@ -1,7 +1,11 @@
 // 操作日志：各类改动都记下来（谁、什么时候、改了什么、成功失败、IP）；给客户发消息和页面自动发的请求不记；
 // 登录成功失败都记（不记密码）；密钥只记「已修改」绝不落明文；agent 越权的 403 记为失败；只有 admin 能查，没有改和删的接口；
-// 筛选和游标分页；过期清理。模型都用 mock。
+// 撤回消息不记内容；全局代理的订阅地址、粘贴的配置和节点的凭证不落库；筛选和游标分页；过期清理。模型都用 mock。
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { loadConfig } from '../src/config.js';
 import { ADMIN_EMAIL, convIdOf, convPath, PASSWORD, startApp, startFakeWaha, waitFor, wahaSend } from './helpers.js';
@@ -236,6 +240,46 @@ describe('操作日志', () => {
       assert.ok(!dump().includes('body-should-not-be-stored'));
     });
 
+    it('撤回消息：记哪个会话，不记消息内容；再撤回（409）记成失败', async () => {
+      const revAcc = await t.createAccount({ name: '撤回号' });
+      assert.equal((await t.req('POST', `/api/accounts/${revAcc.id}/waha/start`)).status, 200);
+      const chat = '8613800000003@c.us';
+      await wahaSend(t, revAcc, chat, 'how much');
+      const convId = convIdOf(revAcc, chat);
+      await waitFor(() => t.ctx.wa.getConversation(convId));
+      const text = 'revoke-body-should-not-be-stored 99 USD';
+      const sent = await t.req('POST', `${convPath(convId)}/send`, { body: { text } });
+      assert.equal(sent.body.status, 'sent', JSON.stringify(sent.body));
+
+      let r = await t.req('POST', `${convPath(convId)}/messages/${sent.body.id}/revoke`);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      let row = last('conversation.message_revoke');
+      assert.match(row.summary, /^撤回了会话「.+」里的一条消息$/);
+      assert.equal(row.ok, 1);
+      assert.equal(row.category, 'conversation');
+      assert.equal(row.target_type, 'conversation');
+      assert.equal(row.target_id, convId);
+      assert.equal(row.changes, '[]');
+
+      r = await t.req('POST', `${convPath(convId)}/messages/${sent.body.id}/revoke`);
+      assert.equal(r.status, 409);
+      row = last('conversation.message_revoke');
+      assert.equal(row.ok, 0);
+      assert.equal(row.status, 409);
+      assert.match(row.summary, /^撤回会话「.+」里的一条消息$/);
+      assert.equal(row.error, '这条消息已经撤回了');
+      assert.ok(!dump().includes('revoke-body-should-not-be-stored'), '消息内容不落库');
+    });
+
+    it('号的代理改成「用全局代理」：记成 关 → 开', async () => {
+      const g = await t.createAccount({ name: '全局代理号' });
+      const r = await t.req('PUT', `/api/accounts/${g.id}`, { body: { waha: { proxy: { enabled: false, useGlobal: true } } } });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const row = last('account.update');
+      assert.deepEqual(changesOf(row), [{ field: 'waha.proxy.useGlobal', label: '用全局代理', from: '关', to: '开' }]);
+      assert.equal(row.summary, '修改了号「全局代理号」的设置：用全局代理 关 → 开');
+    });
+
     it('只读的 GET 不记（导出除外）', async () => {
       const n = total();
       for (const p of ['/api/kb/entries', '/api/accounts', '/api/users', '/api/settings', '/api/health', '/api/auth/me', '/api/leads']) {
@@ -456,6 +500,153 @@ describe('操作日志', () => {
         assert.equal(x.status, 400, qs);
       }
     });
+  });
+});
+
+describe('操作日志：全局代理', () => {
+  /** 订阅地址里的 token（假的）：操作日志里不能出现 */
+  const TOKEN = `subtoken${crypto.randomBytes(6).toString('hex')}`;
+  const SUB_YAML = `
+proxies:
+  - name: 香港 01
+    type: ss
+    server: hk1.audit-node.example.test
+    port: 8388
+    cipher: aes-128-gcm
+    password: "audit-ss-password-1"
+  - name: SG 02
+    type: hysteria2
+    server: sg2.audit-node.example.test
+    port: 8443
+    password: audit-hy2-password-2
+`;
+  const CONFIG_YAML = `${SUB_YAML}  - name: US 03
+    type: trojan
+    server: us3.audit-node.example.test
+    port: 443
+    password: audit-trojan-password-3
+`;
+  const SECRETS = ['audit-ss-password-1', 'audit-hy2-password-2', 'audit-trojan-password-3', 'hk1.audit-node.example.test', 'us3.audit-node.example.test'];
+  let t;
+  let sub;
+  const last = (action) => t.ctx.db.prepare('SELECT * FROM audit_logs WHERE action = ? ORDER BY seq DESC LIMIT 1').get(action);
+  const changesOf = (row) => JSON.parse(row.changes);
+  const dump = () => JSON.stringify(t.ctx.db.prepare('SELECT * FROM audit_logs ORDER BY seq').all());
+  /** 订阅地址、机场节点的地址和密码都不在操作日志里 */
+  const assertNoSecrets = () => {
+    const all = dump();
+    for (const s of [TOKEN, `127.0.0.1:${sub.port}`, ...SECRETS]) assert.ok(!all.includes(s), `${s} 不落库`);
+  };
+
+  before(async () => {
+    const server = http.createServer((req, res) => {
+      if (req.url.split('?')[0] === `/sub/${TOKEN}`) return res.end(SUB_YAML);
+      res.writeHead(404);
+      res.end();
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    sub = {
+      port: server.address().port,
+      url: `http://127.0.0.1:${server.address().port}`,
+      close: () => {
+        server.closeAllConnections?.();
+        return new Promise((r) => server.close(r));
+      },
+    };
+    // 没有 mihomo：粘贴的配置和订阅不用 mihomo -t 查，开关打不开（这里只测关着时的设置）
+    t = await startApp({
+      env: { INKDOVE_MIHOMO_PATH: path.join(os.tmpdir(), `no-mihomo-audit-${process.pid}`) },
+      options: { globalProxy: { refreshCheckMs: 0, subscriptionTimeoutMs: 2000 } },
+    });
+    await t.login();
+  });
+  after(async () => {
+    await t.close();
+    await sub.close();
+  });
+
+  it('订阅地址只记已设置 / 已修改 / 已清空，下载失败的错误信息里也没有地址；订阅的节点记个数', async () => {
+    let r = await t.req('PUT', '/api/settings', { body: { proxy: { subscriptionUrl: `${sub.url}/missing/${TOKEN}` } } });
+    assert.equal(r.status, 400);
+    let row = last('settings.update');
+    assert.equal(row.ok, 0);
+    assert.match(row.error, /^proxy\.subscriptionUrl 下载订阅失败：机场返回 HTTP 404/);
+    assert.equal(row.changes, '[]');
+
+    r = await t.req('PUT', '/api/settings', { body: { proxy: { subscriptionUrl: `${sub.url}/sub/${TOKEN}`, bypass: ['*.corp.example.test'] } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    row = last('settings.update');
+    assert.equal(row.ok, 1);
+    assert.deepEqual(changesOf(row), [
+      { field: 'proxy.subscriptionUrl', label: '全局代理 · 订阅地址', secret: true, note: '已设置' },
+      { field: 'proxy.bypass', label: '全局代理 · 不走代理的地址', from: '（空）', to: '*.corp.example.test', note: '新增 1 个' },
+      { field: 'proxy.subscriptionNodes', label: '全局代理 · 订阅的节点', note: '已设置（2 个节点）' },
+    ]);
+    assert.equal(
+      row.summary,
+      '修改了设置：全局代理 · 订阅地址已设置；全局代理 · 不走代理的地址 （空） → *.corp.example.test；全局代理 · 订阅的节点已设置（2 个节点）',
+    );
+
+    // 同一个订阅换个写法（多一个查询参数）：地址已修改，节点重新下载
+    r = await t.req('PUT', '/api/settings', { body: { proxy: { subscriptionUrl: `${sub.url}/sub/${TOKEN}?flag=clash` } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(changesOf(last('settings.update')), [
+      { field: 'proxy.subscriptionUrl', label: '全局代理 · 订阅地址', secret: true, note: '已修改' },
+      { field: 'proxy.subscriptionNodes', label: '全局代理 · 订阅的节点', note: '已更新（2 个节点）' },
+    ]);
+    assertNoSecrets();
+  });
+
+  it('粘贴的 Clash 配置：原文和节点的地址、密码都不记，只记节点个数；清除记已清空', async () => {
+    let r = await t.req('PUT', '/api/settings', { body: { proxy: { source: 'config', config: CONFIG_YAML } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    let row = last('settings.update');
+    assert.deepEqual(changesOf(row), [
+      { field: 'proxy.source', label: '全局代理 · 节点来源', from: '订阅地址', to: '粘贴 Clash 配置' },
+      { field: 'proxy.configNodes', label: '全局代理 · 粘贴的 Clash 配置', note: '已设置（3 个节点）' },
+    ]);
+
+    r = await t.req('PUT', '/api/settings', { body: { proxy: { config: SUB_YAML } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    row = last('settings.update');
+    assert.equal(row.summary, '修改了设置：全局代理 · 粘贴的 Clash 配置已更新（2 个节点）');
+
+    r = await t.req('PUT', '/api/settings', { body: { proxy: { config: null } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(changesOf(last('settings.update')), [{ field: 'proxy.configNodes', label: '全局代理 · 粘贴的 Clash 配置', note: '已清空' }]);
+    assertNoSecrets();
+  });
+
+  it('测试、更新订阅、测速：记结果（不记错误信息）；更新订阅记节点个数', async () => {
+    let r = await t.req('POST', '/api/settings/proxy/test');
+    assert.equal(r.status, 200);
+    assert.equal(r.body.ok, false);
+    let row = last('settings.proxy_test');
+    assert.equal(row.summary, '测试了全局代理（结果：没通过）');
+    assert.equal(row.category, 'settings');
+    assert.equal(row.ok, 1);
+    assert.equal(row.error, null);
+
+    r = await t.req('POST', '/api/settings/proxy/delay');
+    assert.equal(r.body.ok, false);
+    assert.equal(last('settings.proxy_delay').summary, '给全局代理的节点测了速（结果：没通过）');
+
+    r = await t.req('POST', '/api/settings/proxy/refresh');
+    assert.equal(r.body.ok, true, JSON.stringify(r.body));
+    row = last('settings.proxy_refresh');
+    assert.equal(row.summary, '更新了全局代理的订阅（结果：通过）：全局代理 · 订阅的节点已更新（2 个节点）');
+
+    // 清掉订阅地址：地址和订阅的节点都已清空；再更新订阅就没通过
+    r = await t.req('PUT', '/api/settings', { body: { proxy: { subscriptionUrl: null } } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(changesOf(last('settings.update')), [
+      { field: 'proxy.subscriptionUrl', label: '全局代理 · 订阅地址', secret: true, note: '已清空' },
+      { field: 'proxy.subscriptionNodes', label: '全局代理 · 订阅的节点', note: '已清空' },
+    ]);
+    r = await t.req('POST', '/api/settings/proxy/refresh');
+    assert.equal(r.body.ok, false);
+    assert.equal(last('settings.proxy_refresh').summary, '更新了全局代理的订阅（结果：没通过）');
+    assertNoSecrets();
   });
 });
 

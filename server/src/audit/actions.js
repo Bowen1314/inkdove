@@ -13,6 +13,8 @@ import crypto from 'node:crypto';
 import { DELETED_ACCOUNT_NAME } from '../accounts.js';
 import { normalizeEmail, PROFILE_FIELDS } from '../auth.js';
 import { LEAD_STAGES } from '../codes.js';
+import { kvGet } from '../db.js';
+import { NODES_KEY } from '../proxy/index.js';
 import { FIELD_LABELS, getTranslationProvider, TRANSLATION_PROVIDERS } from '../translate/index.js';
 import { safeJsonParse } from '../util.js';
 import { clipText, diffFields, diffObjects, fieldChange, safeUrl } from './diff.js';
@@ -112,6 +114,7 @@ const ACCOUNT_SPECS = {
   allowlist: { label: '白名单', kind: 'list' },
   blocklist: { label: '黑名单', kind: 'list' },
   'waha.proxy.enabled': { label: 'IP 代理', on: '开', off: '关' },
+  'waha.proxy.useGlobal': { label: '用全局代理', on: '开', off: '关' },
   'waha.proxy.protocol': { label: '代理协议' },
   'waha.proxy.host': { label: '代理地址' },
   'waha.proxy.port': { label: '代理端口' },
@@ -169,9 +172,37 @@ const SETTINGS_SPECS = {
   'translation.mode': { label: '翻译方式', values: { ai: 'AI 翻译', api: '翻译 API' } },
   'translation.provider': { label: '翻译服务', values: Object.fromEntries(TRANSLATION_PROVIDERS.map((p) => [p.id, p.label])) },
   'translation.fallbackToAi': { label: '翻译接口出错时改用 AI 翻译' },
+  // 粘贴的 Clash 配置不在设置里（只存解析出的节点，原文不存），比不出来：节点换没换另外记（proxyNodeChanges）
+  'proxy.enabled': { label: '全局代理' },
+  'proxy.source': { label: '全局代理 · 节点来源', values: { subscription: '订阅地址', config: '粘贴 Clash 配置' } },
+  'proxy.subscriptionUrl': { label: '全局代理 · 订阅地址', kind: 'secret' },
+  'proxy.node': { label: '全局代理 · 节点', empty: '自动（选最快的）' },
+  'proxy.bypass': { label: '全局代理 · 不走代理的地址', kind: 'list' },
 };
 /** Logo 只由上传接口改（单独记），这里不比 */
 const SETTINGS_SKIP = ['branding.logo'];
+
+const PROXY_NODE_LABELS = { subscription: '全局代理 · 订阅的节点', config: '全局代理 · 粘贴的 Clash 配置' };
+
+/** 全局代理两种来源的节点：只取个数和解析时间（节点里有机场的服务器地址和密码，一概不往外拿） */
+function proxyNodeStamps(ctx) {
+  const v = kvGet(ctx.db, NODES_KEY, null);
+  const one = (x) => (x ? { count: Array.isArray(x.proxies) ? x.proxies.length : 0, updatedAt: x.updatedAt ?? null } : null);
+  return { subscription: one(v?.subscription), config: one(v?.config) };
+}
+
+/** 节点换过的来源（解析时间变了）各记一项说明：已设置 / 已更新（N 个节点）/ 已清空 */
+function proxyNodeChanges(a, b) {
+  const out = [];
+  for (const k of ['subscription', 'config']) {
+    const x = a?.[k] ?? null;
+    const y = b?.[k] ?? null;
+    if ((x?.updatedAt ?? null) === (y?.updatedAt ?? null)) continue;
+    const note = !y ? '已清空' : `${x ? '已更新' : '已设置'}（${y.count} 个节点）`;
+    out.push({ field: `proxy.${k}Nodes`, label: PROXY_NODE_LABELS[k], note });
+  }
+  return out;
+}
 
 /** 设置字段的说明。翻译服务的字段按各家的字段表来：secret / secretUrl 一律只记已修改（appId、accessKeyId、服务地址这些名字不像密钥的也算） */
 function settingsSpecOf(path) {
@@ -494,6 +525,8 @@ export const RULES = [
     ['DELETE', 'draft', 'conversation.draft_clear', (n) => `清掉{了}会话${n}的推荐回复和草稿`],
     ['POST', 'translate', 'conversation.translate', (n) => `在会话${n}里用{了}一键翻译`],
     ['POST', 'messages/:messageId/translation', 'conversation.message_translate', (n) => `把会话${n}里的一条消息翻译成{了}中文`],
+    // 消息内容不记（发消息本身也不记），只记撤回了哪个会话里的
+    ['POST', 'messages/:messageId/revoke', 'conversation.message_revoke', (n) => `撤回{了}会话${n}里的一条消息`],
     ['POST', 'suggest', 'conversation.suggest', (n) => `在会话${n}里要{了}一条推荐回复`],
     ['POST', 'messages/:messageId/kb-draft', 'conversation.kb_draft', (n) => `把会话${n}里的一条人工回复改写成{了}知识条目草稿`],
   ].map(([m, sub, a, say]) => ({
@@ -731,12 +764,38 @@ export const RULES = [
     m: 'PUT',
     p: '/settings',
     a: 'settings.update',
-    before: ({ ctx }) => clone(ctx.getSettings()),
+    before: ({ ctx }) => ({ settings: clone(ctx.getSettings()), nodes: proxyNodeStamps(ctx) }),
     run: (x) => {
-      const changes = x.ok ? diffObjects(x.before, x.ctx.getSettings(), { specOf: settingsSpecOf, skip: SETTINGS_SKIP }) : [];
+      const changes =
+        x.ok && x.before
+          ? [
+              ...diffObjects(x.before.settings, x.ctx.getSettings(), { specOf: settingsSpecOf, skip: SETTINGS_SKIP }),
+              ...proxyNodeChanges(x.before.nodes, proxyNodeStamps(x.ctx)),
+            ]
+          : [];
       return { summary: `修改{了}设置${brief(changes)}`, target: { type: 'settings', id: null, name: '设置' }, changes };
     },
   },
+  // 全局代理的测试、更新订阅、测速：成功失败都回 200，只记结果，不记错误信息和出口 IP
+  { m: 'POST', p: '/settings/proxy/test', a: 'settings.proxy_test', run: (x) => ({ summary: `测试{了}全局代理${testResult(x)}` }) },
+  {
+    m: 'POST',
+    p: '/settings/proxy/refresh',
+    a: 'settings.proxy_refresh',
+    // 订阅更新后选的节点没了会改回自动：比较更新前后的代理设置和节点
+    before: ({ ctx }) => ({ proxy: clone(ctx.getSettings().proxy), nodes: proxyNodeStamps(ctx) }),
+    run: (x) => {
+      const changes =
+        x.ok && x.before
+          ? [
+              ...diffObjects(x.before.proxy, x.ctx.getSettings().proxy, { specOf: settingsSpecOf, prefix: 'proxy' }),
+              ...proxyNodeChanges(x.before.nodes, proxyNodeStamps(x.ctx)),
+            ]
+          : [];
+      return { summary: `更新{了}全局代理的订阅${testResult(x)}${brief(changes)}`, changes };
+    },
+  },
+  { m: 'POST', p: '/settings/proxy/delay', a: 'settings.proxy_delay', run: (x) => ({ summary: `给全局代理的节点测{了}速${testResult(x)}` }) },
   { m: 'POST', p: '/settings/llm/test', a: 'settings.llm_test', run: (x) => ({ summary: `测试{了}回复模型的连接${testResult(x)}` }) },
   { m: 'POST', p: '/settings/llm/models', a: 'settings.llm_models', run: (x) => ({ summary: `拉取{了}模型列表${testResult(x)}` }) },
   { m: 'POST', p: '/settings/embedding/test', a: 'settings.embedding_test', run: (x) => ({ summary: `测试{了}向量服务的连接${testResult(x)}` }) },
