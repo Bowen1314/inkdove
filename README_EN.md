@@ -59,7 +59,7 @@
 - **Customer leads.** Names, companies, countries, products of interest, quantities and deal stages are pulled out of chats automatically. Search, edit, export to CSV. [Details](docs/features.md#客户线索) (Chinese)
 - **Outreach.** Upload numbers of customers who have agreed to be contacted, and each gets one opening message, sent slowly within a daily cap, at random intervals and during their local daytime. No follow-ups. [Details](docs/features.md#主动外联) (Chinese)
 - **Dashboard.** Admins see message volume, new customers, handoff reasons and response times, how much each team member handled, model spend and outreach results. [Details](docs/features.md#数据看板管理员) (Chinese)
-- **Multiple numbers, two connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API, each with its own optional proxy. New versions install with one click in the web console, or on a schedule (say, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
+- **Multiple numbers, two connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API, each with its own optional proxy; an optional global proxy can also send model, translation and email requests, and QR-code numbers, through an airport node from a Clash subscription. New versions install with one click in the web console, or on a schedule (say, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
 
 Full feature details: [docs/features.md](docs/features.md) (Chinese).
 
@@ -192,7 +192,7 @@ All in Chinese:
 - [Deployment and configuration](docs/deploy.md): building the image yourself, containers and data directories, an HTTPS reverse-proxy example, every environment variable
 - [Upgrade notes](docs/upgrade.md): data and behavior changes between versions (upgrading from phase 1, per-customer assignment, suggested replies)
 - [In-app updates](docs/online-update.md): how one-click updates work, security, pinning a version, backups and rollback
-- [Connection methods, safety design and proxies](docs/channels-and-security.md): QR vs. Meta's official API and their risks, the four layers of reply checks, the proxy relay
+- [Connection methods, safety design and proxies](docs/channels-and-security.md): QR vs. Meta's official API and their risks, the four layers of reply checks, the proxy relay, the global proxy
 - [Features](docs/features.md): full description of every feature, plus implementation details and API contracts
 - [Development](docs/development.md): project layout, local development and tests, cutting a release
 - [Deviations from the spec](docs/deviations.md): where the implementation differs from the SPEC

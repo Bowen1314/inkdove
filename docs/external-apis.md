@@ -1,6 +1,6 @@
 # 已核实的外部接口
 
-代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口和翻译接口，这里记下依据的文档和实测结果。
+代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
@@ -77,3 +77,10 @@
   - **LibreTranslate**（开源，可自己部署）：`POST {地址}/translate`，JSON `{q, source: "auto", target, format: "text", api_key?}`，返回 `{translatedText, detectedLanguage: {language}}`；`POST {地址}/detect` 返回 `[{language, confidence}]`。出错返回 `{"error": "..."}`：400 语言不支持或缺 API Key、403 API Key 不对或被封、429 太频繁。简体中文 `zh-Hans`、挪威语 `nb`。能译哪些语言看部署时装了哪些模型。按项目源码 [app.py](https://github.com/LibreTranslate/LibreTranslate/blob/main/libretranslate/app.py) 核对；
   - 签名的单元测试（`server/test/translate-providers.test.js`）用的是官方文档里的示例：腾讯云「签名方法 v3」的示例（规范请求的哈希、待签名字符串、从文档给的 SecretDate 往下派生的 SecretSigning 和最后的签名；示例的 SecretKey 打了码，SecretKey → SecretDate 这一步核对不了）；火山引擎「签名方法」里 GET 和 POST 两个示例的规范请求哈希和签名；百度「通用文本翻译」和「语种识别」接入文档里的两个 MD5 示例；
   - 本地判断语言用 [tinyld](https://github.com/komodojp/tinyld)（MIT，没有依赖，返回 ISO 639-1 两位代码，短句也能判断）：只在对方没给出客户语言时、和判断业务员写的是不是已经是客户的语言时用，把握低于 0.5 的当判断不出。它不认马来语，「ok」「thanks」这类太短的话判断不出。
+- **全局代理（mihomo v1.19.32 和机场订阅）**（代码在 `server/src/proxy/`）：
+  - 订阅：GET 订阅地址，`User-Agent: clash.meta`（机场按 UA 决定返回 Clash 配置还是 base64 的节点链接列表），直连，30 秒超时、最大 5MB、最多 5 次重定向。只取 YAML 里的 `proxies`。节点字段照 [mihomo 的文档](https://wiki.metacubex.one/config/proxies/) 原样交给 mihomo，墨鸽只检查 name、type、server、port；
+  - 配置：墨鸽生成 JSON 格式的配置（JSON 是合法的 YAML）：`mixed-port`、`allow-lan` / `bind-address`、`authentication` 加 `skip-auth-prefixes`（本机免密）、`external-controller` 和 `secret`、两个分组（`url-test` 的 `inkdove-auto` 和 `select` 的 `inkdove`）、一条规则 `MATCH,inkdove`。字段见 [general](https://wiki.metacubex.one/config/general/)、[proxy-groups](https://wiki.metacubex.one/config/proxy-groups/)；
+  - `mihomo -t -d <目录> -f <文件>` 只检查配置。实测（官方 v1.19.32 darwin-arm64，只听 127.0.0.1）：有一个节点不合法（比如 REALITY 的公钥不对）时整份配置失败，报 `proxy <序号>: <原因>` 后退出码 1；墨鸽据此去掉那个节点再查，直到通过；
+  - 控制接口（`Authorization: Bearer <secret>`）：`GET /version` 用来判断起好了；`GET /proxies/{分组}` 的 `now` 是分组现在用的节点；`GET /group/{分组}/delay?url=&timeout=` 测分组里所有节点的延迟，返回 `{节点名: 毫秒}`，超时的节点不在里面，全部超时返回 504。见 [RESTful API](https://wiki.metacubex.one/api/)。实测：经本机的假 http 节点时这个测速接口报 503 / 504（测的是 `https://www.gstatic.com/generate_204`，假节点连不出去），所以「有节点测得出延迟」这条路只用测试里的假 mihomo 验证过，没用真机场节点试过；
+  - 实测（同上）：生成的配置能起来，墨鸽的请求经混合端口 → mihomo → 本机的假 http 节点 → 目标，CONNECT 里是域名；控制接口的 `now` 对；`kill -9` 之后按退避自动拉起。
+

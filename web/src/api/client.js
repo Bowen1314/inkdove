@@ -140,6 +140,18 @@ export const api = {
   /** 翻译接口：用表单里当前（可能没保存）的值把一段固定的中文译成英语 → {ok, text, detectedSource, latencyMs} 或 {ok:false, error, kind, field?} */
   testTranslation: (body) => post('/api/settings/translation/test', body),
   testEmail: (to) => post('/api/settings/email/test', { to }),
+  /**
+   * 全局代理的状态 → {available, enabled, state: off|starting|running|error, error, restartAt, port, source, node, current,
+   * nodes: [{name, type}], nodeCount, subscription: {set, nodeCount, skipped, invalid, updatedAt, lastAttemptAt, error},
+   * config: {set, nodeCount, skipped, invalid, updatedAt}, notice, usedBy: [{id, name}]}
+   */
+  getProxyStatus: (o) => get('/api/settings/proxy/status', o),
+  /** 经全局代理请求测试地址 → {ok, ip, latencyMs} 或 {ok:false, error} */
+  testGlobalProxy: (o) => post('/api/settings/proxy/test', {}, o),
+  /** 立即更新订阅 → {ok, nodeCount, status} 或 {ok:false, error, status} */
+  refreshProxySubscription: (o) => post('/api/settings/proxy/refresh', {}, o),
+  /** 给所有节点测延迟 → {ok, delays: {节点名: 毫秒或 null}, url} 或 {ok:false, error} */
+  proxyDelays: (o) => post('/api/settings/proxy/delay', {}, o),
 
   // 资料
   listSources: (o) => get('/api/sources', o),

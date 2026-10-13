@@ -9,3 +9,9 @@
 // 测试：不少测试文件在导入 app.js 之前就导入了会带进 cheerio / undici 的模块，所以 package.json 的 test 脚本用
 // node --import ./src/builtin-fetch.js 让每个测试进程最先加载这个文件，和正式环境一致。
 fetch('data:,').catch(() => {});
+
+/**
+ * 上面那次调用装好的 Node 自带 Agent（全局 dispatcher）。全局代理（proxy/route.js）开启时用它直连、用它的类建走代理的 Agent，
+ * 关掉时把它原样放回去。
+ */
+export const builtinDispatcher = globalThis[Symbol.for('undici.globalDispatcher.1')];

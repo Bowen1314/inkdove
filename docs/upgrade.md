@@ -61,3 +61,14 @@
 - 数据库不用手动迁移：启动时自动给 `messages` 表加一列 `translation`（点过「翻译」的消息存译文，其余为空）；推荐回复和草稿的译文存在会话原来的 `draft` JSON 里（多一项 `zh`），不加列。
 - 接口只是多了字段：消息多一个 `translation`（没译过为 null），会话的 `draft` 译过时多一个 `zh`；原来的字段不变。
 - 回滚到旧版本不影响：旧版本不认 `translation` 这一列和 `draft` 里的 `zh`，照常读写；再升级回来时已经存的译文照样能用。
+
+## 升级到全局代理
+
+- 新增「设置 → 代理」（全局代理），**默认关闭**，不开就和以前完全一样：不起 mihomo，不多发任何请求，出口不变。用法见[全局代理](features.md#全局代理)。
+- **镜像大了约 60MB**（多了 mihomo v1.19.32，GPL-3.0，见[部署说明](deploy.md#全局代理mihomo)），第一次拉新镜像多下载 20MB 左右。
+- 开了全局代理后，mihomo 作为子进程跑在 inkdove 容器里，内存算在 inkdove 的 `mem_limit` 里。新的 docker-compose.yml 把 inkdove 的 `mem_limit` 从 384m 调到了 512m；**在线更新不会改你的 docker-compose.yml**，要开全局代理的，自己把这一行改成 512m 再 `docker compose up -d`。
+- 新增两个可选的环境变量 `INKDOVE_MIHOMO_PATH`、`INKDOVE_GLOBAL_PROXY_PORT`（默认 17890），一般不用设。默认端口和已有的端口冲突时（比如 `INKDOVE_PROXY_RELAY_PORT_BASE` 设到了 17890 附近、号又很多）改一下。
+- 数据库不用手动迁移：设置里多一块 `proxy`，读设置时自动补上默认值；节点和运行信息存在 kv 表的 `proxy_nodes`、`proxy_meta` 里。号的代理设置多一个 `useGlobal`（默认 false），号码配置导出文件里也多这一项；老文件照样能导入。
+- 接口只是多了字段：`GET /api/settings` 多一块 `proxy`，号的 `waha.proxy` 多一个 `useGlobal`。原来的字段不变。
+- 回滚到旧版本：旧版本不认 `proxy` 这块设置，也不起 mihomo，墨鸽的请求恢复直连。**选了「用全局代理」的号回滚后不再经全局代理**：旧版本按这个号自己填的代理去连，没填的就不走代理、直接用服务器的 IP 连 WhatsApp。不想这样的，回滚前先把这些号的代理改成单独填的代理。
+

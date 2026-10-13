@@ -18,6 +18,7 @@ import { createKbStore } from './kb/store.js';
 import { createVectorIndexer, VECTOR_DEBOUNCE_MS } from './kb/vectors.js';
 import { createLeadStore, LEADS_SCAN_INTERVAL_MS } from './leads/store.js';
 import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
+import { createGlobalProxy } from './proxy/index.js';
 import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
@@ -77,6 +78,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   updateNow?: () => number,
  *   updateScheduleTickMs?: number,
  *   relayBindHost?: string,
+ *   globalProxy?: {bindHost?: string, refreshCheckMs?: number, backoff?: object, readyTimeoutMs?: number, subscriptionTimeoutMs?: number},
  *   canary?: string,
  *   proxyTestUrl?: string,
  *   webDist?: string,
@@ -84,6 +86,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   translateTimeoutMs?: number,
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
+ *   globalProxy：全局代理（proxy/index.js）的选项；bindHost 默认和代理中继一样
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -125,6 +128,7 @@ export function createApp(config, options = {}) {
     mailer: null,
     // F13：中继只在 compose 内网监听（容器里绑 0.0.0.0，不映射到宿主机端口）
     relays: createRelayManager({ bindHost: options.relayBindHost || '0.0.0.0', log }),
+    globalProxy: null,
     ai: null,
     vectors: null,
     distill: null,
@@ -135,6 +139,9 @@ export function createApp(config, options = {}) {
     redteam: null,
     dashboard: null,
   };
+  // 全局代理（设置 → 代理，默认关）：开着时最先换好出口，之后各模块连外网的请求都经它（proxy/route.js）
+  ctx.globalProxy = createGlobalProxy(ctx, { bindHost: options.relayBindHost || '0.0.0.0', ...(options.globalProxy || {}) });
+  ctx.globalProxy.start();
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
     resendUrl: config.resendApiUrl,
@@ -308,6 +315,7 @@ export function createApp(config, options = {}) {
       ctx.distill.abortAll();
       ctx.redteam.abortAll();
       await ctx.update.stop();
+      await ctx.globalProxy.close();
       try {
         db.close();
       } catch {

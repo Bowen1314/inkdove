@@ -14,6 +14,7 @@ import EmailSection from './EmailSection.jsx';
 import BrandSection from './BrandSection.jsx';
 import OutreachSection from './OutreachSection.jsx';
 import PricingSection from './PricingSection.jsx';
+import ProxySection from './ProxySection.jsx';
 import VersionSection from './VersionSection.jsx';
 
 /** 分组子导航，每组一个子路由。「品牌」「版本」放最后。 */
@@ -28,11 +29,12 @@ const NAV = [
   { to: '/settings/email', label: '发信方式' },
   { to: '/settings/outreach', label: '主动外联' },
   { to: '/settings/pricing', label: '模型单价' },
+  { to: '/settings/proxy', label: '代理' },
   { to: '/settings/brand', label: '品牌' },
   { to: '/settings/version', label: '版本' },
 ];
 
-const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'translation', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
+const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'translation', 'media', 'leads', 'email', 'outreach', 'pricing', 'proxy', 'brand', 'version'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -98,6 +100,7 @@ export default function SettingsPage() {
         <Route path="email" element={<EmailSection {...props} />} />
         <Route path="outreach" element={<OutreachSection {...props} />} />
         <Route path="pricing" element={<PricingSection {...props} />} />
+        <Route path="proxy" element={<ProxySection {...props} />} />
         <Route path="brand" element={<BrandSection {...props} />} />
         <Route path="version" element={<VersionSection />} />
         <Route path="*" element={<Navigate to="/settings/llm" replace />} />

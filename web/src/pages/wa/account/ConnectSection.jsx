@@ -61,6 +61,8 @@ const protoLabel = (v) => PROXY_PROTOCOLS.find((p) => p.value === v)?.label || S
 function proxyDraft(p) {
   return {
     enabled: !!p?.enabled,
+    // 用全局代理（设置 → 代理）：这时下面自己的代理字段留着不用
+    useGlobal: !!p?.useGlobal,
     // F13：四种协议都能用，默认 SOCKS5
     protocol: PROXY_PROTOCOLS.some((x) => x.value === p?.protocol) ? p.protocol : 'socks5',
     host: p?.host || '',
@@ -75,11 +77,11 @@ function validateProxy(d) {
   const port = d.port.trim();
   if (host.includes('://')) errors.host = '只填地址或域名，不要带 http:// 之类的前缀';
   else if (/\s/.test(host)) errors.host = '地址里不能有空格';
-  else if (d.enabled && !host) errors.host = '开启代理时必须填写地址';
+  else if (d.enabled && !d.useGlobal && !host) errors.host = '开启代理时必须填写地址';
   if (port) {
     const n = Number(port);
     if (!Number.isInteger(n) || n < 1 || n > 65535) errors.port = '端口是 1–65535 之间的整数';
-  } else if (d.enabled) {
+  } else if (d.enabled && !d.useGlobal) {
     errors.port = '请填写端口';
   }
   return errors;
@@ -96,6 +98,19 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
   const [testResult, setTestResult] = useState(null);
   const [saveError, setSaveError] = useState(null);
   const [showErrors, setShowErrors] = useState(false);
+  // 全局代理开没开（开着才能选「用全局代理」）；null：还不知道
+  const [globalOn, setGlobalOn] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getSettings({ silent: true })
+      .then((s) => alive && setGlobalOn(!!s?.proxy?.enabled))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const base = proxyDraft(proxy);
   const dirty = Object.keys(base).some((k) => base[k] !== draft[k]) || password !== '';
@@ -126,6 +141,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
     }
     const patch = {
       enabled: draft.enabled,
+      useGlobal: draft.useGlobal,
       protocol: draft.protocol,
       host: draft.host.trim(),
       port: draft.port.trim() ? Number(draft.port.trim()) : null,
@@ -189,9 +205,12 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
     }
   };
 
-  const summary = proxy.enabled
-    ? `${protoLabel(proxy.protocol)} · ${proxy.host || '未填地址'}${proxy.port ? `:${proxy.port}` : ''}`
-    : '未开启';
+  const summary = !proxy.enabled
+    ? '未开启'
+    : proxy.useGlobal
+      ? '用全局代理'
+      : `${protoLabel(proxy.protocol)} · ${proxy.host || '未填地址'}${proxy.port ? `:${proxy.port}` : ''}`;
+  const own = !draft.useGlobal;
 
   return (
     <>
@@ -206,83 +225,123 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
             <Switch id={`px-enabled-${id}`} checked={draft.enabled} onChange={(v) => set('enabled', v)} label="使用代理" />
           </SettingsRow>
 
-          <SettingsRow label="协议" htmlFor={`px-proto-${id}`}>
-            <Select
-              id={`px-proto-${id}`}
-              value={draft.protocol}
-              onChange={(v) => set('protocol', v)}
-              options={PROXY_PROTOCOLS}
-            />
+          <SettingsRow label="用哪个代理">
+            <div className="choice-list" role="radiogroup" aria-label="用哪个代理">
+              <label className="choice">
+                <input
+                  type="radio"
+                  className="radio"
+                  name={`px-kind-${id}`}
+                  checked={own}
+                  onChange={() => set('useGlobal', false)}
+                />
+                <span className="choice__text">
+                  <span>单独填一个代理</span>
+                  <span className="choice__desc">这个号自己的 HTTP 或 SOCKS 代理，填在下面。</span>
+                </span>
+              </label>
+              <label className="choice">
+                <input
+                  type="radio"
+                  className="radio"
+                  name={`px-kind-${id}`}
+                  checked={draft.useGlobal}
+                  disabled={globalOn === false && !draft.useGlobal}
+                  onChange={() => set('useGlobal', true)}
+                />
+                <span className="choice__text">
+                  <span>用全局代理</span>
+                  <span className="choice__desc">
+                    {globalOn === false && !draft.useGlobal
+                      ? '全局代理没有开启：请先在「设置 → 代理」里开启。'
+                      : '经「设置 → 代理」里的机场节点连 WhatsApp，和墨鸽自己的请求用同一个出口。'}
+                  </span>
+                </span>
+              </label>
+            </div>
           </SettingsRow>
 
-          <SettingsRow
-            label="地址"
-            htmlFor={`px-host-${id}`}
-            hint="填 127.0.0.1 指的是容器自己，要用服务器本机上的代理请填 host.docker.internal"
-          >
-            <input
-              id={`px-host-${id}`}
-              className="input input--mono"
-              placeholder="例如 1.2.3.4 或 proxy.example.com"
-              value={draft.host}
-              onChange={(e) => set('host', e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              aria-invalid={errOf('host') ? true : undefined}
-              aria-describedby={errOf('host') ? `px-host-${id}-err` : undefined}
-            />
-            {errOf('host') && (
-              <div className="field__error" id={`px-host-${id}-err`}>
-                {errOf('host')}
-              </div>
-            )}
-          </SettingsRow>
+          {own && (
+            <>
+              <SettingsRow label="协议" htmlFor={`px-proto-${id}`}>
+                <Select
+                  id={`px-proto-${id}`}
+                  value={draft.protocol}
+                  onChange={(v) => set('protocol', v)}
+                  options={PROXY_PROTOCOLS}
+                />
+              </SettingsRow>
 
-          <SettingsRow label="端口" htmlFor={`px-port-${id}`}>
-            <input
-              id={`px-port-${id}`}
-              className="input input--mono numbers-port"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              max={65535}
-              placeholder={`例如 ${PROXY_DEFAULT_PORT[draft.protocol]}`}
-              value={draft.port}
-              onChange={(e) => set('port', e.target.value)}
-              aria-invalid={errOf('port') ? true : undefined}
-              aria-describedby={errOf('port') ? `px-port-${id}-err` : undefined}
-            />
-            {errOf('port') && (
-              <div className="field__error" id={`px-port-${id}-err`}>
-                {errOf('port')}
-              </div>
-            )}
-          </SettingsRow>
+              <SettingsRow
+                label="地址"
+                htmlFor={`px-host-${id}`}
+                hint="填 127.0.0.1 指的是容器自己，要用服务器本机上的代理请填 host.docker.internal"
+              >
+                <input
+                  id={`px-host-${id}`}
+                  className="input input--mono"
+                  placeholder="例如 1.2.3.4 或 proxy.example.com"
+                  value={draft.host}
+                  onChange={(e) => set('host', e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                  aria-invalid={errOf('host') ? true : undefined}
+                  aria-describedby={errOf('host') ? `px-host-${id}-err` : undefined}
+                />
+                {errOf('host') && (
+                  <div className="field__error" id={`px-host-${id}-err`}>
+                    {errOf('host')}
+                  </div>
+                )}
+              </SettingsRow>
 
-          <SettingsRow label="用户名（可选）" htmlFor={`px-user-${id}`} hint="代理不需要登录就留空。">
-            <input
-              id={`px-user-${id}`}
-              className="input"
-              value={draft.username}
-              onChange={(e) => set('username', e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </SettingsRow>
+              <SettingsRow label="端口" htmlFor={`px-port-${id}`}>
+                <input
+                  id={`px-port-${id}`}
+                  className="input input--mono numbers-port"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={65535}
+                  placeholder={`例如 ${PROXY_DEFAULT_PORT[draft.protocol]}`}
+                  value={draft.port}
+                  onChange={(e) => set('port', e.target.value)}
+                  aria-invalid={errOf('port') ? true : undefined}
+                  aria-describedby={errOf('port') ? `px-port-${id}-err` : undefined}
+                />
+                {errOf('port') && (
+                  <div className="field__error" id={`px-port-${id}-err`}>
+                    {errOf('port')}
+                  </div>
+                )}
+              </SettingsRow>
 
-          <SettingsRow label="密码（可选）" htmlFor={`px-pass-${id}`}>
-            <SecretField
-              id={`px-pass-${id}`}
-              isSet={!!proxy.passwordSet}
-              value={password}
-              onChange={(v) => {
-                setSaveError(null);
-                setPassword(v);
-              }}
-              onClear={clearPassword}
-              clearing={clearing}
-            />
-          </SettingsRow>
+              <SettingsRow label="用户名（可选）" htmlFor={`px-user-${id}`} hint="代理不需要登录就留空。">
+                <input
+                  id={`px-user-${id}`}
+                  className="input"
+                  value={draft.username}
+                  onChange={(e) => set('username', e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </SettingsRow>
+
+              <SettingsRow label="密码（可选）" htmlFor={`px-pass-${id}`}>
+                <SecretField
+                  id={`px-pass-${id}`}
+                  isSet={!!proxy.passwordSet}
+                  value={password}
+                  onChange={(v) => {
+                    setSaveError(null);
+                    setPassword(v);
+                  }}
+                  onClear={clearPassword}
+                  clearing={clearing}
+                />
+              </SettingsRow>
+            </>
+          )}
 
           <SettingsRow
             label="连通测试"

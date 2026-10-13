@@ -422,7 +422,7 @@ describe('号码配置导出 / 导入（admin）', () => {
     for (const a of doc.accounts) assert.deepEqual(Object.keys(a).sort(), EXPORT_KEYS);
     const [w, m] = doc.accounts;
     assert.deepEqual(w.waha, {
-      proxy: { enabled: true, protocol: 'socks5', host: 'proxy.example.com', port: 1080, username: 'px-user', password: 'px-secret-1' },
+      proxy: { enabled: true, useGlobal: false, protocol: 'socks5', host: 'proxy.example.com', port: 1080, username: 'px-user', password: 'px-secret-1' },
     });
     assert.equal(w.meta, null);
     assert.deepEqual(w.notify, { email: { enabled: true, to: ['boss@example.com'] }, whatsapp: { enabled: true, number: '8613800000003' } });

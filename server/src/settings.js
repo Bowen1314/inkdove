@@ -1,5 +1,6 @@
-// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation、proxy。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
+import { checkBypassList } from './proxy/bypass.js';
 import {
   FIELD_LABELS,
   getTranslationProvider,
@@ -22,6 +23,11 @@ export const EMBEDDING_DEFAULTS = Object.freeze({ enabled: false, source: 'llm',
 export const TRANSLATION_MODES = ['ai', 'api'];
 /** 选「翻译 API」时默认显示哪家 */
 export const DEFAULT_TRANSLATION_PROVIDER = 'deepl';
+/** 全局代理的节点来源：subscription 是 Clash 订阅地址，config 是粘贴的 Clash 配置 */
+export const PROXY_SOURCES = ['subscription', 'config'];
+export const PROXY_DEFAULTS = Object.freeze({ enabled: false, source: 'subscription', subscriptionUrl: '', node: '', bypass: [] });
+/** 粘贴的 Clash 配置最长多少字符（请求体上限是 2MB） */
+export const MAX_PROXY_CONFIG = 1_900_000;
 
 /** @param {import('./config.js').Config} config */
 function defaults(config) {
@@ -62,6 +68,9 @@ function defaults(config) {
     // 一键翻译：mode 是 ai（用回复模型）或 api（用 provider 这家翻译接口）；每家的配置分开存，换来换去不丢；
     // fallbackToAi：翻译接口出错时改用 AI 翻译（回复模型配好了才行）
     translation: { mode: 'ai', provider: DEFAULT_TRANSLATION_PROVIDER, fallbackToAi: true, providers: providerDefaults() },
+    // 全局代理（默认关）：订阅地址是密钥（带机场账号的 token）；粘贴的配置不存原文，只存解析出的节点（proxy/index.js）。
+    // node 是手动选的节点名，空串是自动选最快的；bypass 是不走代理的地址，每项一个
+    proxy: { ...PROXY_DEFAULTS, bypass: [] },
   };
 }
 
@@ -219,6 +228,16 @@ export function loadSettings(db, config) {
   for (const [id, fields] of Object.entries(pd)) {
     for (const [k, v] of Object.entries(fields)) if (typeof tr.providers[id][k] !== 'string') tr.providers[id][k] = v;
   }
+  // 存坏了的全局代理设置：字段逐个回到默认值（数组 shapeLike 不管，单独校验）
+  const px = s.proxy;
+  if (typeof px.enabled !== 'boolean') px.enabled = false;
+  if (!PROXY_SOURCES.includes(px.source)) px.source = PROXY_DEFAULTS.source;
+  for (const k of ['subscriptionUrl', 'node']) if (typeof px[k] !== 'string') px[k] = '';
+  try {
+    px.bypass = checkBypassList(px.bypass);
+  } catch {
+    px.bypass = [];
+  }
   return s;
 }
 
@@ -307,6 +326,14 @@ export function publicSettings(s, config) {
       provider: s.translation.provider,
       fallbackToAi: s.translation.fallbackToAi,
       providers: publicProviders(s.translation.providers),
+    },
+    // 订阅地址不回传，只说填没填；节点名和粘贴的配置在 GET /settings/proxy/status 里
+    proxy: {
+      enabled: s.proxy.enabled,
+      source: s.proxy.source,
+      node: s.proxy.node,
+      bypass: [...s.proxy.bypass],
+      subscriptionUrlSet: !!s.proxy.subscriptionUrl,
     },
     webhookBase: config.publicBaseUrl,
   };
@@ -469,6 +496,47 @@ export function translationProviderProblem(translation) {
   return { field, message: `还没有填 ${provider.label} 的 ${FIELD_LABELS[field] || field}` };
 }
 
+/**
+ * 全局代理设置的字段校验（要下载订阅、看节点在不在、能不能关的检查在 proxy/index.js 的 prepare 里）。
+ * - 订阅地址是密钥：不给或空串（去掉首尾空白后）表示不改，null 表示清空；
+ * - config（粘贴的 Clash 配置）不存进设置：这里只查类型和长度，解析在 prepare 里；
+ * - node：空串是自动选最快的。
+ * 错误信息以 proxy.<字段> 开头，前端靠它把错误放到对应字段下面；信息里不带填的值。
+ * @param {any} current 现在的 proxy 设置
+ * @param {unknown} p 要改的字段
+ * @returns 改好的完整 proxy 设置（不改动入参）
+ */
+export function checkProxyPatch(current, p) {
+  if (!isPlainObject(p)) throw badRequest('proxy 必须是对象');
+  const out = { ...current, bypass: [...current.bypass] };
+  if (p.enabled !== undefined) out.enabled = boolField(p.enabled, 'proxy.enabled');
+  if (p.source !== undefined) {
+    if (!PROXY_SOURCES.includes(p.source)) throw badRequest('proxy.source 只能是 subscription（订阅地址）或 config（粘贴 Clash 配置）');
+    out.source = p.source;
+  }
+  if (p.subscriptionUrl === null) out.subscriptionUrl = '';
+  else if (p.subscriptionUrl !== undefined) {
+    const v = str(p.subscriptionUrl, 'proxy.subscriptionUrl', 4000).trim();
+    if (v) {
+      let u = null;
+      try {
+        u = new URL(v);
+      } catch {
+        /* 下面报错 */
+      }
+      if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw badRequest('proxy.subscriptionUrl 必须是 http:// 或 https:// 开头的网址');
+      out.subscriptionUrl = v;
+    }
+  }
+  if (p.config !== undefined && p.config !== null) str(p.config, 'proxy.config', MAX_PROXY_CONFIG);
+  if (p.node !== undefined) {
+    if (p.node === null) out.node = '';
+    else out.node = str(p.node, 'proxy.node', 200);
+  }
+  if (p.bypass !== undefined) out.bypass = checkBypassList(p.bypass);
+  return out;
+}
+
 export const BRAND_TITLE_MAX = 40;
 
 /** 网站名称：去掉首尾空白后最多 40 个字符，不能有换行和控制字符。错误信息以 branding.title 开头，前端靠它把错误放到字段下面 */
@@ -611,6 +679,8 @@ export function applySettingsPatch(current, patch) {
       }
     }
   }
+  // 全局代理：字段校验在这里；要联网、看号的检查由接口层调 ctx.globalProxy.prepare
+  if (patch.proxy !== undefined) s.proxy = checkProxyPatch(s.proxy, patch.proxy);
   return s;
 }
 

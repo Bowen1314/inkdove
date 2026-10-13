@@ -78,7 +78,11 @@
 
 ### IP 代理
 
-每个号可以单独走 http、https、socks4、socks5 代理。
+每个号可以单独走 http、https、socks4、socks5 代理；扫码号也可以选「用全局代理」，经下面的全局代理连 WhatsApp。
+
+### 全局代理（默认关闭）
+
+「设置 → 代理」：墨鸽自己连外网的请求（AI 模型、向量检索、翻译接口、发信、抓取网页、检查更新、Meta 接口）都经机场节点出去。节点来自机场的 Clash 订阅（每天自动更新）或粘贴的 Clash 配置，自动选最快的或手动选一个。详见[全局代理](#全局代理)。
 
 ### 号码配置导出 / 导入（管理员）
 
@@ -401,3 +405,24 @@
   - `outreach`：本时间段内发出（status=sent，按 sentAt）的收件人；`replied`、`declined` 是其中已经回复、已经拒绝的（不管回复在什么时候）；两个比率都是 0–1 的小数，发送数为 0 时 null。`byAccount` 按发送数倒序，已删除的号名字是"（已删除）"。
 - **比率**都是 0–1 的小数，分母为 0 时 null。
 - **索引**：新增 `messages(direction, ts)` 和 `campaign_recipients(sent_at)`；decisions、llm_calls、handoffs、gap_hits 的时间索引在记录这些数据时已经建了。每块数据都是一两条 SQL 聚合，不在 JS 里遍历消息。
+
+## 全局代理
+
+「设置 → 代理」（只有管理员）。**默认关闭**，关着时和以前完全一样：不起 mihomo，不多发任何请求。代码在 `server/src/proxy/`。
+
+- **节点来源**二选一：
+  - **订阅地址**：机场给的 Clash 订阅链接。保存时下载一次，之后每天自动更新一次（失败了每小时再试，期间照用上次的节点），也可以点「更新订阅」。下载订阅总是直连、不经代理（节点坏了也能更新），User-Agent 是 `clash.meta`，30 秒超时，最大 5MB，最多跟 5 次重定向。返回的不是 Clash 配置（比如 base64 的节点链接列表）时报「请换成机场给的 Clash 订阅链接」；
+  - **粘贴 Clash 配置**：把 YAML 贴进来。保存时解析，只存节点，原文不保存。
+  - 两种都只用配置里的 `proxies`，规则、分组、DNS 都不用。认的节点类型：ss、ssr、vmess、vless、trojan、hysteria、hysteria2、tuic、wireguard、snell、http、socks5、ssh、mieru、anytls，其他类型（包括 direct）和缺字段、重名的节点跳过，设置页显示跳过了几个。最多 2000 个节点。解析后再用 `mihomo -t` 查一遍，mihomo 不认的节点（比如 REALITY 的公钥写错）去掉并列出名字：一个坏节点会让整个 mihomo 起不来。
+- **节点**：默认「自动」，用延迟最低的（mihomo 的 url-test：只在有请求时测，5 分钟一次，访问 `https://www.gstatic.com/generate_204`）。也可以手动选一个，之后一直用它。「测速」给每个节点测一次延迟，写在下拉框里。手动选的节点在订阅更新或换来源后没了，自动改回「自动」，设置页提示一次。
+- **哪些请求走代理**：墨鸽进程里的全局 `fetch`（AI 模型、向量、翻译接口、Resend、检查更新、Meta Graph、抓取网页）、下载 Meta 媒体，和 SMTP 发信。**总是直连**：localhost、本机和内网等保留地址（和抓取网页的 SSRF 防护用同一张表）、不带点的主机名（`waha`、`updater` 这类 compose 内网的名字）、`*.localhost`、`*.local`、`*.internal`、`*.home.arpa`、`host.docker.internal`、WAHA 和更新助手的地址。另外可以填「不走代理的地址」，一行一个：`example.com`（只它自己）、`*.example.com`（它和所有子域名）、IP 或网段，最多 200 行。按请求里写的主机名判断，不在本机解析域名（域名交给节点去解析）。
+- **开着时代理连不上，请求直接失败，不会改用直连**（启动中的请求最多等 15 秒）。设置页显示运行状态：运行中（几个节点、现在用的是哪个）、正在启动、出错（原因和下次自动重试的时间）。
+- **测试**：经全局代理访问 `https://api.ipify.org?format=json`，显示出口 IP 和用时。
+- **扫码号**：号的「IP 代理」里可以选「用全局代理」：WAHA 经 compose 内网连墨鸽的全局代理端口（`inkdove:17890`，带账号密码），和墨鸽自己的请求用同一个出口。全局代理没开时这个选项选不了（接口返回 400 `global_proxy_off`）；有号在用时不能关全局代理（400 `global_proxy_in_use`，列出这些号）。号码配置导入时，全局代理没开，文件里「用全局代理」的号会先关掉代理（选项保留）。
+- **mihomo**：Docker 镜像里自带（`/usr/local/bin/mihomo`，版本和许可见[部署说明](deploy.md#全局代理mihomo)）。开着时墨鸽把它作为子进程拉起；改了设置就重启它，意外退出时按 1 秒、2 秒……最多 60 秒的间隔自动拉起，关掉开关就停，墨鸽退出时一起退。没有 mihomo 的机器（比如本地开发）设置页显示「这台机器没有 mihomo，Docker 镜像里自带；本地开发可以用 INKDOVE_MIHOMO_PATH 指定」，开关打不开（400 `mihomo_unavailable`）。
+- **接口**（只有 admin）：
+  - `PUT /api/settings` 的 `proxy`：`{enabled, source: "subscription" | "config", subscriptionUrl, config, node, bypass}`。`subscriptionUrl` 不传或传空字符串是不改、`null` 是清除；`config` 是粘贴的 YAML，`null` 清除；`node` 空字符串是自动；`bypass` 是字符串数组。要下载订阅时这个请求会等下载完（最多 30 秒）。字段错误的 400 信息以 `proxy.<字段>` 开头，另有 code：`mihomo_unavailable`、`global_proxy_in_use`、`proxy_subscription_failed`、`proxy_config_invalid`、`proxy_no_nodes`、`proxy_node_not_found`；
+  - `GET /api/settings` 只回 `proxy: {enabled, source, node, bypass, subscriptionUrlSet}`；
+  - `GET /api/settings/proxy/status`：运行状态、节点名和类型（不带服务器地址和密码）、订阅的节点数和更新时间、在用全局代理的号；
+  - `POST /api/settings/proxy/test`、`POST /api/settings/proxy/refresh`、`POST /api/settings/proxy/delay`：测试、更新订阅、测速，成功失败都回 200（`{ok: false, error}`）。
+

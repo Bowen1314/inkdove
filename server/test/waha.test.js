@@ -60,7 +60,7 @@ describe('WAHA 号', () => {
   it('新建的号：sessionName 由系统生成；start 建 session，webhook、events 和 HMAC key 正确', async () => {
     assert.match(acc.waha.sessionName, new RegExp(`^inkdove_${acc.id}$`));
     assert.equal(acc.meta, null);
-    assert.deepEqual(acc.waha.proxy, { enabled: false, protocol: 'socks5', host: '', port: null, username: '', passwordSet: false });
+    assert.deepEqual(acc.waha.proxy, { enabled: false, useGlobal: false, protocol: 'socks5', host: '', port: null, username: '', passwordSet: false });
     const create = fake.state.requests.find((r) => r.method === 'POST' && r.path === '/api/sessions');
     assert.ok(create);
     assert.equal(create.headers['x-api-key'], undefined, '未配置 key 时不带');

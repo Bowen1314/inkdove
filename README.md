@@ -57,7 +57,7 @@
 - **客户线索。** 自动从聊天里整理出客户的名字、公司、国家、意向产品、数量和阶段，能搜、能改、能导出 CSV。[详细](docs/features.md#客户线索)
 - **主动外联。** 上传已经同意被联系的客户号码，每人发一条开场消息；按每天上限、随机间隔、对方当地时间慢慢发，不跟进。[详细](docs/features.md#主动外联)
 - **看板。** 管理员看消息量、新客户、转人工原因和响应时间、每个成员处理了多少、模型花了多少钱、外联效果。[详细](docs/features.md#数据看板管理员)
-- **多号、两种接入、在线更新。** 一套部署接多个号，扫码（WAHA）或 Meta 官方 Cloud API 都行，每个号可以单独走代理。出了新版本，在网页上点一下就能更新，也可以预约到夜里自动更新。[接入和代理](docs/channels-and-security.md) · [在线更新](docs/online-update.md)
+- **多号、两种接入、在线更新。** 一套部署接多个号，扫码（WAHA）或 Meta 官方 Cloud API 都行，每个号可以单独走代理；也可以开全局代理，让模型、翻译、发信这些请求和扫码号都经机场节点（Clash 订阅）出去。出了新版本，在网页上点一下就能更新，也可以预约到夜里自动更新。[接入和代理](docs/channels-and-security.md) · [在线更新](docs/online-update.md)
 
 每个功能的完整说明见 [docs/features.md](docs/features.md)。
 
@@ -188,7 +188,7 @@ docker compose start inkdove
 - [部署和配置](docs/deploy.md)：自己编译镜像、容器和数据目录、HTTPS 反代示例、全部环境变量
 - [升级说明](docs/upgrade.md)：跨版本时数据或行为的变化（从第一期升级、按客户分配、推荐回复）
 - [在线更新](docs/online-update.md)：网页上一键更新怎么工作、安全、钉版本号、备份和回滚
-- [两种接入方式、安全设计和代理](docs/channels-and-security.md)：扫码和 Meta 官方 API 的区别和风险、机器人回复的四层把关、代理中继
+- [两种接入方式、安全设计和代理](docs/channels-and-security.md)：扫码和 Meta 官方 API 的区别和风险、机器人回复的四层把关、代理中继、全局代理
 - [功能说明](docs/features.md)：每个功能的完整说明，以及实现细节和接口约定
 - [开发](docs/development.md)：项目结构、本地开发和测试、发新版
 - [偏离规格](docs/deviations.md)：开发中和 SPEC 不一致的地方

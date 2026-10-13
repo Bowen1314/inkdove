@@ -26,7 +26,11 @@ function defaultConfig(channel) {
     scope: 'all',
     allowlist: [],
     blocklist: [],
-    waha: channel === 'waha' ? { proxy: { enabled: false, protocol: 'socks5', host: '', port: null, username: '', password: '' } } : null,
+    // useGlobal：用全局代理（设置 → 代理）；这时 protocol、host 这些自己的代理字段留着不用，切回来不用重填
+    waha:
+      channel === 'waha'
+        ? { proxy: { enabled: false, useGlobal: false, protocol: 'socks5', host: '', port: null, username: '', password: '' } }
+        : null,
     meta:
       channel === 'meta'
         ? { phoneNumberId: '', apiVersion: DEFAULT_META_API_VERSION, verifyToken: '', accessToken: '', appSecret: '' }
@@ -104,6 +108,7 @@ export function publicAccount(acc, config, status, viewer = null) {
           sessionName: acc.sessionName,
           proxy: {
             enabled: px.enabled,
+            useGlobal: px.useGlobal,
             protocol: px.protocol,
             host: px.host,
             port: px.port,
@@ -146,9 +151,16 @@ function storedConfig(acc) {
 /** 代理部分（含协议）的指纹：变了就要重启中继并更新 WAHA session */
 export const proxyFingerprint = (acc) => JSON.stringify(acc.waha?.proxy || null);
 
-function applyProxyPatch(px, q) {
+/**
+ * @param {any} px 号的代理设置（就地修改）
+ * @param {any} q 要改的字段
+ * @param {boolean} globalProxyReady 全局代理开着（才能选「用全局代理」）
+ */
+function applyProxyPatch(px, q, globalProxyReady) {
   if (!isPlainObject(q)) throw badRequest('waha.proxy 必须是对象');
+  const wasGlobal = px.enabled && px.useGlobal;
   if (q.enabled !== undefined) px.enabled = boolField(q.enabled, 'waha.proxy.enabled');
+  if (q.useGlobal !== undefined) px.useGlobal = boolField(q.useGlobal, 'waha.proxy.useGlobal');
   if (q.protocol !== undefined) {
     if (!PROXY_PROTOCOLS.includes(q.protocol)) throw badRequest('proxy.protocol 只能是 http、https、socks4 或 socks5');
     px.protocol = q.protocol;
@@ -168,6 +180,13 @@ function applyProxyPatch(px, q) {
   }
   if (q.username !== undefined) px.username = str(q.username, 'waha.proxy.username', 255);
   if (q.password !== undefined) px.password = str(q.password, 'waha.proxy.password', 1000);
+  if (px.enabled && px.useGlobal) {
+    // 只拦「改成用全局代理」：已经在用的再提交一次不报错
+    if (!wasGlobal && !globalProxyReady) {
+      throw badRequest('全局代理没有开启：请管理员先在「设置 → 代理」里开启，再选「用全局代理」', 'global_proxy_off');
+    }
+    return;
+  }
   if (px.enabled && (!px.host || !px.port)) throw badRequest('启用代理时必须填写 host 和 port');
 }
 
@@ -180,9 +199,9 @@ const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
  * 也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
  * @param {any} current 内部对象
  * @param {any} patch
- * @param {{isAdmin:boolean, emailReady:boolean}} o
+ * @param {{isAdmin:boolean, emailReady:boolean, globalProxyReady?:boolean}} o globalProxyReady：全局代理开着
  */
-export function applyAccountPatch(current, patch, { isAdmin, emailReady }) {
+export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalProxyReady = false }) {
   if (!isPlainObject(patch)) throw badRequest('请求体必须是对象');
   const a = structuredClone(current);
   const adminOnly = () => {
@@ -217,7 +236,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady }) {
     if (patch.waha.proxy !== undefined) {
       adminOnly();
       if (a.channel !== 'waha') throw badRequest('只有扫码号才有 IP 代理');
-      applyProxyPatch(a.waha.proxy, patch.waha.proxy);
+      applyProxyPatch(a.waha.proxy, patch.waha.proxy, globalProxyReady);
     }
   }
   if (patch.meta !== undefined && patch.meta !== null) {
@@ -287,6 +306,7 @@ export function exportAccount(acc) {
       ? {
           proxy: {
             enabled: px.enabled,
+            useGlobal: px.useGlobal,
             protocol: px.protocol,
             host: px.host,
             port: px.port,
@@ -316,13 +336,14 @@ export function exportAccount(acc) {
  * 每个号的校验和新建、更新共用（applyAccountPatch），缺的字段按新建号的默认值。
  * 回复方式：有 replyMode 用 replyMode（v0.3.0 导出的 suggest 按 off）；升级前导出的文件只有 autoReply，按 true → auto、false → off 换算；
  * 两个都没有按默认（off）。
- * 唯一的例外是邮件通知：号里开了邮件通知、但这里还没配发信方式时不报错，
- * 而是把它关掉（收件人 to 保留），并在返回项的 notices 里说明，别让一个号拖垮整批导入。
+ * 例外是邮件通知和「用全局代理」：号里开了邮件通知、但这里还没配发信方式时不报错，
+ * 而是把它关掉（收件人 to 保留）；号用全局代理、但这里没开全局代理时，把这个号的代理关掉（选项保留）。
+ * 都在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON
- * @param {{emailReady:boolean}} o
+ * @param {{emailReady:boolean, globalProxyReady?:boolean}} o
  * @returns {{name:string, channel:'waha'|'meta', config:any, notices?:string[]}[]}
  */
-export function parseAccountsExport(doc, { emailReady }) {
+export function parseAccountsExport(doc, { emailReady, globalProxyReady = false }) {
   if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
     throw badRequest('这不是墨鸽导出的号码配置文件（format 应为 inkdove-accounts）', 'bad_format');
   }
@@ -351,7 +372,12 @@ export function parseAccountsExport(doc, { emailReady }) {
         patch = { ...item, notify: { ...item.notify, email: { ...item.notify.email, enabled: false } } };
         notices.push('没配发信方式，已关掉邮件通知');
       }
-      const { name: n, channel, ...config } = applyAccountPatch(draft, patch, { isAdmin: true, emailReady });
+      const px = isPlainObject(item.waha) && isPlainObject(item.waha.proxy) ? item.waha.proxy : null;
+      if (!globalProxyReady && px && px.enabled === true && px.useGlobal === true) {
+        patch = { ...patch, waha: { ...patch.waha, proxy: { ...px, enabled: false } } };
+        notices.push('全局代理没开，已关掉这个号的代理（「用全局代理」的选项保留）');
+      }
+      const { name: n, channel, ...config } = applyAccountPatch(draft, patch, { isAdmin: true, emailReady, globalProxyReady });
       return { name: n, channel, config, ...(notices.length ? { notices } : {}) };
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;

@@ -101,7 +101,10 @@ export function accountsRouter(ctx, auth) {
       } catch {
         throw badRequest('文件不是有效的 JSON', 'bad_format');
       }
-      const items = parseAccountsExport(doc, { emailReady: emailConfigured(ctx.getSettings()) });
+      const items = parseAccountsExport(doc, {
+        emailReady: emailConfigured(ctx.getSettings()),
+        globalProxyReady: ctx.globalProxy.enabled(),
+      });
       const result = accounts.importMany(items);
       ctx.log.info(
         `[accounts] ${req.user.email} 导入了号码配置：新建 ${result.created.length} 个，跳过 ${result.skipped.length} 个`,
@@ -117,6 +120,7 @@ export function accountsRouter(ctx, auth) {
     const next = applyAccountPatch(cur, req.body, {
       isAdmin: req.user.role === 'admin',
       emailReady: emailConfigured(ctx.getSettings()),
+      globalProxyReady: ctx.globalProxy.enabled(),
     });
     const saved = accounts.save(next);
     if (saved.channel === 'waha' && proxyFingerprint(cur) !== proxyFingerprint(saved)) {
@@ -152,13 +156,13 @@ export function accountsRouter(ctx, auth) {
     res.json(await wa.wahaRequestCode(acc, req.body.phoneNumber));
   });
 
-  // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）
+  // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）；用全局代理的号测全局代理（经 mihomo）
   router.post('/:id/proxy/test', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
     if (acc.channel !== 'waha') throw badRequest('这个号不是扫码接入', 'wrong_channel');
     const px = acc.waha.proxy;
     if (!px.enabled) throw new HttpError(400, 'proxy_disabled', '代理没有启用');
-    res.json(await testProxy(px, { url: ctx.proxyTestUrl }));
+    res.json(px.useGlobal ? await ctx.globalProxy.test() : await testProxy(px, { url: ctx.proxyTestUrl }));
   });
 
   router.post('/:id/notify/test', auth.requireAdmin, async (req, res) => res.json(await wa.notifier.test(load(req))));

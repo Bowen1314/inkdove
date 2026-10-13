@@ -12,8 +12,11 @@
 //     （test/media.test.js 的并发回归测试：3 轮 16MB 视频 + 16MB PDF + 28KB 图片，同步写盘版 5/5 崩）。
 // undici 8 修了，但要 Node ≥ 22.19（本机 Node 20），cheerio 还依赖 undici 7，所以不升级；只把媒体下载挪出 undici。
 // 查 Meta 媒体信息那种小 JSON 请求还用 fetch（一次读完，不会卡在暂停状态）。
+//
+// 全局代理（proxy/route.js）开着时，不在直连名单里的地址经它出去（给 request 一个 createConnection）；direct=true 时总是直连。
 import http from 'node:http';
 import https from 'node:https';
+import { createConnectionFor } from '../proxy/route.js';
 
 /** status 为 0：连不上、超时、重定向太多；否则是对方返回的状态码，detail 是 JSON 正文里的 message / error（没有为 null） */
 export class HttpGetError extends Error {
@@ -36,18 +39,18 @@ const ERROR_BODY_MAX = 8 * 1024;
  * 最多跟 maxRedirects 次重定向；跳到别的主机（协议、主机名、端口任一不同）后不再带 Authorization / X-Api-Key。
  * 非 2xx：读一小段正文，只有 JSON 里有 message / error 才放进 detail，抛 HttpGetError{status, detail}。
  * timeoutMs 管整个下载（包括读正文）：没拿到响应前超时抛 HttpGetError('超时')，读正文时超时 stream 以 HttpGetError('下载超时') 出错。
- * signal 中止时抛 / 以 signal.reason 出错。
+ * signal 中止时抛 / 以 signal.reason 出错。direct：不经全局代理（下载机场订阅用）。
  * @param {string} url
- * @param {{headers?: Record<string,string>, timeoutMs?: number, signal?: AbortSignal, maxRedirects?: number}} [o]
+ * @param {{headers?: Record<string,string>, timeoutMs?: number, signal?: AbortSignal, maxRedirects?: number, direct?: boolean}} [o]
  * @returns {Promise<{status:number, headers:import('node:http').IncomingHttpHeaders, stream:import('node:http').IncomingMessage}>}
  */
-export async function httpGet(url, { headers = {}, timeoutMs = 60_000, signal, maxRedirects = 3 } = {}) {
+export async function httpGet(url, { headers = {}, timeoutMs = 60_000, signal, maxRedirects = 3, direct = false } = {}) {
   const timeout = AbortSignal.timeout(timeoutMs);
   const abort = signal ? AbortSignal.any([timeout, signal]) : timeout;
   let current = new URL(url);
   let reqHeaders = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
   for (let hop = 0; ; hop++) {
-    const res = await requestOnce(current, reqHeaders, abort, timeout);
+    const res = await requestOnce(current, reqHeaders, abort, timeout, direct);
     const status = res.statusCode || 0;
     if (REDIRECTS.has(status) && res.headers.location) {
       res.resume(); // 正文不要，读掉放掉连接
@@ -68,7 +71,7 @@ export async function httpGet(url, { headers = {}, timeoutMs = 60_000, signal, m
 }
 
 /** 发一次 GET，拿到响应头就返回 IncomingMessage；abort 时连同响应一起销毁 */
-function requestOnce(u, headers, abort, timeout) {
+function requestOnce(u, headers, abort, timeout, direct) {
   return new Promise((resolve, reject) => {
     const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' ? http : null;
     if (!mod) return reject(new HttpGetError(`不支持的地址：${u.protocol}`));
@@ -84,7 +87,9 @@ function requestOnce(u, headers, abort, timeout) {
     };
     const cleanup = () => abort.removeEventListener('abort', onAbort);
     abort.addEventListener('abort', onAbort, { once: true });
-    req = mod.get(u, { headers }, (r) => {
+    // 每一跳重定向都重新判断走不走代理
+    const createConnection = direct ? null : createConnectionFor(u);
+    req = mod.get(u, createConnection ? { headers, createConnection } : { headers }, (r) => {
       res = r;
       // 还没人读的时候出错（超时、对方断开）不能让进程崩；之后读它的 pipeline / for await 照样拿得到错误
       r.on('error', () => {});

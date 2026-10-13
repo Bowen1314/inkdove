@@ -38,6 +38,7 @@ npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问�
 - 服务只读取 `INKDOVE_` 开头的环境变量，不会读 `LLM_API_KEY`、`OPENAI_API_KEY` 这类通用变量。
 - 如果 `web/dist` 存在，server 会同时托管前端；不存在时只提供接口。
 - 测试里的 WAHA、Meta Graph API、Resend、SMTP（nodemailer 的 jsonTransport）、LLM 接口（三种格式）、HTTP/SOCKS4/SOCKS5 代理和中继的目标服务，都是本地起的假服务。拟真发送的等待时间在测试里注入成 0 或几百毫秒。
+- 全局代理的测试用 `server/test/fake-mihomo.js` 冒充 mihomo（按墨鸽生成的配置起 HTTP CONNECT 代理和控制接口，不连外网），不需要真的 mihomo。本地要试真的全局代理：从 [官方 release](https://github.com/MetaCubeX/mihomo/releases) 下载对应平台的 mihomo（镜像里用的版本见 [deploy.md](deploy.md#全局代理mihomo)），核对 sha256，`INKDOVE_MIHOMO_PATH=/路径/mihomo npm run dev`。
 
 ## 发新版
 

@@ -137,10 +137,10 @@ export async function startRelay(o) {
   };
 }
 
-/** 这个号要不要中继：启用了代理且协议不是 http */
+/** 这个号要不要中继：启用了自己的代理（不是「用全局代理」）且协议不是 http */
 export const needsRelay = (acc) => {
   const px = acc?.waha?.proxy;
-  return !!(acc?.channel === 'waha' && px?.enabled && px.host && px.port && px.protocol !== 'http');
+  return !!(acc?.channel === 'waha' && px?.enabled && !px.useGlobal && px.host && px.port && px.protocol !== 'http');
 };
 
 /**

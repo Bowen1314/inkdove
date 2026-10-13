@@ -2064,10 +2064,12 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * WAHA session 的代理配置（4.5 / F13）。http 上游直接交给 WAHA；https / socks 上游指向 inkdove 的中继。
+   * 「用全局代理」的号指向 inkdove 上 mihomo 的混合端口（和中继一样经 INKDOVE_PROXY_RELAY_HOST 连，账号密码是随机生成的、只有字母数字和 -_）。
    * server 按文档不带协议头；WAHA 把账号密码原样拼进代理 URL，所以先做 URL 编码。
    */
   function wahaProxyFor(acc) {
     const px = acc.waha?.proxy;
+    if (px?.enabled && px.useGlobal) return ctx.globalProxy.wahaProxy();
     if (!px?.enabled || !px.host || !px.port) return null;
     if (needsRelay(acc)) {
       if (!acc.relay) return null;
