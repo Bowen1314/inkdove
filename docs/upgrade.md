@@ -86,3 +86,13 @@
 - 数据库不用手动迁移：启动时自动建 `audit_logs` 表和索引，不改已有的表。
 - 默认保留 365 天，想改就在 `.env` 里加 `INKDOVE_AUDIT_RETENTION_DAYS`（天数，1–36500）。不加也行。
 - 回滚到旧版本不影响：旧版本不认 `audit_logs` 表，照常运行，只是不再记；再升级回来时之前记的还在。
+
+## 升级到首页 AI 助手
+
+- 概览页上方多了「AI 助手」，**所有登录的人默认都能用**：管理员查得到全部数据，业务员只查得到分给自己的会话、线索和有权限的号（规则见[「AI 助手」](features.md#ai-助手)）。只查不改，不会发消息。没配置回复模型时提问会提示先配置，不调任何接口；登录后的首页还是概览，没有变。
+- **会产生模型费用**：用设置里的回复模型，一个问题一般调 3–4 次模型、最多 9 次，每人每天最多问 50 次（改 `server/src/assistant/store.js` 的 `ASSISTANT_DAILY_QUESTIONS`）。调用记在 `llm_calls`，`purpose` 是 `assistant`，看板「模型成本」里叫「助手」；不计入每会话每天 60 次。需要模型或中转支持工具调用（function calling），不支持时只提示、不会乱答。
+- 数据库不用手动迁移，启动时自动建三张表：
+  - `assistant_chats(id, user_id, title, created_at, updated_at)`：每人的对话，每人最多留 100 个；
+  - `assistant_messages(id, chat_id, question, answer, status, steps, refs, error, error_code, llm_calls, tool_calls, created_at, finished_at)`：每一问。`steps` 是查询进度的 JSON，`refs` 是回答里引用的会话、条目、文件（编号、id 和当时的名字）的 JSON；工具调用的原始结果不存；
+  - `assistant_usage(user_id, day, questions)`：每人每天问了几次。
+- 回滚到旧版本不影响：旧版本不认这三张表，照常运行；再升级回来时对话记录还在。

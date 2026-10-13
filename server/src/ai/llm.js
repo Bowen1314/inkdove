@@ -189,9 +189,10 @@ function scrub(text, apiKey) {
 
 /**
  * 发请求、按规则重试、解析 JSON 响应。429、5xx（含 Anthropic 529）和连接错误重试 2 次，指数退避；超时不重试。
+ * 助手的工具调用（ai/tool-call.js）也用它发请求。
  * @param {{url:string, headers:Record<string,string>, body:any, apiKey?:string, timeoutMs:number, signal?:AbortSignal, retryBaseMs?:number}} o
  */
-async function requestJson(o) {
+export async function requestJson(o) {
   const { url, headers, body, apiKey, timeoutMs, signal } = o;
   const retryBase = o.retryBaseMs ?? 1000;
   const maxAttempts = 3;

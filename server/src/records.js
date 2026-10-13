@@ -57,6 +57,10 @@ export const AI_METHOD_PURPOSE = {
   searchTerms: 'kb_search',
   // 可选的向量检索（kb/vectors.js）：后台算条目的一批、检索时算查询向量都记，不计入会话每日模型次数
   embed: 'embedding',
+  // 首页的 AI 助手（assistant/agent.js）：每一步、以及第一次用时检查支不支持工具调用，都记 assistant；不带号和会话，
+  // 不计入会话每日模型次数，按人按天另算（assistant/store.js）
+  assistantStep: 'assistant',
+  assistantProbe: 'assistant',
   test: 'test',
 };
 

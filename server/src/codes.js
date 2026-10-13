@@ -96,6 +96,7 @@ export const LLM_PURPOSES = {
   translate: '翻译',
   kb_search: '知识库检索改写',
   embedding: '向量检索',
+  assistant: '助手',
   test: '测试连接',
 };
 export const purposeLabel = (p) => LLM_PURPOSES[p] ?? p;

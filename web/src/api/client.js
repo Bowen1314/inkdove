@@ -95,6 +95,16 @@ export async function request(method, path, opts = {}) {
 }
 
 const enc = (id) => encodeURIComponent(id);
+/** 浏览器的时区和现在的时间（助手按这个算「今天」） */
+function clientClock() {
+  let tz;
+  try {
+    tz = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    tz = undefined;
+  }
+  return { tz, now: new Date().toISOString() };
+}
 const get = (p, o) => request('GET', p, o);
 const post = (p, body, o) => request('POST', p, { ...o, body: body === undefined ? {} : body });
 const put = (p, body, o) => request('PUT', p, { ...o, body });
@@ -232,6 +242,26 @@ export const api = {
   // 看板（F12，admin）：range 取 today | 7d | 30d；accountId 空为全部号码；tz 是浏览器的 IANA 时区
   /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach}，结构见 SPEC-phase2 F12 */
   getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
+
+  // 首页 AI 助手（所有人都能用，对话只有本人看得到）：提问在后台进行，前端轮询那条消息，直到 status 不是 running
+  /** → {chats:[{id, title, createdAt, updatedAt}]（新到旧）, usage:{used, limit}}（今天问了几次、每天最多几次） */
+  assistantChats: (o) => get('/api/assistant/chats', o),
+  /**
+   * 提问（chatId 空为新对话），带上浏览器的时区和时间（「今天」按这个时区算）→ {chat, message}，message.status 为 running。
+   * 400 llm_not_configured，409 assistant_busy（自己有一个问题还在查），429 assistant_daily_limit
+   */
+  assistantAsk: ({ question, chatId }, o) => post('/api/assistant/ask', { question, chatId, ...clientClock() }, o),
+  /** → {chat, messages}（从早到晚，最多 100 条） */
+  assistantChat: (id, o) => get(`/api/assistant/chats/${enc(id)}`, o),
+  /**
+   * 轮询用 → Message：{id, chatId, question, answer, status: running|done|failed, steps:[{label, status}], refs, error, errorCode, …}。
+   * refs 是回答里 [[c1]] 这类标记对应的对象 {key, kind: conversation|entry|file, id, available, name?, accountName?, entry?, file?}
+   */
+  assistantMessage: (chatId, messageId, o) => get(`/api/assistant/chats/${enc(chatId)}/messages/${enc(messageId)}`, o),
+  /** 重答这个对话里最后一个没答成的问题（算一次提问）→ Message */
+  assistantRetry: (chatId, o) => post(`/api/assistant/chats/${enc(chatId)}/retry`, clientClock(), o),
+  /** 删掉自己的一个对话（正在查的会停下）。删了不退今天的次数 */
+  assistantDeleteChat: (id, o) => del(`/api/assistant/chats/${enc(id)}`, o),
 
   // 在线更新（admin）
   /**
