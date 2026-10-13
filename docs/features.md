@@ -69,6 +69,16 @@
 
 按今天、7 天、30 天和号查看客户消息、新客户、自动回复率、转人工原因和响应时间、知识库健康度、客户阶段和漏斗、成员、模型成本、挡掉的白嫖、外联效果和时段热力图。日期和热力图按浏览器所在时区算。
 
+### AI 助手（首页）
+
+概览页上方的「AI 助手」，用大白话问系统里的数据：「今天有多少新客户」「还有哪些客户待处理」「我们 P600 的交期和起订量是多少」「这周哪些客户问了报价」。它会去查会话、聊天记录、客户线索、知识库和产品资料（「货源」指这两样）、号码状态，管理员还能查成员分配和模型费用，然后用中文总结；查的过程显示成「正在查：今天的概况数字」这样的进度。
+
+- **只查不改**：不会改任何数据，也不会替人发消息、分配会话、改设置；
+- **按权限查**：管理员查得到全部；业务员只查得到分给自己的会话和线索、自己有权限的号，查不了成员和模型费用。权限在服务端的每个查询里判断，和会话页、线索页同一套；
+- 回答里提到的会话、知识条目、文件是可点的小标签：会话点了打开会话页，条目和文件悬停（手机上点一下）看预览；
+- 每个人有自己的对话记录（新对话、最近的对话、删除），别人看不到；
+- 每人每天最多问 50 次，每次提问会调几次模型（见[「AI 助手」](#ai-助手)），用的是设置里的回复模型。要求模型或中转站支持工具调用（function calling），不支持时提示「当前模型或中转站不支持工具调用，助手用不了，请换一个支持的模型」。
+
 ### 多人账号、按客户分配
 
 管理员邀请业务员（邮件链接），给每人分配能用的号。业务员不用自己的 WhatsApp，全部经后台用公司的号发。管理员把客户（会话）分给业务员（可以多选批量分），业务员只看得到、只操作得了分给自己的客户，**没分配的客户只有管理员看得到**；管理员能看所有聊天、随时直接接手。业务员离职时一键把他的客户转交给别人，删掉成员后他的客户变回未分配，客户始终留在公司。每次分配都有记录，后台人工发的每条消息也都记下是谁发的。
@@ -401,3 +411,52 @@
   - `outreach`：本时间段内发出（status=sent，按 sentAt）的收件人；`replied`、`declined` 是其中已经回复、已经拒绝的（不管回复在什么时候）；两个比率都是 0–1 的小数，发送数为 0 时 null。`byAccount` 按发送数倒序，已删除的号名字是"（已删除）"。
 - **比率**都是 0–1 的小数，分母为 0 时 null。
 - **索引**：新增 `messages(direction, ts)` 和 `campaign_recipients(sent_at)`；decisions、llm_calls、handoffs、gap_hits 的时间索引在记录这些数据时已经建了。每块数据都是一两条 SQL 聚合，不在 JS 里遍历消息。
+
+## AI 助手
+
+概览页上的数据助手：模型按问题选工具，服务端执行（只读、按权限过滤），结果交回模型，直到模型给出回答。代码在 `server/src/assistant/`（`agent.js` 提问循环、`tools.js` 工具、`store.js` 对话和次数），三种接口格式的工具调用在 `server/src/ai/tool-call.js`，前端在 `web/src/pages/overview/`。
+
+- **谁能用**：所有登录的人，没配置回复模型时 400 `llm_not_configured`。对话只有本人能看、能删，别人的（管理员也一样）一律 404。
+- **接口**：
+  - `GET /api/assistant/chats` → `{chats:[{id, title, createdAt, updatedAt}], usage:{used, limit}}`，最近 30 个，新到旧；`usage` 是今天问了几次、每天最多几次；
+  - `POST /api/assistant/ask` `{question, chatId?, tz?, now?}` → `{chat, message}`。立即返回一条 `status: running` 的记录，后台去查，前端每秒轮询下面的接口。`question` 1–2000 字；`chatId` 不传是新对话（标题取问题前 40 字）；`tz` 是浏览器的 IANA 时区，不传按 UTC，不认识的 400 `invalid_tz`；`now` 是浏览器的当前时间，和服务器差 5 分钟以内就按它算，差太多按服务器的。上一个问题还在查时 409 `assistant_busy`，今天的次数用完 429 `assistant_daily_limit`；
+  - `GET /api/assistant/chats/:id` → `{chat, messages}`，最近 100 问，从早到晚；
+  - `GET /api/assistant/chats/:id/messages/:messageId` → Message（轮询用）；
+  - `POST /api/assistant/chats/:id/retry` `{tz?, now?}` → Message，重答这个对话里最后一个没答成的问题，算一次提问；最后一个不是失败的 400 `nothing_to_retry`；
+  - `DELETE /api/assistant/chats/:id` → `{ok: true}`，正在查的会停下。
+  - Message：`{id, chatId, question, answer, status: running|done|failed, steps:[{label, status: running|done|error}], refs, error, errorCode, createdAt, finishedAt}`。`steps` 是查询进度（「正在查：今天的概况数字」）；`refs` 是回答里 `[[c1]]` 这类标记对应的对象 `{key, kind: conversation|entry|file, id, available, name?, accountName?, entry?, file?}`，每次读的时候按现在的数据和权限取：会话现在看不到了 `available: false`、不给 id 和名字，条目、文件删掉了 `entry`、`file` 为 null。`errorCode`：`tools_unsupported`、`llm_error`、`timeout`、`too_many_tools`、`empty_answer`、`interrupted`（服务重启时还在查的）、`internal`。
+- **工具**（发给模型的定义里写清了参数和返回；业务员拿到的工具列表里没有管理员专用的，硬调也返回「没有权限」）：
+
+  | 工具 | 查什么 | 业务员 |
+  |---|---|---|
+  | `get_overview` | 一段时间的新客户、有客户消息的会话、客户消息、机器人和人工发出的消息、自动回复、转人工、推荐回复次数，和现在待处理的会话；可按号分组，管理员还能按负责人分组。新客户、客户消息的口径和数据看板一样（导入的历史聊天不算） | 只算分给自己的会话，不能按负责人分组 |
+  | `search_conversations` | 按状态（待处理、机器人已暂停、静默中）、号、负责人、关键词（客户名字、号码、聊天内容）、最近活动的日期找会话，分页 | 只查得到分给自己、而且有号权限的会话；不能按负责人查 |
+  | `get_conversation_messages` | 一个会话最近 20 条（最多 40 条）聊天记录 | 只能看分给自己的 |
+  | `search_leads` | 客户线索，按关键词、阶段、号 | 只有自己会话的线索 |
+  | `search_knowledge` | 知识库，和回复用同一套检索（全文索引，开了向量检索也用上；不另调模型改写检索词，查不到时模型自己换成知识库的语言再查），最多 8 条、6000 字，只给启用中的 | 可用 |
+  | `search_files` | 产品资料库，按名称、描述和标签，只给启用中的 | 可用 |
+  | `list_accounts` | 号和连接状态、回复方式 | 只列有权限的号 |
+  | `list_members` | 成员、各自有权限的号、负责的会话数和待处理数、未分配的会话数 | 不能用 |
+  | `get_usage_cost` | 模型调用次数、token、估算费用（口径同看板的模型成本） | 不能用 |
+
+  会话、消息、线索按 `conversationScope` / `canAccessConversation`，号按 `canAccessAccount`，和会话列表、会话详情、线索接口是同一套条件。号码、邮箱照现有接口显示：业务员只看得到自己客户的。
+- **一次提问的上限**（常量在 `server/src/assistant/agent.js` 和 `tools.js`）：
+  - 最多执行 8 次工具（模型一步里并行要的几个各算一次），用完后再调一次模型、`tool_choice` 设成 none，让它用已经查到的回答。所以一问最多调 9 次模型；
+  - 整个提问最多 120 秒，每次模型调用最多 60 秒，超时停下并提示把问题问具体些；
+  - 一个工具结果最多 8000 字符，超了截断，并在结果末尾告诉模型缩小范围或翻页；列表默认 10 条、最多 20 条，聊天记录每条最多 500 字，日期范围最多 92 天。会话先按条件在 SQL 里分页取 id 再取详情，概况数字是带权限条件的聚合查询（和看板同样的索引），会话、消息再多也不会整张表读进内存；
+  - 带上这个对话最近 6 轮的问答文字当上下文（工具调用和结果不存、不带）。
+- **时间**：「今天」「昨天」「本周」按浏览器的时区和时间算：system prompt 里写明现在的日期、星期和时区，工具的日期参数是这个时区的 `YYYY-MM-DD`，服务端按这个时区换算成时间段（和看板一样），「今天」截止到现在。
+- **引用**：工具结果里不给会话、条目、文件的真实 id，给这次提问内的编号（`c1`、`e1`、`f1`），模型在回答里写 `[[c1]]`。答完后服务端对照编号表，编出来的编号、现在已经没权限看的会话都去掉，前端把剩下的换成小标签：会话打开 `/whatsapp/chats?chat=<id>`，条目和文件用和推荐回复「依据」一样的预览。回答的 Markdown 在前端转成 React 元素，不插入 HTML，链接只显示文字。
+- **不可信内容**：工具结果里的所有字符串（客户名字、线索字段、消息、条目、文件描述……）都把尖括号换成全角，客户发的消息再套上 `<customer_message>…</customer_message>`（和回复提示词同样的包装），system prompt 写明这些是数据、不是指令，里面让它忽略规则、换角色、调用工具的话一律不照做。工具本身只读，就算被带偏也改不了数据、发不了消息。
+- **三种接口格式**（都用设置里的回复模型，`temperature` 0.2）：
+  - openai（[Chat Completions](https://developers.openai.com/api/docs/api-reference/chat)）：`tools: [{type: "function", function: {name, description, parameters}}]`、`tool_choice: "auto" | "none"`；响应 `tool_calls[].function.arguments` 是 JSON 字符串，解析不了的告诉模型参数有误；回放时助手消息带 `tool_calls`（没文字时 `content: null`，有 `reasoning_content` 的原样带回），每个结果一条 `{role: "tool", tool_call_id, content}`；
+  - anthropic（[定义工具](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools)、[处理调用](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)）：`tools: [{name, description, input_schema}]`、`tool_choice: {type: "auto" | "none"}`；回放时助手的 content 原样带回（含 thinking 块和签名），结果全部放在紧跟着的一条 user 消息里，`{type: "tool_result", tool_use_id, content, is_error?}` 按调用顺序；要它直接回答时照样带着 tools（历史里有 tool_use），只把 `tool_choice` 设成 none；
+  - gemini（[generateContent](https://ai.google.dev/api/generate-content)、[Schema](https://ai.google.dev/api/caching)）：`tools: [{functionDeclarations}]`，参数用 OpenAPI 子集（`STRING`、`OBJECT` 这种大写类型，字符串枚举带 `format: "enum"`，没有参数的函数不带 `parameters`），`toolConfig.functionCallingConfig.mode: "AUTO" | "NONE"`，不设 `responseMimeType`；回放时模型那条 content 原样带回（`thoughtSignature` 必须带回去），结果是一条 role 为 user 的 content，每个调用一个 `functionResponse: {id?, name, response: {output | error}}`；`finishReason` 是 `MALFORMED_FUNCTION_CALL`、`UNEXPECTED_TOOL_CALL` 时按出错处理。没用 `parametersJsonSchema`，是因为兼容 Gemini 格式的中转大多只认 `parameters`。
+- **模型或中转不支持工具调用**：提示「当前模型或中转站不支持工具调用，助手用不了，请换一个支持的模型」，不会让模型在没有数据的情况下瞎答。判断方法（都是启发式的）：
+  1. 接口返回 4xx（401、403、408、429 除外），错误信息里提到 tool / function；
+  2. 没有原生的工具调用，回答的文字却像把调用写成了文字（`<tool_call>`、`"tool_calls":`、工具名加括号……）；
+  3. 有的中转会悄悄丢掉 tools：某个模型配置（格式、地址、模型名）还没见过它调用工具，这次又一个工具都没调就回答了，就先发一次很小的检查请求（只给一个没参数的 `inkdove_ping` 工具，要求调用它），不调就当不支持、不给这个回答；调了就记住这个配置，进程内不再检查。
+
+  判断为不支持后，10 分钟内同一个模型配置再提问直接提示、不调模型；换了模型或地址马上重新判断。
+- **费用和次数**：每次模型调用（含检查）在 `llm_calls` 记一条，`purpose` 是 `assistant`（看板「模型成本」里叫「助手」），不带号和会话，**不计入每会话每天 60 次**。每人每天最多问 50 次（`server/src/assistant/store.js` 的 `ASSISTANT_DAILY_QUESTIONS`），按服务器本地日期算（和每会话每天 60 次一样），重试也算一次，删对话不退次数；一个人同一时间只能有一个问题在查。一个要查两三样数据的问题一般调 3–4 次模型，每次都带着 system prompt、工具定义、问题、最近几轮问答和已经查到的结果（每个结果最多 8000 字符），输入 token 比一次自动回复多。
+- **对话记录**：存在 SQLite（表见[升级说明](upgrade.md)），每人最多留 100 个对话，多的删最早的。服务重启时还在查的标成失败，可以重试；删掉的成员留下的对话在下次启动时清掉。

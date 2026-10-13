@@ -451,6 +451,46 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
 );
 CREATE INDEX IF NOT EXISTS embeddings_model ON embeddings(model_key, kind);
 `);
+
+  // ---- 首页的 AI 助手（读写见 assistant/store.js） ----
+  // assistant_chats：每人自己的对话，只有本人看得到、删得掉；title 取第一个问题的前 40 字。每人最多留 100 个，多的删最早的。
+  // assistant_messages：一问一答一行。status：running（还在查）| done | failed；steps 是查询进度 [{label, status}]（JSON）；
+  //   refs 是回答里引用的会话、知识条目和文件 [{key, kind, id, label}]（JSON，key 是回答里的 [[c1]] 这类标记）；
+  //   llm_calls、tool_calls 是这一问调了几次模型、几次工具。进程重启时还在 running 的标成 failed。
+  // assistant_usage：每人每天问了几次（day 是服务器本地日期），删掉对话也不退次数。
+  // 删掉的成员留下的对话在启动时清掉
+  db.exec(`
+CREATE TABLE IF NOT EXISTS assistant_chats (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS assistant_chats_user ON assistant_chats(user_id, updated_at);
+CREATE TABLE IF NOT EXISTS assistant_messages (
+  id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT,
+  status TEXT NOT NULL,
+  steps TEXT NOT NULL DEFAULT '[]',
+  refs TEXT NOT NULL DEFAULT '[]',
+  error TEXT,
+  error_code TEXT,
+  llm_calls INTEGER NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS assistant_messages_chat ON assistant_messages(chat_id, created_at);
+CREATE TABLE IF NOT EXISTS assistant_usage (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  questions INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
+`);
 }
 
 /**

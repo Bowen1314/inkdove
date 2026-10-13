@@ -4,6 +4,7 @@
 @import './layout.css';
 @import './pages/chats.css';
 @import './pages/overview.css';
+@import './pages/assistant.css';
 @import './pages/dashboard.css';
 @import './pages/knowledge.css';
 @import './pages/redteam.css';

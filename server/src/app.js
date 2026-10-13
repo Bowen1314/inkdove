@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAccountStore, migrateLegacy } from './accounts.js';
+import { createAssistant } from './assistant/store.js';
 import { canAccessAccount, createAuth } from './auth.js';
 import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
@@ -21,6 +22,7 @@ import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
 import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
+import { assistantRouter } from './routes/assistant.js';
 import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { distillRouter } from './routes/distill.js';
@@ -82,8 +84,11 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   webDist?: string,
  *   translateEndpoints?: Record<string, string>,
  *   translateTimeoutMs?: number,
+ *   assistantNow?: () => number,
+ *   assistantLimits?: {maxToolCalls?: number, runTimeoutMs?: number, stepTimeoutMs?: number},
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
+ *   assistantNow、assistantLimits：测试用，首页 AI 助手的时钟和循环上限（工具次数、总时长、每步时长）
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -134,6 +139,7 @@ export function createApp(config, options = {}) {
     outreach: null,
     redteam: null,
     dashboard: null,
+    assistant: null,
   };
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
@@ -173,6 +179,8 @@ export function createApp(config, options = {}) {
   ctx.redteam = createRedteamRunner(ctx);
   // F12：管理员数据看板（只读已经记下的数据）。dashboardNow 是测试用的时钟
   ctx.dashboard = createDashboard(ctx, { now: options.dashboardNow });
+  // 首页的 AI 助手：只读地查数据回答问题（assistant/）。进程重启时还在答的问题标成失败
+  ctx.assistant = createAssistant(ctx, { now: options.assistantNow, limits: options.assistantLimits });
   // 在线更新：启动 1 分钟后查一次 GitHub 最新发布，之后每 6 小时一次。githubApiUrl、updateNow 是测试用的，updateCheckIntervalMs 为 0 时不启动定时检查
   ctx.update = createUpdateService(ctx, { version: VERSION, githubApiUrl: options.githubApiUrl, now: options.updateNow });
   ctx.update.start(options.updateFirstCheckMs, options.updateCheckIntervalMs);
@@ -257,6 +265,7 @@ export function createApp(config, options = {}) {
   api.use('/wa', waRouter(ctx));
   api.use('/leads', leadsRouter(ctx));
   api.use('/campaigns', campaignsRouter(ctx));
+  api.use('/assistant', assistantRouter(ctx));
   api.use(() => {
     throw new HttpError(404, 'not_found', '接口不存在');
   });
@@ -300,6 +309,7 @@ export function createApp(config, options = {}) {
     /** 代理中继都拉起来之后 resolve（测试用） */
     ready,
     async close() {
+      await ctx.assistant.close();
       await ctx.vectors.close();
       ctx.leads.stop();
       await ctx.outreach.stop();
