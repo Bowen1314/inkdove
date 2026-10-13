@@ -1,4 +1,4 @@
-// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）。
+// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）、一键翻译。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ import {
   checkEmbeddingPatch,
   checkLlmBaseUrl,
   checkLlmFormat,
+  checkTranslationProviderPatch,
   emailConfigured,
   llmConfigured,
   logoMeta,
@@ -18,6 +19,8 @@ import {
   resolveEmbeddingConfig,
   str,
 } from '../settings.js';
+import { redact } from '../translate/common.js';
+import { callTranslationProvider, FIELD_LABELS, getTranslationProvider, missingField, redactOptsOf } from '../translate/index.js';
 import { badRequest, HttpError, isPlainObject, notFound } from '../util.js';
 
 const MAX_LOGO_BYTES = 512 * 1024;
@@ -26,6 +29,8 @@ const EMBED_TEST_TEXT = '你好，请问这款产品的价格和交货期是多�
 /** 测试向量接口最多等多久 */
 const EMBED_TEST_TIMEOUT_MS = 20_000;
 const LOGO_TYPE_MESSAGE = '只支持 PNG、JPG、WebP 或 SVG 图片';
+/** 测试翻译接口时译成英语的那段话 */
+const TRANSLATION_TEST_TEXT = '你好，很高兴认识你。请问这款产品的价格和交货期是多少？';
 
 /** logo 文件所在目录 */
 export const brandingDir = (config) => path.join(config.dataDir, 'branding');
@@ -198,6 +203,37 @@ export function settingsRouter(ctx) {
     } catch (err) {
       // embed.js 已经抹过密钥，这里再兜一次底
       res.json({ ok: false, error: redactKey(err?.message || err, cfg.apiKey), kind: typeof err?.kind === 'string' ? err.kind : 'error' });
+    }
+  });
+
+  // 测试翻译接口：用表单里的值（没填的密钥用已保存的），把一段固定的中文译成英语。不保存设置。
+  // 请求体 {provider, config:{字段: 值}}；返回 {ok:true, text, detectedSource, latencyMs} 或 {ok:false, error, kind, field?}
+  router.post('/translation/test', async (req, res) => {
+    const b = isPlainObject(req.body) ? req.body : {};
+    const provider = getTranslationProvider(b.provider);
+    if (!provider) throw badRequest('translation.provider 不认识，请先选一家翻译服务');
+    const saved = ctx.getSettings().translation.providers[provider.id];
+    const cfg = checkTranslationProviderPatch(provider.id, saved, b.config === undefined ? {} : b.config);
+    const missing = missingField(provider.id, cfg);
+    if (missing) {
+      res.json({ ok: false, error: `还没有填 ${provider.label} 的 ${FIELD_LABELS[missing] || missing}`, kind: 'config', field: missing });
+      return;
+    }
+    const started = Date.now();
+    try {
+      const r = await callTranslationProvider(ctx, { purpose: 'test' }, 'translate', provider.id, cfg, {
+        text: TRANSLATION_TEST_TEXT,
+        source: 'auto',
+        target: 'en',
+      });
+      res.json({ ok: true, text: String(r.text ?? ''), detectedSource: r.detectedSource || null, latencyMs: Date.now() - started });
+    } catch (err) {
+      // 各家已经抹过密钥，这里再兜一次底
+      res.json({
+        ok: false,
+        error: redact(err?.message || err, redactOptsOf(provider.id, cfg)),
+        kind: typeof err?.kind === 'string' ? err.kind : 'error',
+      });
     }
   });
 

@@ -381,6 +381,21 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
       pricing: [],
       outreach: { dailyCapPerAccount: 30, minIntervalSeconds: 90, maxIntervalSeconds: 240, windowStart: '09:00', windowEnd: '20:00' },
       suggest: { companyPrompt: '' },
+      translation: {
+        mode: 'ai',
+        provider: 'deepl',
+        fallbackToAi: true,
+        providers: {
+          deepl: { ready: false, apiKeySet: false, apiKeyLast4: null },
+          deeplx: { ready: false, urlSet: false, urlDisplay: '', tokenSet: false, tokenLast4: null },
+          azure: { ready: false, apiKeySet: false, apiKeyLast4: null, region: '', endpoint: '' },
+          google: { ready: false, apiKeySet: false, apiKeyLast4: null },
+          tencent: { ready: false, secretIdSet: false, secretIdLast4: null, secretKeySet: false, secretKeyLast4: null, region: 'ap-guangzhou' },
+          baidu: { ready: false, appIdSet: false, appIdLast4: null, appKeySet: false, appKeyLast4: null },
+          volcengine: { ready: false, accessKeyIdSet: false, accessKeyIdLast4: null, secretAccessKeySet: false, secretAccessKeyLast4: null },
+          libretranslate: { ready: false, url: '', apiKeySet: false, apiKeyLast4: null },
+        },
+      },
       webhookBase: 'https://kb.example.com',
     });
   });

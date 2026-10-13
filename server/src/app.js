@@ -80,7 +80,10 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   canary?: string,
  *   proxyTestUrl?: string,
  *   webDist?: string,
+ *   translateEndpoints?: Record<string, string>,
+ *   translateTimeoutMs?: number,
  * }} [options]
+ *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -97,6 +100,10 @@ export function createApp(config, options = {}) {
     // 金丝雀串：每次进程启动随机生成，埋进 system prompt，用来发现提示词泄露
     canary: options.canary || `INKDOVE-${crypto.randomBytes(6).toString('hex')}`,
     proxyTestUrl: options.proxyTestUrl || PROXY_TEST_URL,
+    // 一键翻译用翻译接口时：测试可以把各家的地址指到本地假服务；每个会话判断出的客户语言记在进程里（wa/translate.js）
+    translateEndpoints: options.translateEndpoints || {},
+    translateTimeoutMs: options.translateTimeoutMs,
+    translationLanguages: new Map(),
     getSettings: () => settings,
     setSettings(next) {
       saveSettings(db, next);

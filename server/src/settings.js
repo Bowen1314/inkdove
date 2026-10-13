@@ -1,5 +1,13 @@
-// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
+import {
+  FIELD_LABELS,
+  getTranslationProvider,
+  missingField,
+  providerDefaults,
+  publicProviders,
+  TRANSLATION_PROVIDER_IDS,
+} from './translate/index.js';
 import { badRequest, isPlainObject } from './util.js';
 
 export const DEFAULT_META_API_VERSION = 'v26.0';
@@ -10,6 +18,10 @@ export const EMBEDDING_SOURCES = ['llm', 'custom'];
 /** 向量接口的格式（Anthropic 没有向量接口） */
 export const EMBEDDING_FORMATS = ['openai', 'gemini'];
 export const EMBEDDING_DEFAULTS = Object.freeze({ enabled: false, source: 'llm', format: 'openai', baseUrl: '', apiKey: '', model: '' });
+/** 会话输入框一键翻译的方式：ai 用回复模型翻译（默认，升级后不变），api 用翻译接口（translate/） */
+export const TRANSLATION_MODES = ['ai', 'api'];
+/** 选「翻译 API」时默认显示哪家 */
+export const DEFAULT_TRANSLATION_PROVIDER = 'deepl';
 
 /** @param {import('./config.js').Config} config */
 function defaults(config) {
@@ -47,6 +59,9 @@ function defaults(config) {
     outreach: { ...OUTREACH_DEFAULTS },
     // 推荐回复：公司话术要求（所有业务员共用），拼进起草推荐回复的提示词
     suggest: { companyPrompt: '' },
+    // 一键翻译：mode 是 ai（用回复模型）或 api（用 provider 这家翻译接口）；每家的配置分开存，换来换去不丢；
+    // fallbackToAi：翻译接口出错时改用 AI 翻译（回复模型配好了才行）
+    translation: { mode: 'ai', provider: DEFAULT_TRANSLATION_PROVIDER, fallbackToAi: true, providers: providerDefaults() },
   };
 }
 
@@ -195,6 +210,15 @@ export function loadSettings(db, config) {
   if (!EMBEDDING_SOURCES.includes(em.source)) em.source = EMBEDDING_DEFAULTS.source;
   if (!EMBEDDING_FORMATS.includes(em.format)) em.format = EMBEDDING_DEFAULTS.format;
   for (const k of ['baseUrl', 'apiKey', 'model']) if (typeof em[k] !== 'string') em[k] = '';
+  // 存坏了的翻译设置：字段逐个回到默认值（不认识的方式回到 AI 翻译）
+  const tr = s.translation;
+  if (!TRANSLATION_MODES.includes(tr.mode)) tr.mode = 'ai';
+  if (!TRANSLATION_PROVIDER_IDS.includes(tr.provider)) tr.provider = DEFAULT_TRANSLATION_PROVIDER;
+  if (typeof tr.fallbackToAi !== 'boolean') tr.fallbackToAi = true;
+  const pd = providerDefaults();
+  for (const [id, fields] of Object.entries(pd)) {
+    for (const [k, v] of Object.entries(fields)) if (typeof tr.providers[id][k] !== 'string') tr.providers[id][k] = v;
+  }
   return s;
 }
 
@@ -278,6 +302,12 @@ export function publicSettings(s, config) {
     pricing: s.pricing.map((p) => ({ ...p })),
     outreach: { ...s.outreach },
     suggest: { companyPrompt: s.suggest.companyPrompt },
+    translation: {
+      mode: s.translation.mode,
+      provider: s.translation.provider,
+      fallbackToAi: s.translation.fallbackToAi,
+      providers: publicProviders(s.translation.providers),
+    },
     webhookBase: config.publicBaseUrl,
   };
 }
@@ -356,6 +386,87 @@ export function resolveEmbeddingConfig(s) {
   }
   if (!model) return { ok: false, error: '还没有填写向量模型', field: 'model' };
   return { ok: true, ...cfg, model };
+}
+
+/**
+ * 一家翻译服务的配置字段校验。设置保存和测试接口共用。
+ * - 密钥（secret、secretUrl）：不给或空串（去掉首尾空白后）表示不改，null 表示清空。和回复模型的密钥不同（那边空串就是清空），
+ *   因为设置页的密钥框留空就是「不改」，清空走单独的按钮；
+ * - 其他字段：不给表示不改，空串或 null 表示清空；
+ * - 地址必须是 http(s)；密钥只能是可见 ASCII（否则拼请求头会出错）；区域按各家的格式。
+ * 错误信息以 translation.providers.<服务>.<字段> 开头，前端靠它把错误放到对应字段下面；信息里不带填的值（可能是密钥）。
+ * @param {string} id 服务
+ * @param {Record<string,string>} current 现在的配置
+ * @param {unknown} p 要改的字段
+ * @returns 改好的完整配置（不改动入参）
+ */
+export function checkTranslationProviderPatch(id, current, p) {
+  const provider = getTranslationProvider(id);
+  if (!provider) throw badRequest(`translation.provider 不认识：${String(id).slice(0, 40)}`);
+  const at = `translation.providers.${id}`;
+  if (!isPlainObject(p)) throw badRequest(`${at} 必须是对象`);
+  const out = { ...current };
+  for (const f of provider.fields) {
+    const v = p[f.key];
+    const field = `${at}.${f.key}`;
+    if (v === undefined) continue;
+    const secret = f.type === 'secret' || f.type === 'secretUrl';
+    if (v === null) {
+      out[f.key] = '';
+      continue;
+    }
+    const s = str(v, field, f.max).trim();
+    if (!s) {
+      if (!secret) out[f.key] = '';
+      continue;
+    }
+    if (f.type === 'url' || f.type === 'secretUrl') out[f.key] = checkBaseUrl(s, field);
+    else {
+      if (f.type === 'secret' && !/^[\x21-\x7e]+$/.test(s)) throw badRequest(`${field} 里有空格、中文或其他特殊字符，请检查后重新填写`);
+      if (f.pattern && !f.pattern.test(s)) throw badRequest(`${field} 格式不对`);
+      out[f.key] = s;
+    }
+  }
+  return out;
+}
+
+/**
+ * 翻译设置的校验（不做「选了翻译 API 时这家必须配好」的交叉检查，那个在 applySettingsPatch 里）。
+ * @param {any} current 现在的 translation 设置
+ * @param {unknown} p 要改的字段；providers 里只给要改的服务、要改的字段
+ */
+export function checkTranslationPatch(current, p) {
+  if (!isPlainObject(p)) throw badRequest('translation 必须是对象');
+  const t = { ...current, providers: { ...current.providers } };
+  if (p.mode !== undefined) {
+    if (!TRANSLATION_MODES.includes(p.mode)) throw badRequest('translation.mode 只能是 ai（AI 翻译）或 api（翻译 API）');
+    t.mode = p.mode;
+  }
+  if (p.provider !== undefined) {
+    if (!TRANSLATION_PROVIDER_IDS.includes(p.provider)) throw badRequest(`translation.provider 只能是 ${TRANSLATION_PROVIDER_IDS.join('、')}`);
+    t.provider = p.provider;
+  }
+  if (p.fallbackToAi !== undefined) t.fallbackToAi = boolField(p.fallbackToAi, 'translation.fallbackToAi');
+  if (p.providers !== undefined) {
+    if (!isPlainObject(p.providers)) throw badRequest('translation.providers 必须是对象');
+    // 不认识的服务忽略（和别的设置一样）
+    for (const id of TRANSLATION_PROVIDER_IDS) {
+      if (p.providers[id] !== undefined) t.providers[id] = checkTranslationProviderPatch(id, t.providers[id], p.providers[id]);
+    }
+  }
+  return t;
+}
+
+/**
+ * 选了「翻译 API」时这家服务还缺什么：{field, message}，都填好了返回 null。
+ * @param {any} translation settings.translation
+ */
+export function translationProviderProblem(translation) {
+  const provider = getTranslationProvider(translation.provider);
+  if (!provider) return { field: 'provider', message: '还没有选翻译服务' };
+  const field = missingField(provider.id, translation.providers[provider.id]);
+  if (!field) return null;
+  return { field, message: `还没有填 ${provider.label} 的 ${FIELD_LABELS[field] || field}` };
 }
 
 export const BRAND_TITLE_MAX = 40;
@@ -488,6 +599,17 @@ export function applySettingsPatch(current, patch) {
     const p = patch.suggest;
     if (!isPlainObject(p)) throw badRequest('suggest 必须是对象');
     if (p.companyPrompt !== undefined) s.suggest.companyPrompt = str(p.companyPrompt, 'suggest.companyPrompt', MAX_COMPANY_PROMPT);
+  }
+  // 一键翻译。选了翻译 API 时，这家服务的必填字段要填好（只在这次改动涉及 translation 时检查）
+  if (patch.translation !== undefined) {
+    s.translation = checkTranslationPatch(s.translation, patch.translation);
+    if (s.translation.mode === 'api') {
+      const problem = translationProviderProblem(s.translation);
+      if (problem) {
+        const at = problem.field === 'provider' ? 'translation.provider' : `translation.providers.${s.translation.provider}.${problem.field}`;
+        throw badRequest(`${at} 选「翻译 API」时要先填好：${problem.message}`, 'translation_provider_not_configured');
+      }
+    }
   }
   return s;
 }

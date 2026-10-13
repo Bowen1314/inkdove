@@ -42,6 +42,7 @@ import {
   leadStageLabel,
   replyModeOf,
   suggestErrorText,
+  translationProviderLabel,
 } from '../../lib/labels.js';
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
@@ -695,7 +696,15 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
       // 翻译期间输入框只读，但"填入输入框"仍可能换掉内容；换过就不覆盖
       if (textRef.current !== original) return;
       setText(res.text);
-      setStatus(res.text === original.trim() ? `原文已是${res.language}，没有改动` : `已翻译为 ${res.language}`);
+      // via：ai 或翻译服务；fallbackReason：翻译接口出错、这次改用了 AI 翻译的原因（状态一行放不下，完整原因另弹提示）
+      if (res.fallbackReason) {
+        setStatus(`翻译接口出错，这次用 AI 翻译为 ${res.language}`);
+        toast.info(`翻译接口出错，这次改用 AI 翻译：${res.fallbackReason}`, 8000);
+      } else if (res.text === original.trim()) {
+        setStatus(`原文已是${res.language}，没有改动`);
+      } else {
+        setStatus(`已翻译为 ${res.language}${res.via && res.via !== 'ai' ? ` · ${translationProviderLabel(res.via)}` : ''}`);
+      }
       setTimeout(() => {
         const el = inputRef.current;
         if (el) {

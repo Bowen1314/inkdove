@@ -7,6 +7,7 @@ import LlmSection from './LlmSection.jsx';
 import EmbeddingSection from './EmbeddingSection.jsx';
 import ReplySettingsSection from './ReplySettingsSection.jsx';
 import SuggestSection from './SuggestSection.jsx';
+import TranslationSection from './TranslationSection.jsx';
 import MediaSection from './MediaSection.jsx';
 import LeadsSection from './LeadsSection.jsx';
 import EmailSection from './EmailSection.jsx';
@@ -21,6 +22,7 @@ const NAV = [
   { to: '/settings/embedding', label: '向量检索' },
   { to: '/settings/reply', label: '回复' },
   { to: '/settings/suggest', label: '推荐回复' },
+  { to: '/settings/translation', label: '翻译' },
   { to: '/settings/media', label: '语音和图片' },
   { to: '/settings/leads', label: '客户线索' },
   { to: '/settings/email', label: '发信方式' },
@@ -30,7 +32,7 @@ const NAV = [
   { to: '/settings/version', label: '版本' },
 ];
 
-const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
+const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'translation', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -90,6 +92,7 @@ export default function SettingsPage() {
         <Route path="embedding" element={<EmbeddingSection {...props} />} />
         <Route path="reply" element={<ReplySettingsSection {...props} />} />
         <Route path="suggest" element={<SuggestSection {...props} />} />
+        <Route path="translation" element={<TranslationSection {...props} />} />
         <Route path="media" element={<MediaSection {...props} />} />
         <Route path="leads" element={<LeadsSection {...props} />} />
         <Route path="email" element={<EmailSection {...props} />} />

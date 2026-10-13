@@ -54,7 +54,7 @@
 - 通知渠道：WhatsApp（由这个号发给你指定的号码）和邮件（SMTP 或 Resend API，全局配置一次）；
 - 转人工时先替你起草一条回复（可能带建议发送的文件），附在通知里，**不会自动发给客户**；
 - 在 WhatsApp 里**引用通知直接回复**，内容就会转发给客户；`/d` 发送草稿（文字和文件），`/resume` 恢复机器人。
-- 会话页输入框旁的「翻译」按钮把你写的话直译成这位客户的语言（按客户最近的文字消息判断），译文替换输入框内容、不自动发送；草稿里建议的文件可以一键按顺序发出。
+- 会话页输入框旁的「翻译」按钮把你写的话直译成这位客户的语言（按客户最近的文字消息判断），译文替换输入框内容、不自动发送。默认用回复模型翻译，也可以在「设置 → 翻译」换成 DeepL、谷歌、Azure、百度、火山等翻译 API（见[一键翻译](#一键翻译)）；草稿里建议的文件可以一键按顺序发出。
 
 ### 客户线索
 
@@ -236,6 +236,26 @@
   - 我的资料：`users` 的 `display_name`（≤60）、`job_title`（≤60）、`contact_phone`（≤40）、`contact_email`（≤120，填了要像邮箱）、`bio`（≤1000），启动时自动加列。`GET /api/auth/me` 的 user 多一个 `profile: {displayName, jobTitle, contactPhone, contactEmail, bio}`；`PUT /api/auth/me/profile`，只改给了的字段（至少一个，都是字符串，空串是清空），任何登录的人只改自己的，返回 `{user}`。登录、接受邀请和成员列表不带。提示词里放在【业务员信息】一段（只列填了的字段，转义后包在 `<agent_profile>` 里），五项都没填就不放。推荐回复用点按钮的人的，转人工草稿用会话负责人的（没分配、已停用就不带），自动回复不带；
   - 提示词里放【公司话术要求】、【业务员个人习惯】两段（没填的那段不放），并写明优先级「起草规则 > 公司话术 > 个人习惯」、两段只影响怎么说、不能编造事实也不能省掉【待你确认：…】。个人话术用点按钮的那个人的。
 - **模型次数**：每次起草调一次 `ctx.ai.suggest`，`llm_calls` 的 purpose 是 `suggest`（看板里叫「推荐回复」），计入每会话每天 60 次的上限（开始起草前先记上）。anthropic 格式的 `max_tokens` 是 2048，超时同回复。mock（`INKDOVE_LLM_MOCK=1`）和转人工草稿的 mock 一样起草，「换一条」时在开头加"换个说法："，保证和上一条不同。
+
+## 一键翻译
+
+- **接口**：`POST /api/wa/conversations/:id/translate`，体 `{text}`（去掉首尾空白后 1–4096 字），权限同手动回复（agent 只能翻译分给自己的会话）。只读会话：不改会话状态、不发消息、不计入每会话每天 60 次。返回 `{text, language, via, fallbackReason?}`：`language` 是客户语言的中文名，`via` 是 `ai` 或翻译服务的 id，`fallbackReason` 只在翻译接口出错、这次改用 AI 翻译时有。客户一条文字消息都没有时 400 `language_unknown`。
+- **两种方式**（设置里的 `translation.mode`）：
+  - `ai`（默认，和以前一样）：回复模型看客户最近 10 条文字消息判断语言并翻译，`llm_calls` 记 `translate`；没配模型 400 `llm_not_configured`，模型出错 502 `llm_error`；
+  - `api`：用选的翻译服务，不需要回复模型：
+    1. **判断客户语言**：取客户最近 10 条文字消息（图片描述、语音转写不算），从最近的往前拼到 300 字。服务有语言检测接口的（Azure、谷歌、火山、LibreTranslate）用检测接口；没有的（DeepL、DeepLX、腾讯云、百度）把这段话「自动判断源语言」译成中文一次，看对方判断出的源语言。对方没给结果、返回格式不对或不支持这段话的语言时，用本地的 tinyld 判断（见[已核实的外部接口](external-apis.md)），还判断不出 400 `language_unknown`；鉴权、额度、限流、超时、连不上、对方出错这些直接按出错处理，不再接着翻译。结果按会话记在内存里（最多 500 个会话），客户发了新的文字消息才重新判断，重启清空；
+    2. **翻译**：业务员写的话本地判断就是客户的语言（比如客户说中文），原样返回、不调接口；选的服务不支持译成客户的语言时按出错处理（`unsupported_language`），不发请求；译的时候让对方自动判断源语言，对方判断出的源语言就是客户的语言时也原样返回；
+    3. **出错时**：开着「翻译接口出错时改用 AI 翻译」（`fallbackToAi`，默认开）而且回复模型配好了的，这次改用 AI 翻译，返回 `via: "ai"` 和 `fallbackReason`（哪家、什么问题）；AI 也失败时报「翻译接口出错（…），改用 AI 翻译也失败了：…」。没开的报错：没配好 400 `translation_not_configured`，不支持客户的语言 400 `translation_unsupported_language`，判断不出语言 400 `language_unknown`，其他（鉴权、额度、限流、超时、连不上、对方出错、返回格式不对）502 `translation_api_error`，信息里写明是哪家、什么问题；开着但回复模型没配好时，信息末尾加「回复模型还没配好，没法改用 AI 翻译」。都在日志里记一行 warn。
+- **翻译服务**（`server/src/translate/`，每家一个文件，接口依据见[已核实的外部接口](external-apis.md)）：DeepL、DeepLX、Azure 翻译、谷歌翻译（基础版 v2）、百度翻译、火山翻译、LibreTranslate，以及腾讯云机器翻译（官方已停止接受新用户，2027-10-01 起停用，留给已经开通的老用户）。语言统一用两位的 ISO 639-1 代码（`zh`、`en`、`es`……），各家的写法在各自文件里换算（比如百度的日语是 `jp`、DeepL 的英语译成 `EN-US`、谷歌的希伯来语是 `iw`），能译成哪些语言各家自己声明（LibreTranslate 看部署时装了什么，不预先限定）。请求超时 10 秒，不跟随重定向（地址要填最终的）。错误按 `kind` 分类：`config`、`auth`、`quota`、`rate_limit`、`timeout`、`network`、`server`、`unsupported_language`、`bad_request`、`bad_response`。
+- **计费和计次**：每次请求翻译服务在 `llm_calls` 记一行，purpose 是 `translate`（设置页测试是 `test`），`format`、`model` 记服务的 id（如 `deepl`），token 记 null，带号和会话。不计入每会话每天 60 次。各家按字符计费，这里不算钱：看板「模型成本」里这些调用对不上单价，所以「翻译」「测试连接」两行里有翻译接口的调用时费用显示为空（见 F12 的口径），用量去各家的控制台看。
+- **设置**（`/api/settings` 的 `translation`，只有 admin）：`{mode: "ai" | "api", provider, fallbackToAi, providers: {<服务>: {<字段>}}}`，默认 `{mode: "ai", provider: "deepl", fallbackToAi: true}`。每家的配置分开存，换服务不丢已经填的。字段：
+  - `deepl`：`apiKey`（以 `:fx` 结尾的走免费版地址）；`deeplx`：`url`、`token`（可选）；`azure`：`apiKey`、`region`（可选，Global 资源不填）、`endpoint`（可选，自定义域名的资源才填）；`google`：`apiKey`；`tencent`：`secretId`、`secretKey`、`region`（默认 `ap-guangzhou`）；`baidu`：`appId`、`appKey`；`volcengine`：`accessKeyId`、`secretAccessKey`；`libretranslate`：`url`、`apiKey`（可选）；
+  - 密钥和 DeepLX 的地址（地址里常带令牌）`GET` 时不返回原文：密钥只给 `<字段>Set` 和 `<字段>Last4`，DeepLX 的地址给 `urlSet` 和只有协议、主机的 `urlDisplay`（有路径时后面加 `/***`）；每家还有一个 `ready`（必填的都填了）。`PUT` 时密钥不给或给空串表示不改，给 `null` 表示清空；其他字段给空串或 `null` 是清空；
+  - 地址必须以 http:// 或 https:// 开头；密钥只能是可见 ASCII 字符；区域按各家的格式。不合法返回 400，错误信息以 `translation.<字段>` 或 `translation.providers.<服务>.<字段>` 开头，不带填的值。选了 `api` 时，选的那家必填的要填好，否则 400 `translation_provider_not_configured`（只在这次 PUT 带了 `translation` 时检查）。不认识的服务忽略；
+  - 存坏了的设置读出来时修好：不认识的方式回到 `ai`，不认识的服务回到 `deepl`，类型不对的字段回到默认值。
+- **测试**：`POST /api/settings/translation/test`（只有 admin），体 `{provider, config}`，`config` 的字段同上（密钥没给或空着的用已保存的），校验同保存，不保存。把一句固定的中文译成英语，回 `{ok: true, text, detectedSource, latencyMs}`；失败回 200 `{ok: false, error, kind, field?}`（`field` 是没填的必填字段，这时不发请求）。
+- **发出去的内容**：业务员要翻译的话；判断客户语言时，客户最近几条文字消息里最多 300 字（客户每发一次新消息最多一次）；设置页测试发一句固定的示例话。不带号码和客户名字。错误信息、日志和测试结果里抹掉密钥和 DeepLX 地址的路径。
+- **设置页「翻译」**：方式（AI 翻译 / 翻译 API）；选翻译 API 时再选服务（腾讯云排在最后并注明停用）、填这家的字段，每家一行说明（去哪里拿密钥、大概的免费额度，以官网为准；百度、火山、腾讯云另有提醒），「测试」（用表单里还没保存的值），「翻译接口出错时改用 AI 翻译」开关。会话页翻译后在输入框下面提示「已翻译为 西班牙语 · DeepL」；改用了 AI 翻译时提示「翻译接口出错，这次用 AI 翻译为 …」，并弹出完整原因。
 
 ## 客户线索（F6）
 

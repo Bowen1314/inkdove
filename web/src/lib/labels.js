@@ -152,6 +152,25 @@ export const EMAIL_PROVIDERS = [
   { value: 'resend', label: 'Resend' },
 ];
 
+// 一键翻译（设置 → 翻译）：翻译方式和翻译服务。腾讯云在最后：已停止接受新用户
+export const TRANSLATION_MODES = [
+  { value: 'ai', label: 'AI 翻译（用回复模型）' },
+  { value: 'api', label: '翻译 API' },
+];
+export const TRANSLATION_PROVIDERS = [
+  { value: 'deepl', label: 'DeepL' },
+  { value: 'deeplx', label: 'DeepLX（自己部署）' },
+  { value: 'azure', label: 'Azure 翻译' },
+  { value: 'google', label: '谷歌翻译' },
+  { value: 'baidu', label: '百度翻译' },
+  { value: 'volcengine', label: '火山翻译' },
+  { value: 'libretranslate', label: 'LibreTranslate（自己部署）' },
+  { value: 'tencent', label: '腾讯云翻译', desc: '已停止接受新用户，2027-10-01 起全部停用' },
+];
+/** 翻译服务的名字（会话里翻译后的提示用，不带括号里的说明） */
+export const translationProviderLabel = (v) =>
+  (TRANSLATION_PROVIDERS.find((x) => x.value === v)?.label || v || '').replace(/（.*）$/, '');
+
 // F4 媒体类型
 export const MEDIA_LABEL = {
   voice: '语音',

@@ -137,6 +137,8 @@ export const api = {
   testLlm: () => post('/api/settings/llm/test', {}),
   /** 向量检索：用表单里当前（可能没保存）的值试算一个向量 → {ok, dims, model, latencyMs} 或 {ok:false, error, kind} */
   testEmbedding: (body) => post('/api/settings/embedding/test', body),
+  /** 翻译接口：用表单里当前（可能没保存）的值把一段固定的中文译成英语 → {ok, text, detectedSource, latencyMs} 或 {ok:false, error, kind, field?} */
+  testTranslation: (body) => post('/api/settings/translation/test', body),
   testEmail: (to) => post('/api/settings/email/test', { to }),
 
   // 资料

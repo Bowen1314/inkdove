@@ -94,7 +94,7 @@ describe('会话输入框一键翻译（mock）', () => {
 
     const r = await translate(id, '  运费 10 元，满 300 包邮\n今天下单明天发 😊  ');
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body, { text: '[译成 西班牙语] 运费 10 元，满 300 包邮\n今天下单明天发 😊', language: '西班牙语' });
+    assert.deepEqual(r.body, { text: '[译成 西班牙语] 运费 10 元，满 300 包邮\n今天下单明天发 😊', language: '西班牙语', via: 'ai' });
     assert.deepEqual(spy.args, { text: '运费 10 元，满 300 包邮\n今天下单明天发 😊', customerMessages: ['Hola, ¿cuánto cuesta el envío a Madrid?'] });
 
     assert.deepEqual(await getOne(id), before, '会话状态不变');
@@ -111,7 +111,7 @@ describe('会话输入框一键翻译（mock）', () => {
     t.ctx.db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(today(), DAILY_LLM_LIMIT, id);
     const r = await translate(id, '可以，发加拿大大概 7 天');
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body, { text: '[译成 英语] 可以，发加拿大大概 7 天', language: '英语' });
+    assert.deepEqual(r.body, { text: '[译成 英语] 可以，发加拿大大概 7 天', language: '英语', via: 'ai' });
     assert.equal(convRow(id).llm_calls, DAILY_LLM_LIMIT);
   });
 
@@ -119,7 +119,7 @@ describe('会话输入框一键翻译（mock）', () => {
     const id = await customer(quiet, ['你好，在吗']);
     const r = await translate(id, '在的，请问需要什么？');
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { text: '在的，请问需要什么？', language: '中文' });
+    assert.deepEqual(r.body, { text: '在的，请问需要什么？', language: '中文', via: 'ai' });
   });
 
   it('只看客户最近 10 条文字消息（从早到晚），不看图片和语音', async () => {
@@ -242,7 +242,7 @@ describe('会话输入框一键翻译（真实实现 + 假模型服务）', () =
     const source = '有现货 <5 kg>';
     const r = await t.req('POST', path, { body: { text: source } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.deepEqual(r.body, { text: 'Sí, hay stock <5 kg>.', language: '西班牙语' });
+    assert.deepEqual(r.body, { text: 'Sí, hay stock <5 kg>.', language: '西班牙语', via: 'ai' });
 
     const req = llm.state.requests.at(-1);
     assert.equal(req.body.model, 'gpt-reply', '用回复模型');
