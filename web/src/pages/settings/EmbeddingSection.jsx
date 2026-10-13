@@ -3,7 +3,7 @@ import { PlugZap, RefreshCw, RotateCcw } from 'lucide-react';
 import { api } from '../../api/client.js';
 import { toast } from '../../ui/toastBus.js';
 import { useConfirm } from '../../ui/Modal.jsx';
-import { Spinner, Switch, fieldProps } from '../../ui/common.jsx';
+import { Callout, Spinner, Switch, fieldProps } from '../../ui/common.jsx';
 import { Select } from '../../ui/Select.jsx';
 import { StatusDot } from '../../ui/StatusDot.jsx';
 import { SecretField } from '../../ui/SecretField.jsx';
@@ -65,6 +65,15 @@ function toDraft(e) {
   };
 }
 
+/**
+ * 测试和保存时真正用到的连接设置（比较用的签名）：单独配置时是格式、地址、模型和新填的密钥（空着用已保存的），
+ * 用回复模型的服务时只有模型
+ */
+const connOf = (d, key = '') =>
+  JSON.stringify(
+    d.source === 'custom' ? [d.source, d.format, d.baseUrl.trim(), d.model.trim(), key.trim()] : [d.source, d.model.trim()],
+  );
+
 /** 后台计算的状态 → 圆点和文字 */
 function stateOf(s) {
   if (!s) return null;
@@ -96,6 +105,8 @@ const shouldPoll = (s) =>
 /**
  * 向量检索（可选）：开关、用哪个服务（和回复模型同一个 / 单独配置）、向量模型、测试、计算进度和重新计算。
  * 测试用表单里当前的值（不用先保存）；进度在开着、还在算的时候每 3 秒刷新一次。
+ * 打开向量检索，或者开着时改了服务、格式、地址、密钥、模型，要先用表单里当前的值测试成功才能保存；
+ * 测试结果记着测的是哪组值，改了任何一项就作废。关掉不用测试。
  */
 export default function EmbeddingSection({ settings, onSaved }) {
   const em = settings.embedding || {};
@@ -106,7 +117,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null);
+  const [testResult, setTestResult] = useState(null); // {ok, text, conn}：conn 是测试时的连接设置
   const [fieldErr, setFieldErr] = useState(null); // {field, text}
   const [formRef, reveal] = useRevealInvalid();
   const [status, setStatus] = useState(null);
@@ -115,6 +126,17 @@ export default function EmbeddingSection({ settings, onSaved }) {
 
   const dirty = !sameDraft(base, draft) || apiKey.trim() !== '';
   const custom = draft.source === 'custom';
+  // 测试结果只对测试时的那组值有效，改了任何一项就不显示、不算数
+  const conn = connOf(draft, apiKey);
+  const shownResult = testResult?.conn === conn ? testResult : null;
+  const needsTest = draft.enabled && (!base.enabled || conn !== connOf(base));
+  // 不能保存的原因（一句话，显示在保存栏里）；空串表示可以保存
+  const saveBlock =
+    !needsTest || shownResult?.ok
+      ? ''
+      : shownResult
+        ? '测试没通过，改好后再测试，成功了才能保存'
+        : `${base.enabled ? '改了向量服务' : '开启前'}要先点「测试」，测试成功才能保存`;
   const fmt = FORMATS[draft.format] || FORMATS.openai;
   const errOf = (k) => (fieldErr?.field === k ? fieldErr.text : '');
   const set = (k, v) => {
@@ -163,6 +185,10 @@ export default function EmbeddingSection({ settings, onSaved }) {
   const onSubmit = async (e) => {
     e.preventDefault();
     if (saving) return;
+    if (saveBlock) {
+      toast.error(saveBlock);
+      return;
+    }
     if (await save()) toast.success('已保存');
   };
 
@@ -182,6 +208,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
     try {
       onSaved(await api.putSettings({ embedding: { apiKey: '' } }));
       setApiKey('');
+      setTestResult(null); // 测试时用的可能是清掉的那个密钥
       toast.success('密钥已清除');
     } catch {
       // 已提示
@@ -194,6 +221,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
   const test = async () => {
     setTestResult(null);
     setTesting(true);
+    const testedConn = conn;
     try {
       const body = { source: draft.source, model: draft.model.trim() };
       if (custom) {
@@ -207,8 +235,9 @@ export default function EmbeddingSection({ settings, onSaved }) {
           ? {
               ok: true,
               text: `测试成功：模型 ${r.model || draft.model} 返回 ${fmtNum(r.dims)} 维向量，用时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
+              conn: testedConn,
             }
-          : { ok: false, text: `测试失败：${r?.error || '原因未知'}` },
+          : { ok: false, text: `测试失败：${r?.error || '原因未知'}`, conn: testedConn },
       );
     } catch {
       // 已提示（字段不合法的 400 也在这里）
@@ -380,7 +409,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
             </button>
           </div>
           <FieldError id="em-model">{errOf('model')}</FieldError>
-          <TestResult result={testResult} />
+          <TestResult result={shownResult} />
         </SettingsRow>
 
         {em.enabled && (
@@ -435,11 +464,18 @@ export default function EmbeddingSection({ settings, onSaved }) {
                   {fmtFull(status.lastError.at)}：{status.lastError.message}
                 </div>
               )}
+              {status?.hint && <Callout tone="warning">{status.hint}</Callout>}
             </div>
           </SettingsRow>
         )}
 
-        <SaveBar dirty={dirty} saving={saving} onDiscard={discard} />
+        <SaveBar
+          dirty={dirty}
+          saving={saving}
+          disabled={!!saveBlock}
+          onDiscard={discard}
+          text={saveBlock ? `有未保存的更改，${saveBlock}` : undefined}
+        />
       </SettingsSection>
     </div>
   );

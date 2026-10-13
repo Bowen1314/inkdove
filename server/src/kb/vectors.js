@@ -3,6 +3,8 @@
 //   模型换了的（model_key）分批算，每批最多 BATCH_SEGMENTS 段，一次只跑一批，翻页之间让出事件循环。触发：启动、条目增删改
 //   （kb store 的 onChange，防抖）、设置改动、手动「重新计算」（全部清掉重算）、手动「重试」。出错时按种类停下（鉴权、模型
 //   不存在、返回格式不对、维度变了……等设置改了或手动重试）或退避后再试（限流按 Retry-After，5xx、连不上、超时指数退避）；
+//   当前模型一条都没算出来又连着失败 COLD_FAIL_STREAK 次时放慢到 30 分钟一次（status 的 hint 说明），设置改动、条目变动、
+//   手动重试或重新计算清掉，马上再试；
 // - 内存：当前模型的向量按 int8 量化（每个向量一个缩放系数）放在 QuantizedIndex 里。库里存的也是这份量化结果（quantize，
 //   算完量化一次，读库时直接用），只放 active 而且文字和向量对得上的条目，
 //   增量更新（算完一批就加进去，删、停用、改了文字就拿掉）；
@@ -31,6 +33,12 @@ export const VECTOR_DEBOUNCE_MS = 3000;
 /** 限流（没给 Retry-After）、5xx、连不上、超时的退避：5 秒起，每次翻倍，最多 5 分钟 */
 export const BACKOFF_BASE_MS = 5000;
 export const BACKOFF_MAX_MS = 5 * 60_000;
+/**
+ * 当前模型一条向量都还没算出来、又连着失败这么多次（限流、5xx、连不上、超时都算），多半是模型名或地址不对
+ * （有的中转站的分组里没有向量模型，只回 5xx 或超时），自动重试放慢到 COLD_RETRY_MS 一次
+ */
+export const COLD_FAIL_STREAK = 5;
+export const COLD_RETRY_MS = 30 * 60_000;
 /** 向量那一路取前几条（和关键词那一路各取 50 条再合并） */
 export const VECTOR_TOP_K = 50;
 /** 当前模型的向量覆盖了多少 active 条目以上，查询向量又算成功了，就不再调模型改写检索词 */
@@ -421,6 +429,11 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
     return activeCount;
   };
 
+  /** 模型 k 有向量的 active 条目数：内存读好了看内存，没读好查库（和 status 的 embeddedEntries 一个口径） */
+  const embeddedOf = (k) => (!k ? 0 : mem && memKey === k ? mem.entryCount : stmt.countFresh.get(k));
+  /** 一条都没算出来、连着失败了 COLD_FAIL_STREAK 次，自动重试已经放慢到 COLD_RETRY_MS 一次 */
+  const cold = () => state === 'waiting' && attempt >= COLD_FAIL_STREAK && embeddedOf(key) === 0;
+
   function warnThrottled(kind, msg) {
     const t = now();
     const last = warnedAt.get(kind);
@@ -477,12 +490,20 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
     timer.unref?.();
   }
 
-  /** 有变动：在跑就跑完再来一轮；没在跑就防抖后跑。停下、退避中不动（等设置改了、手动重试或退避到点） */
+  /**
+   * 有变动：在跑就跑完再来一轮；没在跑就防抖后跑。停下、退避中不动（等设置改了、手动重试或退避到点），
+   * 只有一条都没算出来、已经放慢到 30 分钟一次的，清掉重来
+   */
   function kick() {
     if (!usable()) return;
     if (running) {
       again = true;
       return;
+    }
+    if (cold()) {
+      attempt = 0;
+      retryAt = 0;
+      state = 'idle';
     }
     if (state === 'stopped' || state === 'waiting') return;
     schedule(debounceMs);
@@ -564,14 +585,21 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
       log.warn(`[vectors] 向量计算停下了，等设置改了或手动重试：${message}`);
       return 'stopped';
     }
-    const wait =
+    let wait =
       kind === 'rate_limit' && Number.isFinite(err?.retryAfterMs) && err.retryAfterMs !== null
         ? Math.max(1000, err.retryAfterMs)
         : Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** attempt);
     attempt++;
+    // 一条都没算出来又连着失败：多半是配置不对，放慢（Retry-After 更长时照它）。已经算出过的照常退避（服务临时不可用）
+    const slow = attempt >= COLD_FAIL_STREAK && embeddedOf(k) === 0;
+    if (slow) wait = Math.max(wait, COLD_RETRY_MS);
     retryAt = now() + wait;
     state = 'waiting';
-    log.warn(`[vectors] 向量接口暂时不可用，${Math.round(wait / 1000)} 秒后再试：${message}`);
+    log.warn(
+      slow
+        ? `[vectors] 一条向量都没算出来，连续失败 ${attempt} 次，多半是模型名或服务地址不对，${Math.round(wait / 60_000)} 分钟后再试：${message}`
+        : `[vectors] 向量接口暂时不可用，${Math.round(wait / 1000)} 秒后再试：${message}`,
+    );
     return 'waiting';
   }
 
@@ -898,6 +926,11 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
         dims: loaded?.dims || null,
         memoryBytes: loaded?.bytes ?? 0,
         lastError,
+        // 一条都没算出来、已经放慢到 30 分钟一次时给管理员的说明（设置页显示在错误下面）
+        hint:
+          enabled && key && state === 'waiting' && attempt >= COLD_FAIL_STREAK && embedded === 0
+            ? `一条都没算出来，连续失败 ${attempt} 次，多半是模型名或服务地址不对（有的中转站的分组里没有向量模型）。已改成每 ${COLD_RETRY_MS / 60_000} 分钟重试一次；改好设置或点「重试」会马上再试。`
+            : null,
         retryAt: state === 'waiting' && retryAt ? new Date(retryAt).toISOString() : null,
         lastDoneAt,
       };

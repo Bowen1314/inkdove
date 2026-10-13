@@ -94,8 +94,9 @@ export function Advanced({ label = '高级设置', defaultOpen = false, open, on
 /**
  * 吸底保存栏：有改动才出现。表单用 type=submit 的保存按钮，也可以传 onSave。
  * 有未保存的改动时，关闭或刷新浏览器标签页会先提示。
+ * disabled：暂时不能保存（比如还没测试通过），保存按钮不可用，原因用 text 写成一句话。
  */
-export function SaveBar({ dirty, saving, onDiscard, onSave, text = '有未保存的更改' }) {
+export function SaveBar({ dirty, saving, disabled = false, onDiscard, onSave, text = '有未保存的更改' }) {
   useEffect(() => {
     if (!dirty) return undefined;
     const onBeforeUnload = (e) => {
@@ -119,7 +120,7 @@ export function SaveBar({ dirty, saving, onDiscard, onSave, text = '有未保存
         type={onSave ? 'button' : 'submit'}
         className="btn btn--primary"
         onClick={onSave}
-        disabled={saving}
+        disabled={saving || disabled}
       >
         {saving && <Spinner />}
         保存

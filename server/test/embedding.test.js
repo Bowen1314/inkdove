@@ -1,6 +1,6 @@
 // 向量检索（可选）：向量接口客户端（OpenAI 兼容、Gemini 的请求格式、鉴权头、解析、错误分类、错误里没有密钥）、设置（校验、
 // 不返回密钥、测试接口、agent 403）、后台计算（分批、文字没变不重算、改一条只算一条、删了就没了、换模型全部重算、出错停下或
-// 退避、关掉就停、重新计算、长条目分段）和检索（排名融合、跨语言、覆盖率够了不改写、不够照常改写、查询向量失败退回、
+// 退避、一条都没算出来时放慢到 30 分钟一次、关掉就停、重新计算、长条目分段）和检索（排名融合、跨语言、覆盖率够了不改写、不够照常改写、查询向量失败退回、
 // 全带档不算向量、int8 和 float 的排名一致、库里存 int8 读出来不再量化）。不调真实服务：客户端用本地假服务，其余用 mock 或替换掉的 embed。
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -11,7 +11,10 @@ import { queryTextOf, RRF_K, rrfMerge, selectEntries } from '../src/kb/retrieve.
 import { CONTEXT_CHAR_LIMIT } from '../src/kb/search.js';
 import {
   BACKOFF_BASE_MS,
+  BACKOFF_MAX_MS,
   BATCH_SEGMENTS,
+  COLD_FAIL_STREAK,
+  COLD_RETRY_MS,
   entrySegments,
   MAX_SEGMENTS,
   QUANT,
@@ -703,6 +706,143 @@ describe('后台计算', () => {
     await vectors().run();
     assert.deepEqual(docBatches, [1], '只算关着时加的那一条');
     assert.equal(vectors().status().embeddedEntries, n + 1);
+  });
+});
+
+describe('后台计算：一条都没算出来时放慢重试', () => {
+  let t;
+  let hooks;
+  let clock = Date.parse('2030-01-01T00:00:00Z');
+  /** 后台算文档向量的请求次数 */
+  let n = 0;
+  const vectors = () => t.ctx.vectors;
+  const KINDS = ['server', 'timeout', 'network', 'rate_limit'];
+  before(async () => {
+    hooks = await aiHooks();
+    t = await startApp({ options: { aiOverrides: hooks.overrides, vectorNow: () => clock } });
+    await t.login();
+  });
+  after(() => t.close());
+
+  /** 向量接口一直失败：会退避的几种错误轮着来（限流不带 Retry-After） */
+  const failing = () => {
+    hooks.embed = (args, mock) => {
+      if (args.task === 'query') return mock.embed(args);
+      const kind = KINDS[n++ % KINDS.length];
+      throw new EmbedError(`向量接口出错（${kind}）`, kind, { status: kind === 'server' ? 503 : kind === 'rate_limit' ? 429 : 0 });
+    };
+  };
+  /** 跑一次，应该马上请求一次并失败；返回状态和这次要等多久 */
+  const failOnce = async () => {
+    const before = n;
+    await vectors().run();
+    assert.equal(n, before + 1, '该请求时没有请求');
+    const s = vectors().status();
+    assert.equal(s.state, 'waiting');
+    return { s, wait: Date.parse(s.retryAt) - clock };
+  };
+  /** 时钟拨到重试的时间之后 */
+  const due = (s) => {
+    clock = Date.parse(s.retryAt) + 1;
+  };
+  /** 一直失败到放慢为止 */
+  const failUntilCold = async () => {
+    for (let i = 0; i < 20 && !vectors().status().hint; i++) {
+      const s = vectors().status();
+      if (s.state === 'waiting') due(s);
+      await failOnce();
+    }
+    const s = vectors().status();
+    assert.ok(s.hint, '没有放慢');
+    return s;
+  };
+
+  it('一条都没算出来：前 4 次按 5 秒起翻倍退避，连续失败 5 次（不论哪种）后改成 30 分钟一次，状态里有提示；没到点不请求', async () => {
+    for (let i = 0; i < 3; i++) t.ctx.kb.insertEntry(short(`cold${i}`));
+    failing();
+    assert.equal((await t.req('PUT', '/api/settings', { body: enableBody() })).status, 200);
+    let r;
+    for (let i = 0; i < COLD_FAIL_STREAK - 1; i++) {
+      if (r) due(r.s);
+      r = await failOnce();
+      assert.equal(r.wait, BACKOFF_BASE_MS * 2 ** i, `第 ${i + 1} 次失败（${r.s.lastError.kind}）`);
+      assert.equal(r.s.hint, null);
+      assert.equal(r.s.embeddedEntries, 0);
+    }
+    due(r.s);
+    r = await failOnce();
+    assert.equal(r.wait, COLD_RETRY_MS, '第 5 次失败后等 30 分钟');
+    assert.equal(
+      r.s.hint,
+      '一条都没算出来，连续失败 5 次，多半是模型名或服务地址不对（有的中转站的分组里没有向量模型）。已改成每 30 分钟重试一次；改好设置或点「重试」会马上再试。',
+    );
+    assert.equal((await t.req('GET', '/api/kb/vectors')).body.hint, r.s.hint);
+    assert.ok(t.log.lines.some((l) => l.includes('一条向量都没算出来，连续失败 5 次')));
+
+    clock += COLD_RETRY_MS - 1000;
+    await vectors().run();
+    assert.equal(n, COLD_FAIL_STREAK, '没到点不请求');
+    due(vectors().status());
+    r = await failOnce();
+    assert.equal(r.wait, COLD_RETRY_MS);
+    assert.match(r.s.hint, /连续失败 6 次/);
+  });
+
+  it('放慢以后：手动重试、条目变动、设置改动、重新计算都清掉提示，马上再试、从 5 秒起退避', async () => {
+    assert.ok(vectors().status().hint);
+    let res = await t.req('POST', '/api/kb/vectors/retry');
+    assert.equal(res.status, 200);
+    assert.equal(res.body.hint, null);
+    assert.equal(res.body.state, 'idle');
+    assert.equal(res.body.retryAt, null);
+    let r = await failOnce();
+    assert.equal(r.wait, BACKOFF_BASE_MS);
+    assert.equal(r.s.hint, null);
+
+    await failUntilCold();
+    t.ctx.kb.insertEntry(short('cold-new'));
+    let s = vectors().status();
+    assert.equal(s.hint, null, '条目变了就清掉');
+    assert.equal(s.state, 'idle');
+    assert.equal(s.retryAt, null);
+    r = await failOnce();
+    assert.equal(r.wait, BACKOFF_BASE_MS);
+
+    await failUntilCold();
+    await t.req('PUT', '/api/settings', { body: enableBody({ model: 'm-cold' }) });
+    s = vectors().status();
+    assert.equal(s.hint, null, '设置改了就清掉');
+    assert.equal(s.state, 'idle');
+    r = await failOnce();
+    assert.equal(r.wait, BACKOFF_BASE_MS);
+
+    await failUntilCold();
+    res = await t.req('POST', '/api/kb/vectors/rebuild');
+    assert.equal(res.body.hint, null, '重新计算也清掉');
+    assert.equal(res.body.state, 'idle');
+    r = await failOnce();
+    assert.equal(r.wait, BACKOFF_BASE_MS);
+  });
+
+  it('已经算出过向量（比如服务临时 503）：连续失败多少次都照原来的退避（5 秒起翻倍、最多 5 分钟），不放慢', async () => {
+    hooks.embed = (args, mock) => mock.embed(args);
+    await t.req('POST', '/api/kb/vectors/retry');
+    await vectors().run();
+    let s = vectors().status();
+    assert.equal(s.state, 'idle');
+    assert.equal(s.embeddedEntries, s.activeEntries);
+
+    failing();
+    t.ctx.kb.insertEntry(short('warm'));
+    for (let i = 0; i < 8; i++) {
+      if (i) due(vectors().status());
+      const r = await failOnce();
+      assert.equal(r.wait, Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** i), `第 ${i + 1} 次失败`);
+      assert.equal(r.s.hint, null);
+    }
+    s = vectors().status();
+    assert.ok(s.embeddedEntries > 0);
+    hooks.embed = (args, mock) => mock.embed(args);
   });
 });
 

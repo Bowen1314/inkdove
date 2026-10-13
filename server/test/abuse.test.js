@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, afterEach, before, describe, it } from 'node:test';
-import { buildReplySystemPrompt, buildReplyUserPrompt, STYLE_RULES } from '../src/reply/prompts.js';
+import { buildDraftSystemPrompt, buildReplySystemPrompt, buildReplyUserPrompt, buildReviewSystemPrompt, STYLE_RULES } from '../src/reply/prompts.js';
 import { aiHooks, convIdOf, getConv, sleep, startApp, startFakeWaha, waitDecided, wahaSend } from './helpers.js';
 
 const CANARY = 'INKDOVE-0123456789ab';
@@ -47,6 +47,13 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
     const r = await ask('保温杯多少钱');
     assert.equal(r.decision, 'handoff');
     assert.match(r.reason, /不存在的条目 id/);
+    // 模型连提示词里的 "id:" 前缀或方括号一起抄过来，照样认得
+    for (const id of [`id:${cup.id}`, `[id:${cup.id}]`, ` ${cup.id} `]) {
+      modelSays('保温杯 A100 价格 59 元', [id]);
+      const ok = await ask('保温杯多少钱');
+      assert.equal(ok.decision, 'replied', id);
+      assert.deepEqual(ok.usedEntryIds, [cup.id]);
+    }
     hooks.generate = () => {
       throw new Error('boom');
     };
@@ -273,6 +280,54 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
         assert.equal(r.reason, reason);
       }
     });
+  });
+});
+
+describe('提示词：照资料介绍标准条款不算承诺，档位交界不自己挑（回复、审核、起草同一个标准）', () => {
+  const reply = buildReplySystemPrompt({ profile: {}, persona: '', entries: [], canary: 'x' });
+  const review = buildReviewSystemPrompt({ profile: {} });
+  const draft = buildDraftSystemPrompt({ profile: {}, persona: '', entries: [], files: [] });
+  /** 以 prefix 开头的那一行 */
+  const lineOf = (text, prefix) => text.split('\n').find((l) => l.startsWith(prefix)) ?? '';
+
+  it('审核：commitment 写明复述标准条款不算、"我们有这款"不算库存承诺；ungrounded 逐个核对数字、档位交界自己挑一档的算；ok 补上标准条款', () => {
+    assert.ok(review.includes('审核员'), 'llm.test 靠这三个字认出审核调用');
+    const commitment = lineOf(review, '- commitment：');
+    assert.match(commitment, /答应留货；替这位客户这一单保证交货日期或库存；/);
+    assert.match(commitment, /复述资料里写明的标准条款（标准交期、生产周期、样品几天寄出、起订量、质保、认证、公司生产或提供某款产品）不算 commitment/);
+    assert.match(commitment, /没去掉资料里的限定语（如"标准""一般""以排产为准""下单前和业务员确认"）/);
+    assert.match(commitment, /没把区间说成确定的日期/);
+    assert.match(commitment, /"我们有\/提供这款产品"只表示产品目录里有，不算库存承诺；资料里没有的"现货""马上能发""给你留"这类说法才算/);
+    const ungrounded = lineOf(review, '- ungrounded：');
+    assert.match(ungrounded, /数字（价格、起订量、交期天数、数量档位、功率、质保年限等）要逐个和【引用的条目】【企业画像】核对/);
+    assert.match(ungrounded, /两个档位的交界（中文的"以上""以下"含本数），或者资料的说法有歧义，回复却自己挑了其中一档的，也算/);
+    assert.match(lineOf(review, '- ok：'), /照资料原样介绍标准交期、样品、起订量等条款属于正常业务回复/);
+    assert.ok(!review.includes('承诺库存、交期或留货'), '旧的笼统说法去掉了');
+  });
+
+  it('回复：第 4、12 条和审核同一个标准；第 5 条档位交界不自己挑；编号连续，第 2 条引用的编号指向身份那条，价格红线不变', () => {
+    const rule = (k) => lineOf(reply, `${k}. `);
+    assert.match(rule(4), /标准条款（标准交期、生产周期、样品寄出时间、起订量、质保等）可以照原样介绍，资料里的限定语（如"标准""一般""以排产为准"）要保留，不能说得比资料更肯定/);
+    assert.match(rule(5), /两个档位的交界.*不要自己挑一档：照资料原文把相关的几档都说出来并保留限定语，或者转人工（category 为 handoff，handoff_type 为 insufficient_info）/);
+    assert.match(rule(12), /答应留货；替这位客户这一单保证具体的交货日期或库存/);
+    assert.match(rule(12), /照资料介绍标准交期、样品寄出时间、起订量，或者说我们生产、提供某款产品，不算承诺/);
+    assert.ok(!reply.includes('承诺库存、交期、留货'), '旧的笼统说法去掉了');
+    const nums = [...reply.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    assert.deepEqual(nums, Array.from({ length: 26 }, (_, i) => i + 1), '编号从 1 到 26 连续');
+    const ref = Number(rule(2).match(/按第 (\d+) 条处理/)?.[1]);
+    assert.match(rule(ref), /^\d+\. 客户问你是不是 AI、机器人、真人/);
+    assert.match(rule(9), /^9\. 价格只能照资料原样介绍：/);
+    assert.match(rule(10), /^10\. 以下情况一律 category 为 handoff，reply 留空：/);
+  });
+
+  it('起草（推荐回复和转人工草稿）：资料里写明的标准条款照写、保留限定语，不用【待你确认】挡掉；这一单的日期、现货、留货和档位交界才占位', () => {
+    const rule = (k) => lineOf(draft, `${k}. `);
+    assert.match(rule(1), /标准条款（标准交期或生产周期、样品几天寄出、起订量、质保、认证、有没有这款产品）直接照资料写进草稿，保留资料里的限定语/);
+    assert.match(rule(1), /不要用【待你确认：…】把资料里已有的内容挡掉/);
+    assert.match(rule(3), /替这位客户这一单保证具体交货日期、现货或留货/);
+    assert.match(rule(3), /两个档位的交界.*不要自己挑一档：把相关的几档照资料都写出来，或者在那个位置用【待你确认：…】写清要确认哪一档/);
+    assert.match(rule(3), /标准款生产周期 7–10 天，这单哪天能发【待你确认：这单的排产和发货日期】/);
+    assert.ok(!rule(3).includes('库存、交期、留货'), '旧的笼统说法去掉了');
   });
 });
 

@@ -38,6 +38,22 @@ export function normalizeFileIds(ids) {
 }
 
 /**
+ * 模型给的条目 id 规整一下：提示词里条目开头是 [id:...]，模型有时连 "id:" 或方括号一起抄过来。去重
+ * @param {unknown} ids
+ * @returns {string[]}
+ */
+export function normalizeEntryIds(ids) {
+  if (!Array.isArray(ids)) return [];
+  const out = [];
+  for (const raw of ids) {
+    if (typeof raw !== 'string' && typeof raw !== 'number') continue;
+    const id = String(raw).trim().replace(/^\[/, '').replace(/\]$/, '').replace(/^id:/i, '').trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/**
  * 回复和草稿共用的上下文：最近对话、相关条目（怎么挑见 kb/retrieve.js）、可发送文件（超过 50 个时按 BM25 取前 50）。
  * 检索查询默认只用客户的话（最近 3 条客户消息 + message）。extraQuery 只有推荐回复跟进时才传：我方在客户最后那段消息之后
  * 发的消息，一起参与检索（比如"我来讲一下怎么注册"能找到注册的条目），裁剪后作为 extra 返回；自动回复和转人工草稿不传，检索不变。
@@ -180,7 +196,7 @@ export async function decideReply(ctx, { message, history = [], persona, allowRe
   }
 
   // ---- 第 2 层：程序硬规则 ----
-  let usedEntryIds = [...new Set(ids.map(String))];
+  let usedEntryIds = normalizeEntryIds(ids);
   const sendFileIds = normalizeFileIds(fileIds);
   // 带文件的回复按业务回复把关（寒暄不该发文件）
   if (sendFileIds.length && category === 'smalltalk') category = 'business';
