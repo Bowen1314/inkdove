@@ -1,4 +1,6 @@
 // WAHA HTTP 客户端。接口以 https://waha.devlike.pro/docs/how-to/sessions/ 等官方文档为准。
+// 入站媒体文件不用 fetch 下载，用 media-download.js 的 httpGet（node:http），原因见那个文件开头的注释。
+import { httpGet, HttpGetError } from './media-download.js';
 
 export class WahaError extends Error {
   constructor(message, status = 0) {
@@ -13,17 +15,18 @@ export class WahaError extends Error {
 export function createWahaClient(config) {
   const base = config.wahaUrl;
 
-  async function request(method, path, { body, timeoutMs = 10_000, accept = 'application/json', raw = false } = {}) {
+  async function request(method, path, { body, timeoutMs = 10_000, accept = 'application/json', raw = false, signal } = {}) {
     const headers = { accept };
     if (config.wahaApiKey) headers['x-api-key'] = config.wahaApiKey;
     if (body !== undefined) headers['content-type'] = 'application/json';
+    const timeout = AbortSignal.timeout(timeoutMs);
     let res;
     try {
       res = await fetch(`${base}${path}`, {
         method,
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
       });
     } catch (err) {
       const why = err?.name === 'TimeoutError' ? '超时' : err?.cause?.code || err?.message || String(err);
@@ -38,13 +41,42 @@ export function createWahaClient(config) {
       data = text;
     }
     if (!res.ok) {
-      const msg = (data && typeof data === 'object' && (data.message || data.error)) || String(text).slice(0, 200);
-      throw new WahaError(`WAHA 返回 ${res.status}：${typeof msg === 'string' ? msg : JSON.stringify(msg)}`, res.status);
+      // 只有 JSON 里取得到 message / error 才带上原文；HTML 错误页、纯文本不带（会原样显示在界面上，整页 HTML 没法看）
+      const msg = data && typeof data === 'object' ? data.message || data.error : null;
+      const detail = msg ? `：${typeof msg === 'string' ? msg : JSON.stringify(msg)}` : '';
+      throw new WahaError(`WAHA 返回 ${res.status}${detail}`, res.status);
     }
     return data;
   }
 
   const enc = encodeURIComponent;
+
+  /**
+   * 入站媒体地址 → 响应（node:http 的 IncomingMessage，带 headers，状态码已检查过）。
+   * 只认 WAHA 的 /api/files/ 路径，主机换成 INKDOVE_WAHA_URL，带 X-Api-Key；WAHA 再重定向到别的主机时不带 key。
+   */
+  async function fetchMedia(mediaUrl, { timeoutMs = 60_000, signal } = {}) {
+    let u;
+    try {
+      u = new URL(String(mediaUrl), base);
+    } catch {
+      throw new WahaError('媒体地址不合法');
+    }
+    if (!u.pathname.startsWith('/api/files/')) throw new WahaError(`媒体地址不是 WAHA 的 /api/files/ 路径：${u.pathname}`);
+    const headers = { accept: '*/*' };
+    if (config.wahaApiKey) headers['x-api-key'] = config.wahaApiKey;
+    try {
+      const { stream } = await httpGet(`${base}${u.pathname}${u.search}`, { headers, timeoutMs, signal });
+      return stream;
+    } catch (err) {
+      if (!(err instanceof HttpGetError)) throw err; // 被中止（服务关闭）
+      // WAHA 只把收到的文件留一段时间（默认 180 秒），过了就 404；给一句人话，存进 media.error 显示
+      if (err.status === 404) throw new WahaError('WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', 404);
+      // 文案和 request() 一致：只有 JSON 里取得到 message / error 才带上
+      if (err.status) throw new WahaError(`WAHA 返回 ${err.status}${err.detail ? `：${err.detail}` : ''}`, err.status);
+      throw new WahaError(`WAHA 连不上（${base}）：${err.message}`);
+    }
+  }
 
   return {
     /** GET /api/sessions/{session}，不存在返回 null */
@@ -128,17 +160,12 @@ export function createWahaClient(config) {
      * @returns {Promise<{buffer:Buffer, mime:string}>}
      */
     async downloadMedia(mediaUrl, { maxBytes, timeoutMs = 60_000 } = {}) {
-      let u;
-      try {
-        u = new URL(String(mediaUrl), base);
-      } catch {
-        throw new WahaError('媒体地址不合法');
-      }
-      if (!u.pathname.startsWith('/api/files/')) throw new WahaError(`媒体地址不是 WAHA 的 /api/files/ 路径：${u.pathname}`);
-      const res = await request('GET', `${u.pathname}${u.search}`, { accept: '*/*', raw: true, timeoutMs });
+      const res = await fetchMedia(mediaUrl, { timeoutMs });
       const buffer = await readLimited(res, maxBytes);
-      return { buffer, mime: String(res.headers.get('content-type') || '').split(';')[0].trim() };
+      return { buffer, mime: String(res.headers['content-type'] || '').split(';')[0].trim() };
     },
+    /** 同 downloadMedia，但返回响应流（IncomingMessage，存盘时边读边写），状态码已检查过 */
+    fetchMedia,
     /**
      * 关联后导入已有聊天：GET /api/{session}/chats?limit=N → [{id, name, conversationTimestamp}]（10-12 实测，GOWS 2026.9.2）。
      * 返回顺序没核实，所以不保证是"最近的 N 个"
@@ -181,22 +208,26 @@ export function createWahaClient(config) {
   };
 }
 
-/** 读响应体，超过 maxBytes 就中止并抛错（先看 content-length，再边读边数） */
+/**
+ * 读完响应体（node:http 的 IncomingMessage 或别的 Readable）拼进内存，超过 maxBytes 就中止并抛错
+ * （先看 content-length，再边读边数）。F4 识别用，文件不大。
+ */
 export async function readLimited(res, maxBytes) {
   const limit = maxBytes ?? Infinity;
-  const declared = Number(res.headers.get('content-length'));
+  const declared = Number(res.headers?.['content-length']);
   if (Number.isFinite(declared) && declared > limit) {
-    await res.body?.cancel().catch(() => {});
+    res.destroy();
     throw new TooLargeError(declared, limit);
   }
   const chunks = [];
   let total = 0;
-  for await (const chunk of res.body) {
+  // 循环里抛错时 for await 会销毁 res（放掉连接）
+  for await (const chunk of res) {
     total += chunk.length;
     if (total > limit) {
       throw new TooLargeError(total, limit);
     }
-    chunks.push(Buffer.from(chunk));
+    chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 }

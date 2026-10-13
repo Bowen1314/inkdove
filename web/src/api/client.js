@@ -311,6 +311,16 @@ export const api = {
   sendFile: (id, fileId, caption, o) =>
     post(`/api/wa/conversations/${enc(id)}/send-file`, caption ? { fileId, caption } : { fileId }, o),
   setBotPaused: (id, paused) => post(`/api/wa/conversations/${enc(id)}/bot`, { paused }),
+  /** 人工回复的号「标为已处理」：只清掉待处理，不动机器人暂停状态和草稿 → Conversation */
+  resolveConversation: (id, o) => post(`/api/wa/conversations/${enc(id)}/resolve`, {}, o),
+  /** 关掉推荐回复 / 草稿（推荐回复和转人工草稿都清）；没有草稿也成功 → Conversation */
+  clearDraft: (id, o) => del(`/api/wa/conversations/${enc(id)}/draft`, o),
+  /**
+   * 客户发来的图片、视频、语音、文件、贴纸（后端收到就存了盘）。白名单里的图片、视频、音频直接显示或播放，
+   * 其他一律下载；download 为真时都按下载处理
+   */
+  messageMediaUrl: (convId, messageId, { download = false } = {}) =>
+    `/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/media${download ? '?download=1' : ''}`,
   /**
    * 手动要一条推荐回复（「推荐回复」「换一条」），号是什么回复方式都能用 → {draft: {kind, text, fileIds, createdAt}}。
    * 生成期间我方已经发了消息时照样返回，但不存进会话。错误码见 lib/labels.js 的 SUGGEST_ERROR；默认不弹 toast，由调用方提示

@@ -5,11 +5,9 @@ import {
   BookPlus,
   Check,
   CornerDownLeft,
-  Image as ImageIcon,
   Languages,
   ListChecks,
   MessagesSquare,
-  Mic,
   PanelRight,
   Pause,
   Play,
@@ -39,6 +37,8 @@ import {
   BOT_DECISION_NOTE,
   LEAD_STAGES,
   MEDIA_LABEL,
+  SKIP_NO_AUTO_REPLY,
+  isManualMode,
   leadStageLabel,
   replyModeOf,
   suggestErrorText,
@@ -46,6 +46,7 @@ import {
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
 import { AttachmentCard, DraftFiles, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
+import { MEDIA_ICON, MessageMedia, hasMediaBlock, isBareMediaLabel } from './ChatMedia.jsx';
 import {
   AssigneeMark,
   AssigneeSelect,
@@ -101,10 +102,12 @@ function fmtMuteUntil(d) {
 
 /**
  * 会话状态。showActive（会话头部）时，没有别的状态也显示一句：自动回复的号是"机器人接待中"，
- * 人工回复的号不显示。replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
+ * 人工回复的号不显示。人工回复的号没有机器人在接待，"人工接管中"、离题静默这些机器人的状态也不显示，只留"待你处理"。
+ * replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
  */
 function ConvState({ conv, size = 'sm', showActive = false, replyMode = null }) {
   if (conv.needsHuman) return <StatusDot tone="danger" tinted size={size}>待你处理</StatusDot>;
+  if (isManualMode(replyMode)) return null;
   if (conv.botPaused) return <StatusDot tone="warning" tinted size={size}>人工接管中</StatusDot>;
   const mute = activeMute(conv);
   if (mute) return <StatusDot tone="neutral" muted size={size}>反复离题，静默到 {fmtMuteUntil(mute)}</StatusDot>;
@@ -143,6 +146,7 @@ function ConvList({
   isAdmin,
   users,
   onBulkAssigned,
+  modeOfConv,
 }) {
   const [filter, setFilter] = useState('');
   const [selecting, setSelecting] = useState(false); // admin 批量分配的多选模式
@@ -304,7 +308,7 @@ function ConvList({
                     )}
                   </span>
                   <span className="conv__meta">
-                    <ConvState conv={c} />
+                    <ConvState conv={c} replyMode={modeOfConv(c)} />
                     {isAdmin && <AssigneeMark assignee={c.assignee} />}
                     {c.accountName && <span className="conv__acct">{c.accountName}</span>}
                   </span>
@@ -335,7 +339,6 @@ function bubbleKind(msg) {
   return { kind: 'customer' };
 }
 
-const MEDIA_ICON = { voice: Mic, image: ImageIcon };
 const NOTE_TONE = { handoff: 'warning', blocked: 'danger', declined: 'info' };
 
 /** 条目弹窗放在浮层外面：点条目时先关浮层再开弹窗，免得两层叠在一起、在弹窗上按鼠标被当成点了浮层外面 */
@@ -366,11 +369,17 @@ function KnowledgeRefs({ ids }) {
   );
 }
 
-function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
+/**
+ * manual：这个号是人工回复，"未处理 · 这个号没开自动回复"和"未处理 · 非文字消息[…]，已通知人工"不显示（每条客户消息都会有，没有信息量）。
+ * 客户发来的媒体存了盘的（media.stored 有值）显示在气泡上方；没有说明文字时不再显示 [图片] 这样的标签气泡
+ */
+function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onMediaLoad }) {
   const { kind, label, campaign } = bubbleKind(msg);
   const [showActions, setShowActions] = useState(false);
   const pressRef = useRef(null);
-  const MediaIcon = kind === 'customer' && msg.media ? MEDIA_ICON[msg.media.type] : null;
+  const mediaBlock = kind === 'customer' && hasMediaBlock(msg.media);
+  const MediaIcon = kind === 'customer' && msg.media && !mediaBlock ? MEDIA_ICON[msg.media.type] : null;
+  const showText = (!msg.attachment || !!msg.text) && !(mediaBlock && isBareMediaLabel(msg.text));
   // 只发了文件、没有文字的人工消息不能存进知识库（后端会报 empty_message）
   const actionable = kind === 'operator' && canSaveToKb && msg.status !== 'failed' && !!msg.text?.trim();
   const fromUs = kind !== 'customer';
@@ -396,7 +405,13 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
 
   useEffect(() => () => clearTimeout(pressRef.current), []);
 
-  const note = BOT_DECISION_NOTE[msg.botDecision];
+  // 人工回复的号本来没有机器人处理，"这个号没开自动回复"和"非文字消息[视频]，已通知人工"都没有信息量（媒体已经直接显示了）。
+  // 只看 skipped：识别失败、转人工等其他原因照旧显示
+  const hideNote =
+    manual &&
+    msg.botDecision === 'skipped' &&
+    (msg.decisionReason === SKIP_NO_AUTO_REPLY || !!msg.decisionReason?.startsWith('非文字消息'));
+  const note = hideNote ? null : BOT_DECISION_NOTE[msg.botDecision];
   const ids = msg.usedEntryIds || [];
 
   return (
@@ -406,7 +421,8 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
     >
       {/* F15：发出的文件显示成文件卡片；带说明文字（caption）时文字另起一个气泡 */}
       {msg.attachment && <AttachmentCard attachment={msg.attachment} />}
-      {(!msg.attachment || msg.text) && (
+      {mediaBlock && <MessageMedia convId={convId} msg={msg} onLoad={onMediaLoad} />}
+      {showText && (
         <div className="msg__bubble">
           {MediaIcon && (
             <span className="msg__media" title={MEDIA_LABEL[msg.media.type]} aria-label={MEDIA_LABEL[msg.media.type]}>
@@ -447,7 +463,7 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
   );
 }
 
-function MessageStream({ messages, convId, canSaveToKb, onSaveToKb }) {
+function MessageStream({ messages, convId, manual, canSaveToKb, onSaveToKb }) {
   const ref = useRef(null);
   const stickRef = useRef(true);
   const lastConvRef = useRef(null);
@@ -456,6 +472,11 @@ function MessageStream({ messages, convId, canSaveToKb, onSaveToKb }) {
     const el = ref.current;
     if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
   };
+  // 图片、视频加载完会把消息撑高：原来贴着底部的，重新滚到底
+  const onMediaLoad = useCallback(() => {
+    const el = ref.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
+  }, []);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -496,7 +517,14 @@ function MessageStream({ messages, convId, canSaveToKb, onSaveToKb }) {
         return (
           <div key={m.id} className="inbox__stream-item">
             {sep && <div className="day-sep">{day}</div>}
-            <MessageBubble msg={m} canSaveToKb={canSaveToKb} onSaveToKb={onSaveToKb} />
+            <MessageBubble
+              msg={m}
+              convId={convId}
+              manual={manual}
+              canSaveToKb={canSaveToKb}
+              onSaveToKb={onSaveToKb}
+              onMediaLoad={onMediaLoad}
+            />
           </div>
         );
       })}
@@ -533,17 +561,30 @@ function nextTodoRange(text, from = 0) {
  * 草稿：输入框上方显示，"填入输入框"后由人工修改再发。kind 是 suggest 的是推荐回复，handoff（老数据没有 kind）是转人工时起草的。
  * 「换一条」调 POST suggest 让 AI 换个写法（转人工草稿也可以换，换出来的是推荐回复）。
  * F15：草稿可以只带文件（text 为空、fileIds 有值），文件列在文字下面，旁边"发送这些文件"按顺序逐个发。
- * kept：草稿已被自己发的消息清掉（后端规则），只剩前端记住的文件建议；这时不显示文字，可以手动关掉。
+ * kept：草稿已经关掉（填入输入框后、或被自己发的消息清掉），只剩前端记住的文件建议；这时不显示文字。
+ * 左上角的 × 关掉：草稿时关掉整张卡片（onClose），只剩文件时关掉文件（onDismissKept）。
  */
-function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss, onRegenerate, regenerating }) {
+function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onClose, onDismissKept, onRegenerate, regenerating }) {
   const text = !kept && draft?.text?.trim() ? draft.text : '';
   const fileIds = kept ? kept.fileIds : Array.isArray(draft?.fileIds) ? draft.fileIds : [];
   if (!text && !fileIds.length) return null;
   const isSuggest = !kept && draft?.kind === 'suggest';
   const title = kept ? '草稿建议发送的文件（还没发）' : isSuggest ? '推荐回复' : '建议回复（草稿，未发送）';
+  const closeLabel = kept ? '关掉草稿建议的文件' : '关掉这条推荐';
   return (
     <div className="draft" aria-busy={regenerating || undefined}>
       <div className="draft__head">
+        <Tooltip content={kept ? '不发了，关掉' : '关掉'}>
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon btn--sm draft__close"
+            onClick={kept ? onDismissKept : onClose}
+            disabled={sendingFiles || regenerating}
+            aria-label={closeLabel}
+          >
+            <X />
+          </button>
+        </Tooltip>
         <Sparkles aria-hidden="true" />
         <span className="draft__title">{title}</span>
         <span className="draft__actions">
@@ -556,23 +597,10 @@ function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss, o
             </Tooltip>
           )}
           {text && (
-            <button type="button" className="btn btn--sm" onClick={() => onFill(text)} disabled={regenerating}>
+            <button type="button" className="btn btn--sm" onClick={() => onFill(text, fileIds)} disabled={regenerating}>
               <CornerDownLeft />
               填入输入框
             </button>
-          )}
-          {kept && (
-            <Tooltip content="不发了，关掉">
-              <button
-                type="button"
-                className="btn btn--ghost btn--icon btn--sm"
-                onClick={onDismiss}
-                disabled={sendingFiles}
-                aria-label="关掉草稿建议的文件"
-              >
-                <X />
-              </button>
-            </Tooltip>
           )}
         </span>
       </div>
@@ -589,8 +617,9 @@ function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss, o
 /**
  * 输入框。showSuggest：没有可填的草稿时，底栏多一个「推荐回复」按钮手动要一条。
  * 文字里还有【待你确认：…】时底栏提示还有几处（点一下选中下一处），发送前再用确认框拦一次。
+ * manual：人工回复的号没有机器人可暂停，不提示"手动发送后机器人会暂停这个会话"。
  */
-function Composer({ conv, text, setText, onSent, inputRef, showSuggest, onSuggest, suggesting, suggestBlocked }) {
+function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, onSuggest, suggesting, suggestBlocked }) {
   const confirm = useConfirm();
   const [sending, setSending] = useState(false);
   const [translating, setTranslating] = useState(false);
@@ -705,7 +734,7 @@ function Composer({ conv, text, setText, onSent, inputRef, showSuggest, onSugges
           </button>
         ) : (
           <span className={`composer__hint${status ? ' composer__hint--status' : ''}`} aria-live="polite">
-            {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
+            {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused || manual ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
           </span>
         )}
         {showSuggest && (
@@ -722,7 +751,7 @@ function Composer({ conv, text, setText, onSent, inputRef, showSuggest, onSugges
             </button>
           </Tooltip>
         )}
-        <SendFileButton conv={conv} onSent={onSent} disabled={sending} />
+        <SendFileButton conv={conv} manual={manual} onSent={onSent} disabled={sending} />
         <Tooltip content="翻译成客户的语言">
           <button
             type="button"
@@ -877,6 +906,8 @@ function ChatPane({
   infoShown,
 }) {
   const [toggling, setToggling] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const manualMode = isManualMode(replyMode); // 这个号是人工回复
   const [text, setText] = useState('');
   const [kbMsg, setKbMsg] = useState(null);
   const [suggesting, setSuggesting] = useState(false);
@@ -886,7 +917,10 @@ function ChatPane({
   const inputRef = useRef(null);
   // 自己发出任何消息后端都会清空草稿（F2a），草稿里建议的文件先在这里记住：发完、手动关掉或切换会话
   // （ChatPane 按会话 key，切换即重置）前一直显示。{draftAt: 来自哪份草稿的 createdAt, fileIds}
+  // 「填入输入框」后草稿卡片关掉，带的文件也记在这里
   const [keptFiles, setKeptFiles] = useState(null);
+  // 关掉的那份草稿的 createdAt：服务端清掉之前（或轮询拿到旧数据时）也不再显示它
+  const [closedAt, setClosedAt] = useState(null);
   const [sendingFiles, setSendingFiles] = useState(false);
   const aliveRef = useRef(true);
   useEffect(() => {
@@ -913,10 +947,12 @@ function ChatPane({
       setManual(null);
     }
   }, [manual, serverDraft, serverAt, manualAt]);
-  const liveFileIds = Array.isArray(liveDraft?.fileIds) ? liveDraft.fileIds : [];
+  // 显示出来的草稿：关掉的那份和比它早的都不显示（服务端清掉之前、轮询拿到旧数据时）
+  const shownDraft = liveDraft && closedAt !== null && (liveDraft.createdAt || '') <= closedAt ? null : liveDraft;
+  const liveDraftAt = shownDraft?.createdAt;
+  const liveFileIds = Array.isArray(shownDraft?.fileIds) ? shownDraft.fileIds : [];
   // 服务端出了新草稿（createdAt 不同）就以新草稿为准；同一份草稿（轮询拿到旧数据）仍按已清掉显示
-  const kept = keptFiles && (!liveDraft || liveDraft.createdAt === keptFiles.draftAt) ? keptFiles : null;
-  const liveDraftAt = liveDraft?.createdAt;
+  const kept = keptFiles && (!shownDraft || shownDraft.createdAt === keptFiles.draftAt) ? keptFiles : null;
   useEffect(() => {
     if (liveDraftAt !== undefined) setKeptFiles((prev) => (prev && prev.draftAt !== liveDraftAt ? null : prev));
   }, [liveDraftAt]);
@@ -948,6 +984,43 @@ function ChatPane({
       if (done && aliveRef.current) setKeptFiles(null);
     } finally {
       if (aliveRef.current) setSendingFiles(false);
+    }
+  };
+
+  /**
+   * 关掉草稿卡片（左上角 ×，或填入输入框之后）：先在界面上关掉，再让服务端清掉这个会话的草稿；
+   * 手动要来、没存进服务端的那份直接丢掉。keepFiles：草稿带的文件留着，发完或再点 × 才收起。
+   * 服务端清失败时提示，卡片恢复显示
+   */
+  const closeDraft = async (keepFiles = []) => {
+    if (!conv || !shownDraft) return;
+    const prev = { manual, keptFiles };
+    setClosedAt(liveDraftAt || '');
+    setManual(null);
+    setKeptFiles(keepFiles.length ? { draftAt: liveDraftAt, fileIds: keepFiles } : null);
+    try {
+      const res = await api.clearDraft(conv.id, { silent: true });
+      if (res?.id) onConvUpdate(res);
+    } catch (e) {
+      if (e?.status === 401 || !aliveRef.current) return;
+      toast.error(`没关掉：${e?.message || '请稍后再试'}`);
+      setClosedAt(null);
+      setManual(prev.manual);
+      setKeptFiles(prev.keptFiles);
+    }
+  };
+
+  /** 人工回复的号「标为已处理」：只清掉待处理，不动草稿 */
+  const resolvePending = async () => {
+    if (!conv || resolving) return;
+    setResolving(true);
+    try {
+      const res = await api.resolveConversation(conv.id);
+      onConvUpdate(res && res.id ? res : { ...conv, needsHuman: false, pendingReason: null });
+    } catch {
+      // 已提示
+    } finally {
+      if (aliveRef.current) setResolving(false);
     }
   };
 
@@ -996,8 +1069,10 @@ function ChatPane({
     }
   };
 
-  const fillDraft = (t) => {
+  /** 填入输入框，草稿卡片随之关掉（带的文件留着） */
+  const fillDraft = (t, fileIds = []) => {
     setText(t);
+    closeDraft(fileIds);
     setTimeout(() => {
       const el = inputRef.current;
       if (el) {
@@ -1040,10 +1115,20 @@ function ChatPane({
         {conv && (
           <div className="chat-head__actions">
             {isAdmin && <AssigneeSelect conv={conv} users={users} onAssigned={onConvUpdate} />}
-            <button type="button" className={`btn btn--sm${conv.botPaused ? ' btn--primary' : ''}`} onClick={toggleBot} disabled={toggling}>
-              {toggling ? <Spinner /> : conv.botPaused ? <Play /> : <Pause />}
-              {conv.botPaused ? '恢复机器人' : '暂停机器人'}
-            </button>
+            {/* 人工回复的号没有机器人可暂停：待处理时给一个「标为已处理」 */}
+            {manualMode ? (
+              conv.needsHuman && (
+                <button type="button" className="btn btn--sm" onClick={resolvePending} disabled={resolving}>
+                  {resolving ? <Spinner /> : <Check />}
+                  标为已处理
+                </button>
+              )
+            ) : (
+              <button type="button" className={`btn btn--sm${conv.botPaused ? ' btn--primary' : ''}`} onClick={toggleBot} disabled={toggling}>
+                {toggling ? <Spinner /> : conv.botPaused ? <Play /> : <Pause />}
+                {conv.botPaused ? '恢复机器人' : '暂停机器人'}
+              </button>
+            )}
             <Tooltip content={infoShown ? '隐藏客户信息' : '客户信息'}>
               <button
                 type="button"
@@ -1069,28 +1154,30 @@ function ChatPane({
           />
         </div>
       ) : (
-        <MessageStream messages={messages} convId={convId} canSaveToKb={canSaveToKb} onSaveToKb={setKbMsg} />
+        <MessageStream messages={messages} convId={convId} manual={manualMode} canSaveToKb={canSaveToKb} onSaveToKb={setKbMsg} />
       )}
 
       {conv && (
         <div className="inbox__compose">
           <DraftBox
-            draft={liveDraft}
+            draft={shownDraft}
             kept={kept}
             onFill={fillDraft}
             onSendFiles={sendDraftFiles}
             sendingFiles={sendingFiles}
-            onDismiss={() => setKeptFiles(null)}
+            onClose={() => closeDraft()}
+            onDismissKept={() => setKeptFiles(null)}
             onRegenerate={requestSuggest}
             regenerating={suggesting}
           />
           <Composer
             conv={conv}
+            manual={manualMode}
             text={text}
             setText={setText}
             onSent={handleSent}
             inputRef={inputRef}
-            showSuggest={!(!kept && liveDraft?.text?.trim())}
+            showSuggest={!(!kept && shownDraft?.text?.trim())}
             onSuggest={requestSuggest}
             suggesting={suggesting}
             suggestBlocked={noCustomerMsg ? '客户还没发过消息' : ''}
@@ -1223,6 +1310,8 @@ export default function ChatsTab() {
   else if (heldRef.current?.id !== selectedId) heldRef.current = null;
   const conv = found || heldRef.current;
   const noConnected = Array.isArray(accounts) && !accounts.some(isConnected);
+  /** 会话所属号的回复方式；号已删除、还没拿到号列表时为 null */
+  const modeOfConv = (c) => replyModeOf(accounts?.find((a) => a.id === c.accountId));
   const pending = (convs || []).filter((c) => c.needsHuman).length;
 
   const onConvUpdate = (next) => {
@@ -1320,6 +1409,7 @@ export default function ChatsTab() {
             isAdmin={isAdmin}
             users={users}
             onBulkAssigned={onBulkAssigned}
+            modeOfConv={modeOfConv}
           />
           {selectedId ? (
             <ChatPane
@@ -1335,7 +1425,7 @@ export default function ChatsTab() {
               canSaveToKb={isAdmin}
               isAdmin={isAdmin}
               users={users}
-              replyMode={conv ? replyModeOf(accounts?.find((a) => a.id === conv.accountId)) : null}
+              replyMode={conv ? modeOfConv(conv) : null}
               onToggleInfo={toggleInfo}
               infoShown={infoShown}
             />

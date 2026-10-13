@@ -156,7 +156,15 @@ export const EMAIL_PROVIDERS = [
 export const MEDIA_LABEL = {
   voice: '语音',
   image: '图片',
+  video: '视频',
+  document: '文件',
+  sticker: '贴纸',
 };
+
+/** 人工回复的号收到客户消息时后端记的跳过原因（和 server/src/wa/service.js 一致）。人工回复的号会话页不显示这句 */
+export const SKIP_NO_AUTO_REPLY = '这个号没开自动回复';
+/** 号的回复方式不是自动回复（人工回复）。不知道（号已删除、还没拿到号列表）时返回 false，按自动回复的样子显示 */
+export const isManualMode = (mode) => mode != null && mode !== 'auto';
 
 // F6 客户阶段。前四个是漏斗顺序。tone 是「客户」页阶段小标签的颜色（Tag 的语义色，neutral 为灰）：
 // 前期蓝、议价琥珀、有下单意向绿，售后和其他灰

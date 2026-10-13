@@ -247,7 +247,7 @@ export const TINY_PNG = Buffer.from(
 /**
  * 假 WAHA：记录请求，模拟 sessions / sendText / sendSeen / presence / qr / lids 接口，
  * 以及 F15 的 sendImage / sendFile（file.url 时按真 WAHA 的做法去拉这个地址，拉的时候把主机换成 state.fetchBase）
- * 和 F4 的 /api/files/...（state.files 里放 路径 → {buffer, mime}，要求带 X-Api-Key 时设 state.requireKey）。
+ * 和 F4 的 /api/files/...（state.files 里放 路径 → {buffer, mime, delayMs?, contentLength?, chunked?}，要求带 X-Api-Key 时设 state.requireKey）。
  * maskSecrets=true 时 GET session 返回的配置把代理密码和 HMAC key 打码（模拟 WAHA 读回来的配置不可比）。
  * 手机号配对码：POST /api/<session>/auth/request-code 只在 SCAN_QR_CODE 时给码（否则 422，文案同 GOWS），state.codeError
  * 设成 {status, message} 时强制出错。给过码的 session 记 halfCreds（残留的半截登录凭证）：之后 start 直接 FAILED，
@@ -447,6 +447,18 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
       if (state.requireKey && req.headers['x-api-key'] !== state.requireKey) return json(401, { message: 'Unauthorized' });
       const f = state.files.get(u.pathname.slice('/api/files/'.length));
       if (!f) return json(404, { message: 'file not found' });
+      // 媒体存盘的测试：delayMs 晚点给文件；contentLength 声明一个假的大小（只发头不发体）；chunked 不带 content-length 分块发
+      if (f.delayMs) await sleep(f.delayMs);
+      if (f.contentLength) {
+        res.writeHead(200, { 'content-type': f.mime, 'content-length': f.contentLength });
+        res.flushHeaders();
+        return;
+      }
+      if (f.chunked) {
+        res.writeHead(200, { 'content-type': f.mime });
+        for (let i = 0; i < f.buffer.length; i += 1024) res.write(f.buffer.subarray(i, i + 1024));
+        return res.end();
+      }
       res.writeHead(200, { 'content-type': f.mime, 'content-length': f.buffer.length });
       return res.end(f.buffer);
     }

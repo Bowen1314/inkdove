@@ -125,7 +125,7 @@ export async function sendFilesInOrder({ convId, files, onSent }) {
 
 /* ---------- 选择文件发送 ---------- */
 
-function SendFileModal({ open, conv, onClose, onSent }) {
+function SendFileModal({ open, conv, manual, onClose, onSent }) {
   const { isAdmin } = useAuth();
   const [files, setFiles] = useState(null);
   const [error, setError] = useState(null);
@@ -268,14 +268,15 @@ function SendFileModal({ open, conv, onClose, onSent }) {
           )}
         </div>
 
-        {!conv.botPaused && <div className="field__hint">发送后机器人会暂停这个会话。</div>}
+        {/* 人工回复的号没有机器人可暂停 */}
+        {!conv.botPaused && !manual && <div className="field__hint">发送后机器人会暂停这个会话。</div>}
       </div>
     </Modal>
   );
 }
 
-/** 输入框旁边的"发送文件"按钮（权限同手动回复，agent 也能用） */
-export function SendFileButton({ conv, onSent, disabled }) {
+/** 输入框旁边的"发送文件"按钮（权限同手动回复，agent 也能用）。manual：人工回复的号 */
+export function SendFileButton({ conv, manual = false, onSent, disabled }) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -293,6 +294,7 @@ export function SendFileButton({ conv, onSent, disabled }) {
       <SendFileModal
         open={open}
         conv={conv}
+        manual={manual}
         onClose={() => setOpen(false)}
         onSent={(msg) => {
           setOpen(false);

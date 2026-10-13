@@ -92,7 +92,8 @@ export function filesForm(files, { addToKb } = {}) {
  * - GET /download/{media-id} → 文件内容，要求 Bearer token
  */
 export async function startFakeGraph({ token } = {}) {
-  const state = { requests: [], uploads: [], media: new Map(), uploadCount: 0 };
+  // media：media id → {mime, buffer, fileSize?(覆盖 GET /{id} 返回的 file_size)}；downloads 记下载过的 media id
+  const state = { requests: [], uploads: [], media: new Map(), uploadCount: 0, downloads: [] };
   const server = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -114,6 +115,7 @@ export async function startFakeGraph({ token } = {}) {
       if (!authed) return json(401, { error: { message: 'bad token' } });
       const m = state.media.get(parts[1]);
       if (!m) return json(404, { error: { message: 'no media' } });
+      state.downloads.push(parts[1]);
       res.writeHead(200, { 'content-type': m.mime });
       return res.end(m.buffer);
     }
@@ -125,7 +127,7 @@ export async function startFakeGraph({ token } = {}) {
         messaging_product: 'whatsapp',
         url: `${base}/download/${parts[1]}`,
         mime_type: m.mime,
-        file_size: m.buffer.length,
+        file_size: m.fileSize ?? m.buffer.length,
         id: parts[1],
       });
     }

@@ -12,7 +12,9 @@
 //   https://developers.facebook.com/docs/whatsapp/cloud-api/messages/document-messages
 //   https://developers.facebook.com/docs/whatsapp/cloud-api/messages/image-messages
 // 下载入站媒体（F4）：GET {graph}/{Version}/{media-id} → {url, mime_type, file_size}，再带同一个 token GET 那个 url（5 分钟有效）
-import { readLimited } from './waha.js';
+// 下载媒体文件本身用 media-download.js 的 httpGet（node:http），不用 fetch，原因见那个文件开头的注释；查 url 的小 JSON 还用 fetch
+import { httpGet, HttpGetError } from './media-download.js';
+import { readLimited, TooLargeError } from './waha.js';
 
 export class MetaError extends Error {}
 
@@ -32,8 +34,10 @@ async function readJson(res) {
 }
 
 async function metaFetch(url, init, timeoutMs = 20_000) {
+  const { signal, ...rest } = init || {};
+  const timeout = AbortSignal.timeout(timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    return await fetch(url, { ...rest, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   } catch (err) {
     throw new MetaError(`连不上 Meta Graph API：${err?.cause?.code || err?.message || err}`);
   }
@@ -149,22 +153,44 @@ export async function metaSendMedia(graphBase, meta, to, m) {
 }
 
 /**
+ * 入站媒体：先 GET /{media-id} 查 url 和 file_size，再带同一个 token 下载（url 5 分钟有效）。
+ * file_size 超过 maxBytes 时不下载，直接抛 TooLargeError（size 是 Meta 给的大小）。
+ * res 是 node:http 的 IncomingMessage（带 headers），状态码已检查过；重定向到别的主机时不带 token。
+ * @returns {Promise<{res:import('node:http').IncomingMessage, mime:string, size:number|null}>}
+ */
+export async function metaOpenMedia(graphBase, meta, mediaId, { maxBytes, timeoutMs = 60_000, signal } = {}) {
+  if (!meta.accessToken) throw new MetaError('Meta 通道未配置 accessToken');
+  const auth = { authorization: `Bearer ${meta.accessToken}` };
+  const info = await readJson(await metaFetch(graphUrl(graphBase, meta, mediaId), { headers: auth, signal }));
+  if (!info?.url) throw new MetaError('Meta 没有返回媒体下载地址');
+  const size = Number(info.file_size);
+  const known = info.file_size != null && Number.isFinite(size) && size >= 0;
+  if (maxBytes && known && size > maxBytes) throw new TooLargeError(size, maxBytes);
+  let res;
+  try {
+    ({ stream: res } = await httpGet(String(info.url), { headers: auth, timeoutMs, signal }));
+  } catch (err) {
+    if (!(err instanceof HttpGetError)) throw err; // 被中止（服务关闭）
+    if (err.status) throw new MetaError(`下载媒体失败：Meta 返回 ${err.status}`);
+    throw new MetaError(`连不上 Meta Graph API：${err.message}`);
+  }
+  const mime = String(info.mime_type || res.headers['content-type'] || '').split(';')[0].trim();
+  return { res, mime, size: known ? size : null };
+}
+
+/**
  * F4：下载入站媒体：先查 url，再带 token 下载。
  * @returns {Promise<{buffer:Buffer, mime:string}>}
  */
 export async function metaDownloadMedia(graphBase, meta, mediaId, { maxBytes } = {}) {
-  if (!meta.accessToken) throw new MetaError('Meta 通道未配置 accessToken');
-  const auth = { authorization: `Bearer ${meta.accessToken}` };
-  const info = await readJson(await metaFetch(graphUrl(graphBase, meta, mediaId), { headers: auth }));
-  if (!info?.url) throw new MetaError('Meta 没有返回媒体下载地址');
-  if (maxBytes && Number(info.file_size) > maxBytes) {
-    throw new MetaError(`文件太大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB）`);
+  let opened;
+  try {
+    opened = await metaOpenMedia(graphBase, meta, mediaId, { maxBytes });
+  } catch (err) {
+    // 保持原来的报错（MetaError「文件太大（超过 xMB）」）
+    if (err instanceof TooLargeError) throw new MetaError(err.message);
+    throw err;
   }
-  const res = await metaFetch(String(info.url), { headers: auth }, 60_000);
-  if (!res.ok) {
-    await res.body?.cancel().catch(() => {});
-    throw new MetaError(`下载媒体失败：Meta 返回 ${res.status}`);
-  }
-  const buffer = await readLimited(res, maxBytes);
-  return { buffer, mime: String(info.mime_type || res.headers.get('content-type') || '').split(';')[0].trim() };
+  const buffer = await readLimited(opened.res, maxBytes);
+  return { buffer, mime: opened.mime };
 }

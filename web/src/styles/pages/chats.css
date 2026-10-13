@@ -483,6 +483,67 @@ a.msg__file:hover {
 .msg--failed .msg__file {
   opacity: 0.6;
 }
+/* 客户发来的媒体（存了盘的）：图片、贴纸是缩略图，点开看大图；视频、语音是播放器；其他文件和没存下来的是卡片 */
+.msg__image {
+  display: block;
+  min-width: 64px;
+  min-height: 64px;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-bubble);
+  border-top-left-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  cursor: zoom-in;
+}
+.msg__image > img {
+  display: block;
+  max-width: 240px;
+  max-height: 240px;
+  width: auto;
+  height: auto;
+}
+.msg__image--sticker {
+  border-color: transparent;
+  background: transparent;
+}
+.msg__image--sticker > img {
+  max-width: 120px;
+  max-height: 120px;
+}
+.msg__video {
+  display: block;
+  width: 320px;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--radius-bubble);
+  border-top-left-radius: var(--radius-sm);
+  background: var(--bg-muted);
+}
+.msg__audio {
+  display: block;
+  width: 280px;
+  max-width: 100%;
+}
+.msg__file-meta--warning {
+  color: var(--warning);
+}
+.msg__file-meta--danger {
+  color: var(--danger);
+}
+/* 看大图的弹窗 */
+.media-viewer {
+  display: flex;
+  justify-content: center;
+}
+.media-viewer__img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  border-radius: var(--radius-md);
+  object-fit: contain;
+}
 
 /* ---- 草稿和输入框 ---- */
 .inbox__compose {
@@ -510,6 +571,10 @@ a.msg__file:hover {
 .draft__head > svg {
   width: 14px;
   height: 14px;
+}
+/* 左上角的 ×：不把标题行撑高 */
+.draft__close {
+  margin: -4px -2px -4px -6px;
 }
 .draft__title {
   min-width: 0;

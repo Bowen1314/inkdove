@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import { after, before, beforeEach, describe, it } from 'node:test';
+import { createWahaClient, WahaError } from '../src/wa/waha.js';
 import {
   convIdOf,
   convPath,
@@ -633,5 +635,53 @@ describe('手机号配对码', () => {
     assert.equal(r.body.state, 'working');
     assert.deepEqual(r.body.me, { id: '8613812345678@c.us', pushName: 'Shop' });
     assert.deepEqual(ops(acc), ['create', 'stop', 'start']);
+  });
+});
+
+// WAHA 出错时错误文字会原样显示在界面上（如「下载失败：…」）：HTML 错误页、纯文本不带原文，只有 JSON 里的 message / error 才带
+describe('WAHA 出错时的错误文字', () => {
+  const HTML = '<!DOCTYPE HTML>\n<html lang="en">\n<head><title>Error response</title></head>\n<body><h1>Error response</h1></body>\n</html>\n';
+  /** 路径 → [状态码, content-type, 正文] */
+  const ROUTES = {
+    '/api/sessions/html/start': [404, 'text/html', HTML],
+    '/api/sessions/text/start': [500, 'text/plain', 'Internal Server Error'],
+    '/api/sessions/json/start': [500, 'application/json', JSON.stringify({ message: 'session failed' })],
+    '/api/sessions/jsonerr/start': [422, 'application/json', JSON.stringify({ error: { code: 'bad' } })],
+    '/api/sessions/nomsg/start': [500, 'application/json', JSON.stringify({ statusCode: 500 })],
+    '/api/files/s/gone.jpg': [404, 'text/html', HTML],
+    '/api/files/s/boom.jpg': [500, 'text/html', HTML],
+  };
+  let server;
+  let client;
+  before(async () => {
+    server = http.createServer((req, res) => {
+      const [status, type, body] = ROUTES[req.url.split('?')[0]] || [404, 'text/plain', 'no route'];
+      res.writeHead(status, { 'content-type': type });
+      res.end(body);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    client = createWahaClient({ wahaUrl: `http://127.0.0.1:${server.address().port}`, wahaApiKey: '' });
+  });
+  after(() => new Promise((resolve) => server.close(resolve)));
+
+  const failsWith = (promise, message, status) =>
+    assert.rejects(promise, (err) => {
+      assert.ok(err instanceof WahaError);
+      assert.equal(err.message, message);
+      assert.equal(err.status, status);
+      return true;
+    });
+
+  it('HTML、纯文本只写状态码；JSON 有 message / error 才带上', async () => {
+    await failsWith(client.startSession('html'), 'WAHA 返回 404', 404);
+    await failsWith(client.startSession('text'), 'WAHA 返回 500', 500);
+    await failsWith(client.startSession('json'), 'WAHA 返回 500：session failed', 500);
+    await failsWith(client.startSession('jsonerr'), 'WAHA 返回 422：{"code":"bad"}', 422);
+    await failsWith(client.startSession('nomsg'), 'WAHA 返回 500', 500);
+  });
+
+  it('媒体下载 404 给一句人话；其他状态码照旧只写状态码', async () => {
+    await failsWith(client.fetchMedia('http://waha:3000/api/files/s/gone.jpg'), 'WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', 404);
+    await failsWith(client.fetchMedia('http://waha:3000/api/files/s/boom.jpg'), 'WAHA 返回 500', 500);
   });
 });

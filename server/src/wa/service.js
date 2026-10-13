@@ -12,8 +12,29 @@ import { buildReplyContext, decideReply, normalizeFileIds } from '../reply/engin
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse, sleep } from '../util.js';
 import { assignCampaignConversation } from './assign.js';
-import { baseMime, MEDIA_LIMITS, mediaTypeOf, oggDurationSeconds, wahaVoiceSeconds } from './media.js';
-import { metaDownloadMedia, metaMarkRead, metaSendMedia, metaSendTemplate, metaSendText, metaUploadMedia } from './meta.js';
+import {
+  baseMime,
+  cleanFilename,
+  downloadName,
+  MEDIA_LABELS,
+  MEDIA_LIMITS,
+  MEDIA_STORE_MAX_BYTES,
+  mediaKindOf,
+  mediaTypeOf,
+  oggDurationSeconds,
+  publicMedia,
+  wahaVoiceSeconds,
+} from './media.js';
+import { createMediaStore } from './media-store.js';
+import {
+  metaDownloadMedia,
+  metaMarkRead,
+  metaOpenMedia,
+  metaSendMedia,
+  metaSendTemplate,
+  metaSendText,
+  metaUploadMedia,
+} from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
 import { needsRelay } from './relay.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
@@ -51,6 +72,9 @@ export const HISTORY_CHAT_LIMIT = 100;
 export const HISTORY_MESSAGES_PER_CHAT = 20;
 const HISTORY_IMPORT_DELAY_MS = 10_000;
 const HISTORY_SKIP_REASON = '导入的历史消息，机器人不处理';
+/** 客户媒体存盘：一个文件最多下这么久（64MB 的视频在慢线路上也够） */
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
+const MEDIA_TOO_LARGE_TEXT = '文件太大，没有保存';
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -131,14 +155,33 @@ function wahaChatOf(p) {
   return p.to || p.from;
 }
 
+/**
+ * WAHA 原始消息里看得出的类型：贴纸、文件（documentMessage）。payload 本身没有 type 字段，所以看 _data：
+ * GOWS 是 _data.Message.<x>Message，NOWEB 是 _data.message.<x>Message，WEBJS 是 _data.type。认不出返回 null。
+ * 只按源码和文档推断，GOWS 下的贴纸还没在真机上核实。
+ */
+function wahaRawKind(p) {
+  const d = p?._data || {};
+  const msg = d.Message || d.message || null;
+  if (msg && typeof msg === 'object') {
+    if (msg.stickerMessage) return 'sticker';
+    if (msg.documentMessage || msg.documentWithCaptionMessage) return 'document';
+  }
+  if (d.type === 'sticker') return 'sticker';
+  if (d.type === 'document') return 'document';
+  return null;
+}
+
 /** WAHA message payload → 统一的入站结构 */
 export function parseWahaMessage(p) {
   const rawChat = String(wahaChatOf(p) || '');
   const chatId = rawChat.replace(/@s\.whatsapp\.net$/i, '@c.us');
   const body = typeof p.body === 'string' ? p.body.trim() : '';
   let label = null;
+  const rawKind = p.hasMedia ? wahaRawKind(p) : null;
   if (!body) {
-    if (p.hasMedia) label = mediaLabel(p.media?.mimetype);
+    // 标签跟 media.type 一致：贴纸、按文件发的（SVG、按文件发的照片等）看消息本身，其他按 mime
+    if (p.hasMedia) label = rawKind ? MEDIA_LABELS[rawKind] : mediaLabel(p.media?.mimetype);
     else if (p.location) label = '[位置]';
     else if (Array.isArray(p.vCards) && p.vCards.length) label = '[名片]';
     else label = '[非文字消息]';
@@ -149,16 +192,21 @@ export function parseWahaMessage(p) {
   else if (ts < 1e12) ts *= 1000; // payload.timestamp 是秒
   const d = p._data || {};
   const contactName = String(d.notifyName || d.pushName || d.Info?.PushName || d.pushname || '').trim();
-  // F4：图片和语音。media.url 是 WAHA 下载好的文件地址（没下载时为 null），media.error 是下载出错的原因
+  // 媒体：media.url 是 WAHA 下载好的文件地址（没下载时为 null），media.error 是下载出错的原因，media.filename 是文件的原始名字。
+  // type 是显示类型（图片、视频、语音、文件、贴纸）；f4Type 是 F4 识别的类型，按 mime 判断（image/* 和 audio/*，和原来一样）。
+  // 导入的历史消息 media 是 null（没下载），没有 mime 也认不出类型，这时不记媒体
   let media = null;
-  const mtype = p.hasMedia ? mediaTypeOf(p.media?.mimetype) : null;
-  if (mtype) {
+  const mime = p.hasMedia ? baseMime(p.media?.mimetype) : '';
+  if (p.hasMedia && p.media && typeof p.media === 'object' && (mime || p.media.url)) {
+    const f4Type = mediaTypeOf(mime);
     media = {
-      type: mtype,
-      mime: baseMime(p.media?.mimetype),
-      url: typeof p.media?.url === 'string' && p.media.url ? p.media.url : null,
-      error: p.media?.error ? String(typeof p.media.error === 'string' ? p.media.error : JSON.stringify(p.media.error)) : null,
-      seconds: mtype === 'voice' ? wahaVoiceSeconds(p) : null,
+      type: rawKind || mediaKindOf(mime),
+      f4Type,
+      mime,
+      url: typeof p.media.url === 'string' && p.media.url ? p.media.url : null,
+      error: p.media.error ? String(typeof p.media.error === 'string' ? p.media.error : JSON.stringify(p.media.error)) : null,
+      filename: cleanFilename(p.media.filename),
+      seconds: f4Type === 'voice' ? wahaVoiceSeconds(p) : null,
     };
   }
   return {
@@ -176,6 +224,8 @@ export function parseWahaMessage(p) {
     source: typeof p.source === 'string' ? p.source : null,
   };
 }
+
+const META_MEDIA_KIND = { image: 'image', video: 'video', audio: 'voice', document: 'document', sticker: 'sticker' };
 
 /** Meta webhook value.messages[] 里的一条 → 统一结构；reaction 返回 null */
 export function parseMetaMessage(msg, names) {
@@ -213,10 +263,18 @@ export function parseMetaMessage(msg, names) {
   text = String(text).trim();
   const ts = Number(msg.timestamp);
   const from = String(msg.from || '').replace(/\D+/g, '');
-  // F4：图片 {id, mime_type, caption}、语音 {id, mime_type, voice}；文件要先用 media id 换下载地址
+  // 图片、视频、语音、文件、贴纸都是 {id, mime_type, …}（文件还有 filename），要先用 media id 换下载地址。
+  // F4 只识别图片和语音（audio）
   let media = null;
-  if ((type === 'image' || type === 'audio') && msg[type]?.id) {
-    media = { type: type === 'image' ? 'image' : 'voice', mime: baseMime(msg[type].mime_type), id: String(msg[type].id), seconds: null };
+  if (META_MEDIA_KIND[type] && msg[type]?.id) {
+    media = {
+      type: META_MEDIA_KIND[type],
+      f4Type: type === 'image' ? 'image' : type === 'audio' ? 'voice' : null,
+      mime: baseMime(msg[type].mime_type),
+      id: String(msg[type].id),
+      filename: type === 'document' ? cleanFilename(msg.document.filename) : null,
+      seconds: null,
+    };
   }
   return {
     channel: 'meta',
@@ -294,6 +352,8 @@ export function createWaService(ctx, opts = {}) {
   /** @type {Map<string, number>} 会话 id → 正在识别的语音/图片条数（F4）；识别完之前不处理这个会话 */
   const converting = new Map();
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
+  /** 客户媒体单个文件的上限（测试里可以调小） */
+  const mediaMaxBytes = opts.mediaStoreMaxBytes ?? MEDIA_STORE_MAX_BYTES;
   const pairWaitMs = opts.wahaPairWaitMs ?? PAIR_WAIT_MS;
   const wahaPollMs = opts.wahaPollMs ?? PAIR_POLL_MS;
   const historyDelayMs = opts.historyImportDelayMs ?? HISTORY_IMPORT_DELAY_MS;
@@ -303,6 +363,20 @@ export function createWaService(ctx, opts = {}) {
   const historyRunning = new Set();
   const startedAt = Date.now();
   let closed = false;
+  /** 客户媒体存盘 */
+  const mediaStore = createMediaStore(config.dataDir);
+  /** @type {Set<{promise:Promise<any>, ac:AbortController}>} 正在下载存盘的媒体（关闭时中止） */
+  const mediaJobs = new Set();
+  // 上次进程退出时没下完的：半截文件删掉，消息记为下载失败
+  try {
+    mediaStore.cleanTmp();
+    db.prepare(
+      `UPDATE messages SET media = json_set(media, '$.stored', 'failed', '$.error', '下载被中断（服务重启），请在手机上查看')
+       WHERE media IS NOT NULL AND json_valid(media) AND json_extract(media, '$.stored') = 'pending'`,
+    ).run();
+  } catch (err) {
+    log.warn(`[wa] 清理没下完的媒体出错：${err?.message || err}`);
+  }
 
   const settings = () => ctx.getSettings();
 
@@ -495,8 +569,8 @@ export function createWaService(ctx, opts = {}) {
       via: r.via ?? null,
       sentByUserId: r.sent_by_user_id ?? null,
       sentByName: r.sent_by_name ?? null,
-      // F4：客户发来的语音/图片 {type, mime}；F15：这条消息发的文件 {fileId, filename, mime, size}
-      media: safeJsonParse(r.media, null),
+      // 客户发来的媒体 {type, mime, size, filename, stored, error}（旧数据只有 {type, mime}）；F15：这条消息发的文件 {fileId, filename, mime, size}
+      media: publicMedia(safeJsonParse(r.media, null)),
       attachment: safeJsonParse(r.attachment, null),
       status: r.status,
       error: r.error ?? null,
@@ -886,8 +960,9 @@ export function createWaService(ctx, opts = {}) {
     const botOn = acc.replyMode === 'auto' && !conv.bot_paused;
     // F4：开了对应的识别、机器人要处理、模型已配置时，先存一条占位消息，识别成文字后再进回复流程
     const s = settings();
-    if (m.media && (m.media.type === 'voice' ? s.media.voice : s.media.image) && botOn && llmConfigured(s, config)) {
-      const label = m.media.type === 'voice' ? '[语音]' : '[图片]';
+    const f4Type = m.media?.f4Type || null;
+    if (f4Type && (f4Type === 'voice' ? s.media.voice : s.media.image) && botOn && llmConfigured(s, config)) {
+      const label = f4Type === 'voice' ? '[语音]' : '[图片]';
       const msgId = newId();
       const res = db
         .prepare(
@@ -900,11 +975,13 @@ export function createWaService(ctx, opts = {}) {
           m.externalId || null,
           m.text ? `${label}\n${clip(m.text, MAX_STORED_TEXT)}` : label,
           new Date(m.timestampMs).toISOString(),
-          JSON.stringify({ type: m.media.type, mime: m.media.mime || null }),
+          storedMediaJson(m.media),
         );
       if (res.changes === 0) return 'ignored_duplicate';
       abortSending(convId, 'new_message');
-      startConversion(acc, convId, msgId, m);
+      // 存盘和识别共用一次下载：识别等存盘的结果，存成了就读文件
+      const saved = startMediaStore(acc, msgId, m.media);
+      startConversion(acc, convId, msgId, m, saved);
       return 'converting';
     }
     const willProcess = isText && botOn;
@@ -912,13 +989,14 @@ export function createWaService(ctx, opts = {}) {
     if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，已通知人工`;
     else if (acc.replyMode !== 'auto') skipReason = '这个号没开自动回复';
     else if (conv.bot_paused) skipReason = '会话已暂停（人工接管中）';
+    const msgId = newId();
     const res = db
       .prepare(
         `INSERT OR IGNORE INTO messages(id, conversation_id, external_id, direction, author, kind, text, ts, bot_decision, decision_reason, status, handled, media)
          VALUES(?, ?, ?, 'in', 'customer', ?, ?, ?, ?, ?, 'received', ?, ?)`,
       )
       .run(
-        newId(),
+        msgId,
         convId,
         m.externalId || null,
         isText ? 'text' : 'media',
@@ -927,9 +1005,11 @@ export function createWaService(ctx, opts = {}) {
         willProcess ? null : 'skipped',
         willProcess ? null : skipReason,
         willProcess ? 0 : 1,
-        m.media ? JSON.stringify({ type: m.media.type, mime: m.media.mime || null }) : null,
+        m.media ? storedMediaJson(m.media) : null,
       );
     if (res.changes === 0) return 'ignored_duplicate';
+    // 客户发来的媒体：后台下载存盘，不等结果
+    if (m.media) startMediaStore(acc, msgId, m.media);
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
     abortSending(convId, 'new_message');
     if (!isText) {
@@ -944,12 +1024,104 @@ export function createWaService(ctx, opts = {}) {
     return 'archived';
   }
 
+  // ---------------- 客户媒体存盘 ----------------
+  /** 新消息里 media 列的初始值：stored=pending，下载完改成 ok / too_large / failed */
+  function storedMediaJson(media) {
+    return JSON.stringify({
+      type: media.type,
+      mime: media.mime || null,
+      size: null,
+      filename: media.filename || null,
+      stored: 'pending',
+      error: null,
+      fileKey: null,
+    });
+  }
+
+  /** 把存盘结果并进消息的 media 列（读出来合并再写回，不动别的列） */
+  function patchStoredMedia(msgId, result) {
+    db.transaction(() => {
+      const row = db.prepare('SELECT media FROM messages WHERE id = ?').get(msgId);
+      if (!row) return;
+      const cur = safeJsonParse(row.media, null) || {};
+      const next = {
+        ...cur,
+        mime: cur.mime || result.mime || null,
+        size: result.size ?? cur.size ?? null,
+        stored: result.stored,
+        error: result.error ?? null,
+        fileKey: result.fileKey ?? null,
+      };
+      db.prepare('UPDATE messages SET media = ? WHERE id = ?').run(JSON.stringify(next), msgId);
+    })();
+  }
+
+  /**
+   * 下载一条客户消息里的媒体存进 <dataDir>/media/，结果写回消息的 media 列。不抛错。
+   * WAHA 用事件里的 media.url（WAHA 默认只留 180 秒，所以收到就下）；Meta 用 media id 走 Graph API（下载地址 5 分钟有效）。
+   * @returns {Promise<{stored:'ok'|'too_large'|'failed', fileKey?:string, size?:number|null, mime?:string, error?:string}>}
+   */
+  async function storeMedia(acc, msgId, media, signal) {
+    let result;
+    try {
+      let res;
+      let mime = media.mime || '';
+      if (acc.channel === 'waha') {
+        if (media.error) throw new Error(`WAHA 下载媒体出错：${media.error}`);
+        if (!media.url) throw new Error('WAHA 没有提供下载地址（检查 WAHA_EVENTS_DOWNLOAD_MEDIA）');
+        res = await waha.fetchMedia(media.url, { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS, signal });
+      } else {
+        if (!media.id) throw new Error('消息里没有 media id');
+        const opened = await metaOpenMedia(config.metaGraphUrl, acc.meta, media.id, {
+          maxBytes: mediaMaxBytes,
+          timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+          signal,
+        });
+        res = opened.res;
+        mime = mime || opened.mime;
+      }
+      // res 是 node:http 的 IncomingMessage（媒体下载不走 fetch，见 media-download.js）
+      mime = mime || baseMime(res.headers['content-type']);
+      const { key, size } = await mediaStore.saveResponse(res, { maxBytes: mediaMaxBytes });
+      result = { stored: 'ok', fileKey: key, size, mime };
+    } catch (err) {
+      if (err instanceof TooLargeError) result = { stored: 'too_large', size: Number.isFinite(err.size) ? err.size : null, error: MEDIA_TOO_LARGE_TEXT };
+      else result = { stored: 'failed', error: clip(String(err?.message || err), 300) };
+    }
+    if (closed) {
+      // 关闭时被中止的：消息留在 pending，下次启动时记为中断；已经存下的文件不要了
+      if (result.fileKey) await mediaStore.remove(result.fileKey);
+      return { stored: 'failed', error: '服务正在关闭' };
+    }
+    try {
+      patchStoredMedia(msgId, result);
+    } catch (err) {
+      log.warn(`[wa] 记录媒体存盘结果出错：${err?.message || err}`);
+    }
+    if (result.stored !== 'ok') log.warn(`[wa] 消息 ${msgId} 的媒体没有存下（${result.stored}）：${result.error}`);
+    return result;
+  }
+
+  /** 后台开始下载存盘，返回结果的 promise（不会 reject）；F4 识别要用它 */
+  function startMediaStore(acc, msgId, media) {
+    const ac = new AbortController();
+    const job = { ac, promise: null };
+    job.promise = storeMedia(acc, msgId, media, ac.signal)
+      .catch((err) => {
+        log.error(`[wa] 媒体存盘出错：${err?.stack || err}`);
+        return { stored: 'failed', error: String(err?.message || err) };
+      })
+      .finally(() => mediaJobs.delete(job));
+    mediaJobs.add(job);
+    return job.promise;
+  }
+
   // ---------------- F4：语音、图片转文字 ----------------
-  function startConversion(acc, convId, msgId, m) {
+  function startConversion(acc, convId, msgId, m, saved) {
     converting.set(convId, (converting.get(convId) || 0) + 1);
     // F12：识别用的模型调用记到这个号和会话上
-    llmScope({ accountId: acc.id, conversationId: convId }, () => convertMedia(acc, convId, msgId, m))
-      .catch((err) => log.error(`[wa] 识别会话 ${convId} 的${m.media.type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
+    llmScope({ accountId: acc.id, conversationId: convId }, () => convertMedia(acc, convId, msgId, m, saved))
+      .catch((err) => log.error(`[wa] 识别会话 ${convId} 的${m.media.f4Type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
       .finally(() => {
         const n = (converting.get(convId) || 1) - 1;
         if (n > 0) converting.set(convId, n);
@@ -972,9 +1144,9 @@ export function createWaService(ctx, opts = {}) {
    * 下载 → 检查大小、格式、时长 → 转写或描述 → 把占位消息改成文字（kind=text，等下一轮处理）。
    * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）。
    */
-  async function convertMedia(acc, convId, msgId, m) {
+  async function convertMedia(acc, convId, msgId, m, saved) {
     const started = Date.now();
-    const { type } = m.media;
+    const type = m.media.f4Type;
     const what = type === 'voice' ? '语音' : '图片';
     const limits = MEDIA_LIMITS[type];
     const fail = (code, why) => {
@@ -1000,15 +1172,29 @@ export function createWaService(ctx, opts = {}) {
     if (type === 'voice' && m.media.seconds && m.media.seconds > limits.maxSeconds) {
       return fail('media_unsupported', `语音 ${Math.round(m.media.seconds)} 秒，超过 3 分钟`);
     }
-    let buffer;
+    let buffer = null;
     let mime;
-    try {
-      ({ buffer, mime } = await downloadMedia(acc, m.media, limits.maxBytes));
-    } catch (err) {
-      if (err instanceof TooLargeError || /文件太大/.test(String(err?.message))) {
-        return fail('media_unsupported', `文件超过 ${Math.round(limits.maxBytes / 1024 / 1024)}MB`);
+    const tooBig = () => fail('media_unsupported', `文件超过 ${Math.round(limits.maxBytes / 1024 / 1024)}MB`);
+    // 优先用存盘下来的文件，不重复下载；没存成功（下载失败）再按原来的方式下载一次
+    const stored = saved ? await saved : null;
+    if (stored?.stored === 'too_large') return tooBig();
+    if (stored?.stored === 'ok' && stored.fileKey) {
+      if (Number(stored.size) > limits.maxBytes) return tooBig();
+      try {
+        buffer = await mediaStore.read(stored.fileKey);
+        mime = stored.mime;
+      } catch (err) {
+        log.warn(`[wa] 读存下的媒体文件失败，改为重新下载：${err?.message || err}`);
+        buffer = null;
       }
-      return fail('media_failed', `下载失败：${err?.message || err}`);
+    }
+    if (!buffer) {
+      try {
+        ({ buffer, mime } = await downloadMedia(acc, m.media, limits.maxBytes));
+      } catch (err) {
+        if (err instanceof TooLargeError || /文件太大/.test(String(err?.message))) return tooBig();
+        return fail('media_failed', `下载失败：${err?.message || err}`);
+      }
     }
     mime = m.media.mime || baseMime(mime);
     if (type === 'image' && !limits.mimes.includes(mime)) return fail('media_unsupported', `格式 ${mime || '未知'} 不支持，只支持 jpeg、png、webp`);
@@ -1882,7 +2068,7 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
-   * 手机号配对码（规格外新增，见 README「偏离规格」）。和扫码共用同一轮等待关联的 session：确保 session 已启动、
+   * 手机号配对码（规格外新增，见 docs/deviations.md 第 34 条）。和扫码共用同一轮等待关联的 session：确保 session 已启动、
    * 进入 SCAN_QR_CODE，再向 WAHA 申请配对码。已连接的号直接拒绝，不会把在线的号登出。
    * @returns {Promise<{code:string}>}
    */
@@ -2227,6 +2413,38 @@ export function createWaService(ctx, opts = {}) {
       return { draft: parseDraft(JSON.stringify(r.draft)) };
     },
 
+    /**
+     * 客户发来的一条媒体消息存下的文件（GET …/messages/:messageId/media 用）。没有这条消息、不是这个会话的、
+     * 没存成功的、文件不在了，都是 404。
+     * @returns {{path:string, mime:string, downloadName:string}}
+     */
+    mediaFile(convId, messageId) {
+      const row = db.prepare('SELECT id, media FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
+      const media = safeJsonParse(row?.media, null);
+      if (!row || !media || media.stored !== 'ok') throw notFound('这条消息没有存下的文件');
+      const p = mediaStore.pathOf(media.fileKey);
+      if (!p || !fs.existsSync(p)) throw notFound('文件不存在');
+      return { path: p, mime: baseMime(media.mime) || 'application/octet-stream', downloadName: downloadName(media, row.id) };
+    },
+
+    /**
+     * 标为已处理（人工回复的号的会话页用）：只清待处理和待处理原因，还开着的转人工记录填上 resumedAt（F12：这次转人工结束了）。
+     * 不动暂停状态和草稿（恢复机器人会清草稿，人工回复的号正靠草稿干活）
+     */
+    resolvePending(id) {
+      if (!getConvRow(id)) throw notFound('会话不存在');
+      db.prepare('UPDATE conversations SET needs_human = 0, pending_reason = NULL WHERE id = ?').run(id);
+      ctx.records.handoffResume({ conversationId: id });
+      return conversationById(id);
+    },
+
+    /** 关掉推荐回复 / 草稿卡片：清掉这个会话当前的草稿（suggest 和 handoff 都清）。没有草稿也照常返回 */
+    clearDraft(id) {
+      if (!getConvRow(id)) throw notFound('会话不存在');
+      db.prepare('UPDATE conversations SET draft = NULL WHERE id = ?').run(id);
+      return conversationById(id);
+    },
+
     setBotPaused(id, paused) {
       if (!getConvRow(id)) throw notFound('会话不存在');
       if (typeof paused !== 'boolean') throw badRequest('paused 必须是布尔值');
@@ -2281,7 +2499,7 @@ export function createWaService(ctx, opts = {}) {
     },
     /** 测试用：防抖和处理都结束了 */
     idle() {
-      return timers.size === 0 && processing.size === 0 && converting.size === 0;
+      return timers.size === 0 && processing.size === 0 && converting.size === 0 && mediaJobs.size === 0;
     },
     async close() {
       closed = true;
@@ -2290,6 +2508,10 @@ export function createWaService(ctx, opts = {}) {
       for (const t of historyTimers.values()) clearTimeout(t);
       historyTimers.clear();
       for (const ac of sending.values()) ac.abort(new Error('closing'));
+      // 正在下载的媒体中止掉（消息留在 pending，下次启动时记为中断），等它们收尾再关数据库
+      const jobs = [...mediaJobs];
+      for (const j of jobs) j.ac.abort(new Error('closing'));
+      await Promise.allSettled(jobs.map((j) => j.promise));
       await relays.closeAll();
     },
   };

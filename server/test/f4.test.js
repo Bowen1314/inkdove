@@ -137,10 +137,13 @@ describe('F4 语音和图片识别', () => {
       const before = fake.sentTo(BOSS_CHAT).length;
       const calls = hooks.calls.transcribe;
       await sendMedia(chat, wahaFile(Buffer.from('保温杯多少钱'), 'audio/ogg; codecs=opus'));
-      const [m] = await settled(chat);
+      await settled(chat);
+      await waitFor(() => t.ctx.wa.idle());
+      const [m] = await getMessages(t, cid(chat));
       assert.equal(m.text, '[语音]');
       assert.equal(m.botDecision, 'skipped');
-      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg' });
+      // 不识别也照样存盘（显示用）
+      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg', size: 18, filename: null, stored: 'ok', error: null });
       const conv = await getConv(t, cid(chat));
       assert.equal(conv.needsHuman, true);
       assert.equal(conv.botPaused, false);
@@ -164,7 +167,9 @@ describe('F4 语音和图片识别', () => {
       await waitDecided(t, cid(chat), 1);
       const [m] = await getMessages(t, cid(chat));
       assert.equal(m.text, '[语音] 保温杯 A100 多少钱');
-      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg' });
+      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg', size: audio.length, filename: null, stored: 'ok', error: null });
+      const fileGets = fake.state.requests.filter((r) => r.path.startsWith('/api/files/') && r.path.includes(`F4MEDIA${fileSeq}.`));
+      assert.equal(fileGets.length, 1, '存盘和识别共用一次下载');
       assert.equal(m.botDecision, 'replied');
       assert.ok(hooks.args.transcribe.audio.equals(audio), '交给转写的是下载到的字节');
       assert.equal(hooks.args.transcribe.mime, 'audio/ogg');
@@ -182,7 +187,9 @@ describe('F4 语音和图片识别', () => {
       await waitDecided(t, cid(chat), 1);
       const [m] = await getMessages(t, cid(chat));
       assert.equal(m.text, '[图片] 图片里写着："A100 型号标签"\n这个能给个折扣吗');
-      assert.deepEqual(m.media, { type: 'image', mime: 'image/jpeg' });
+      assert.equal(m.media.type, 'image');
+      assert.equal(m.media.mime, 'image/jpeg');
+      assert.equal(m.media.stored, 'ok');
       assert.equal(hooks.args.describeImage.mime, 'image/jpeg');
       assert.equal(Buffer.from(hooks.args.describeImage.data, 'base64').toString(), 'A100 型号标签', 'base64，不带 data: 前缀');
       assert.equal(m.botDecision, 'handoff');
@@ -332,8 +339,11 @@ describe('F4 语音和图片识别', () => {
         await postMeta({ type: 'audio', audio: { id: 'AUD9', mime_type: 'audio/ogg; codecs=opus', voice: true } });
         await waitDecided(t, conv, 2);
         m = (await getMessages(t, conv)).filter((x) => x.direction === 'in').at(-1);
-        assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg' });
+        assert.equal(m.media.type, 'voice');
+        assert.equal(m.media.mime, 'audio/ogg');
+        assert.equal(m.media.stored, 'ok');
         assert.ok(hooks.args.transcribe.audio.equals(makeOpus(3, '容量多大')));
+        assert.deepEqual(graph.state.downloads.filter((id) => id === 'AUD9'), ['AUD9'], '存盘和识别共用一次下载');
         assert.equal(m.text, '[语音] （mock 转写）一段语音', 'Ogg 二进制 mock 认不出文字，给固定文本');
       });
 

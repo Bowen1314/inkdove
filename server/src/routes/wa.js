@@ -5,6 +5,7 @@ import express from 'express';
 import { canAccessAccount, canAccessConversation, conversationScope, forbidden } from '../auth.js';
 import { badRequest, notFound } from '../util.js';
 import { assignConversation, assignmentHistory, assignMany, MAX_BULK_ASSIGN } from '../wa/assign.js';
+import { isInlineMime } from '../wa/media.js';
 import { translateForConversation } from '../wa/translate.js';
 
 /** @param {any} ctx */
@@ -55,6 +56,30 @@ export function waRouter(ctx) {
   });
   router.get('/conversations/:id', (req, res) => res.json(loadConv(req)));
   router.get('/conversations/:id/messages', (req, res) => res.json(wa.listMessages(loadConv(req).id)));
+  /**
+   * 客户发来的媒体文件，权限同看这个会话。sendFile 自己处理 Range（视频拖动）。白名单里的图片、视频、音频 inline，
+   * 其他（包括 SVG、HTML）一律当附件下载、类型写成 application/octet-stream；?download=1 时白名单里的也当附件。
+   * 都带 nosniff，浏览器不会把内容猜成别的类型。
+   */
+  router.get('/conversations/:id/messages/:messageId/media', (req, res, next) => {
+    const c = loadConv(req);
+    const f = wa.mediaFile(c.id, String(req.params.messageId));
+    const inline = isInlineMime(f.mime);
+    // res.attachment 会按文件名的扩展名改 Content-Type，所以先调它，再写类型；文件名按 RFC 6266 / 5987 转义
+    res.attachment(f.downloadName);
+    if (inline && req.query.download === undefined) {
+      res.set('content-disposition', res.get('content-disposition').replace(/^attachment/, 'inline'));
+    }
+    res.set('content-type', inline ? f.mime : 'application/octet-stream');
+    res.set('x-content-type-options', 'nosniff');
+    // 每次都回服务器验证：同一个浏览器换了个没权限的人登录，不能直接从缓存拿到文件。
+    // 权限检查在 sendFile 之前；sendFile 带 ETag / Last-Modified，没变时回 304，开销很小
+    res.set('cache-control', 'private, no-cache');
+    res.sendFile(f.path, { dotfiles: 'allow' }, (err) => {
+      if (!err || res.headersSent) return;
+      next(err.status === 404 ? notFound('文件不存在') : err);
+    });
+  });
   // 改负责人（只有 admin）：{userId: 成员 id | null} → 完整的 Conversation
   router.put('/conversations/:id/assignee', (req, res) => {
     requireAdmin(req);
@@ -71,6 +96,16 @@ export function waRouter(ctx) {
   router.post('/conversations/:id/bot', (req, res) => {
     const c = loadConv(req);
     res.json(wa.setBotPaused(c.id, req.body?.paused));
+  });
+  // 标为已处理：只清待处理（人工回复的号用，不像恢复机器人那样清草稿、改暂停状态），权限同手动回复 → 完整的 Conversation
+  router.post('/conversations/:id/resolve', (req, res) => {
+    const c = loadConv(req);
+    res.json(wa.resolvePending(c.id));
+  });
+  // 关掉推荐回复 / 草稿：清掉当前草稿（suggest 和 handoff 都清），没有草稿也返回 200，权限同手动回复 → 完整的 Conversation
+  router.delete('/conversations/:id/draft', (req, res) => {
+    const c = loadConv(req);
+    res.json(wa.clearDraft(c.id));
   });
   // F15：人工发文件，权限同手动回复
   router.post('/conversations/:id/send-file', async (req, res) => {
