@@ -189,6 +189,7 @@ docker compose start inkdove
 - [升级说明](docs/upgrade.md)：跨版本时数据或行为的变化（从第一期升级、按客户分配、推荐回复）
 - [在线更新](docs/online-update.md)：网页上一键更新怎么工作、安全、钉版本号、备份和回滚
 - [两种接入方式、安全设计和代理](docs/channels-and-security.md)：扫码和 Meta 官方 API 的区别和风险、机器人回复的四层把关、代理中继、全局代理
+- [合规指南](docs/compliance.md)：数据存在哪、发给谁，怎么告知员工和客户，中国、欧盟、美国的法规和 WhatsApp 的规则要点
 - [功能说明](docs/features.md)：每个功能的完整说明，以及实现细节和接口约定
 - [开发](docs/development.md)：项目结构、本地开发和测试、发新版
 - [偏离规格](docs/deviations.md)：开发中和 SPEC 不一致的地方

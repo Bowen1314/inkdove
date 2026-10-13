@@ -193,6 +193,7 @@ All in Chinese:
 - [Upgrade notes](docs/upgrade.md): data and behavior changes between versions (upgrading from phase 1, per-customer assignment, suggested replies)
 - [In-app updates](docs/online-update.md): how one-click updates work, security, pinning a version, backups and rollback
 - [Connection methods, safety design and proxies](docs/channels-and-security.md): QR vs. Meta's official API and their risks, the four layers of reply checks, the proxy relay, the global proxy
+- [Compliance guide](docs/compliance.md) (in Chinese): where data is stored and who receives it, notices for employees and customers, and the main rules in China, the EU, the US and WhatsApp's terms
 - [Features](docs/features.md): full description of every feature, plus implementation details and API contracts
 - [Development](docs/development.md): project layout, local development and tests, cutting a release
 - [Deviations from the spec](docs/deviations.md): where the implementation differs from the SPEC
