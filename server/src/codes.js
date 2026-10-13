@@ -112,3 +112,32 @@ export const RESPONDER_KINDS = {
   whatsapp_relay: 'WhatsApp 转发',
   phone: '手机回复',
 };
+
+/** F11 外联任务的状态（campaigns.status） */
+export const CAMPAIGN_STATUSES = {
+  draft: '草稿',
+  running: '发送中',
+  paused: '已暂停',
+  done: '已完成',
+  cancelled: '已取消',
+};
+export const campaignStatusLabel = (s) => CAMPAIGN_STATUSES[s] ?? s;
+
+/** F11 外联收件人的状态（campaign_recipients.status） */
+export const RECIPIENT_STATUSES = {
+  pending: '待发',
+  sent: '已发',
+  failed: '失败',
+  skipped: '跳过',
+};
+
+/** F11 外联收件人跳过的原因（campaign_recipients.skip_reason）。前五个在预检时判断，not_on_whatsapp 在发送时判断 */
+export const OUTREACH_SKIP_REASONS = {
+  invalid: '格式不对',
+  duplicate: '重复',
+  blocklisted: '在黑名单',
+  notify_number: '是通知号码',
+  already_contacted: '联系过',
+  not_on_whatsapp: '没有 WhatsApp',
+};
+export const skipReasonLabel = (r) => OUTREACH_SKIP_REASONS[r] ?? r;

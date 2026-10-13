@@ -1,4 +1,4 @@
-// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing。号级设置（自动回复开关、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing、outreach。号级设置（自动回复开关、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
 import { badRequest, isPlainObject } from './util.js';
 
@@ -36,7 +36,44 @@ function defaults(config) {
     branding: { title: '', logo: null },
     // F12：模型单价 [{model, inputPerMillion, outputPerMillion}]，美元 / 百万 token，看板估算费用用。没填的模型只统计 token 数
     pricing: [],
+    // F11 主动外联：每个号每天最多发几条（所有外联任务合计）、两条之间随机等多少秒、收件人当地时间的发送时段
+    outreach: { ...OUTREACH_DEFAULTS },
   };
+}
+
+export const OUTREACH_DEFAULTS = Object.freeze({
+  dailyCapPerAccount: 30,
+  minIntervalSeconds: 90,
+  maxIntervalSeconds: 240,
+  windowStart: '09:00',
+  windowEnd: '20:00',
+});
+const OUTREACH_HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * F11：校验外联设置。p 是要写的字段（没给的用 current 的值），返回校验后的完整设置。
+ * 错误信息以字段路径开头（outreach.minIntervalSeconds …），前端靠它把错误放到对应字段下面。
+ */
+export function checkOutreach(current, p) {
+  if (!isPlainObject(p)) throw badRequest('outreach 必须是对象');
+  const o = { ...current };
+  const int = (field, min, max) => {
+    if (p[field] === undefined) return;
+    const n = p[field];
+    if (!Number.isInteger(n) || n < min || n > max) throw badRequest(`outreach.${field} 必须是 ${min}–${max} 之间的整数`);
+    o[field] = n;
+  };
+  int('dailyCapPerAccount', 1, 10000);
+  int('minIntervalSeconds', 1, 86400);
+  int('maxIntervalSeconds', 1, 86400);
+  for (const field of ['windowStart', 'windowEnd']) {
+    if (p[field] === undefined) continue;
+    const v = typeof p[field] === 'string' ? p[field].trim() : p[field];
+    if (typeof v !== 'string' || !OUTREACH_HHMM.test(v)) throw badRequest(`outreach.${field} 格式是 HH:MM，例如 09:00`);
+    o[field] = v;
+  }
+  if (o.minIntervalSeconds > o.maxIntervalSeconds) throw badRequest('outreach.maxIntervalSeconds 不能小于最短间隔（minIntervalSeconds）');
+  return o;
 }
 
 export const MAX_PRICING_ROWS = 200;
@@ -133,6 +170,12 @@ export function loadSettings(db, config) {
   } catch {
     s.pricing = [];
   }
+  // 存坏了的外联设置回到默认值
+  try {
+    s.outreach = checkOutreach(OUTREACH_DEFAULTS, s.outreach);
+  } catch {
+    s.outreach = { ...OUTREACH_DEFAULTS };
+  }
   return s;
 }
 
@@ -205,6 +248,7 @@ export function publicSettings(s, config) {
     },
     branding: { title: s.branding.title, logoSet: !!logoMeta(s), logoUrl: logoUrl(s) },
     pricing: s.pricing.map((p) => ({ ...p })),
+    outreach: { ...s.outreach },
     webhookBase: config.publicBaseUrl,
   };
 }
@@ -337,6 +381,8 @@ export function applySettingsPatch(current, patch) {
 
   // F12：模型单价表整体替换
   if (patch.pricing !== undefined) s.pricing = checkPricing(patch.pricing);
+  // F11：外联设置（前端整块写；只给了部分字段时其余保持不变）
+  if (patch.outreach !== undefined) s.outreach = checkOutreach(s.outreach, patch.outreach);
   return s;
 }
 

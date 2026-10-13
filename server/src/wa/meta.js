@@ -83,6 +83,24 @@ export async function metaSendText(graphBase, meta, to, text) {
 }
 
 /**
+ * F11：发审核通过的模板消息（主动发起会话只能用模板）。只带模板名和语言，不带 components，所以只支持没有变量的模板。
+ * https://developers.facebook.com/documentation/business-messaging/whatsapp/templates/overview
+ * @param {{name:string, languageCode:string}} template
+ * @returns {Promise<string|null>} 消息 id（wamid）
+ */
+export async function metaSendTemplate(graphBase, meta, to, template) {
+  if (!template?.name || !template?.languageCode) throw new MetaError('没有填 Meta 模板名或语言');
+  const data = await post(graphBase, meta, {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to,
+    type: 'template',
+    template: { name: template.name, language: { code: template.languageCode } },
+  });
+  return data?.messages?.[0]?.id ?? null;
+}
+
+/**
  * 标已读；typing=true 时同时显示"正在输入"。
  * @param {string} messageId 入站消息的 wamid
  */

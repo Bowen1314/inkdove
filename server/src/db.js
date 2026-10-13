@@ -296,6 +296,72 @@ CREATE TABLE IF NOT EXISTS lead_stage_history (
 );
 CREATE INDEX IF NOT EXISTS lead_stage_history_lead ON lead_stage_history(lead_id, ts);
 `);
+
+  // ---- F5 红线体检（读写见 redteam/runner.js） ----
+  // redteam_runs：每次体检一行。progress {done,total}、summary {total, redlinePassed, redlineFailed, legitReplied, legitRefused}、
+  //   results（明细数组）都是 JSON，每判完一题更新一次。status：running | done | failed | cancelled。
+  //   F12 看板的 kb.lastRedteam 取最近一次 done 的（按 finished_at）
+  db.exec(`
+CREATE TABLE IF NOT EXISTS redteam_runs (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  progress TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  results TEXT NOT NULL DEFAULT '[]',
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS redteam_runs_started ON redteam_runs(started_at);
+`);
+
+  // ---- F11 主动外联（读写见 outreach/store.js） ----
+  // campaigns：外联任务。stats、perAccount 读的时候从 campaign_recipients 聚合，不存
+  // campaign_recipients：文件里每个号码一行（格式不对、重复的也存，status=skipped），按 seq（文件里的顺序）发。
+  //   number 是不带 + 的国际号码（格式不对的存原文）；tz 是号码所属国家的主时区，判断发送窗口用；
+  //   chat_id 是实际发到的 chat（WAHA 查号接口可能给 @lid）；sent_day 是发出那天的服务器本地日期，数每个号每天的发送量用
+  db.exec(`
+CREATE TABLE IF NOT EXISTS campaigns (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_by_id TEXT,
+  created_by_name TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  account_ids TEXT NOT NULL DEFAULT '[]',
+  message TEXT NOT NULL DEFAULT '',
+  meta_template_name TEXT NOT NULL DEFAULT '',
+  meta_template_language TEXT NOT NULL DEFAULT '',
+  default_country TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT,
+  started_at TEXT,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS campaigns_status ON campaigns(status);
+CREATE TABLE IF NOT EXISTS campaign_recipients (
+  id TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  line INTEGER NOT NULL,
+  number TEXT NOT NULL,
+  country TEXT,
+  tz TEXT,
+  account_id TEXT,
+  chat_id TEXT,
+  status TEXT NOT NULL,
+  skip_reason TEXT,
+  sent_at TEXT,
+  sent_day TEXT,
+  error TEXT,
+  replied_at TEXT,
+  declined_at TEXT,
+  conversation_id TEXT
+);
+CREATE INDEX IF NOT EXISTS campaign_recipients_campaign ON campaign_recipients(campaign_id, status, seq);
+CREATE INDEX IF NOT EXISTS campaign_recipients_account ON campaign_recipients(account_id, status, sent_day);
+CREATE INDEX IF NOT EXISTS campaign_recipients_number ON campaign_recipients(number);
+`);
 }
 
 /**

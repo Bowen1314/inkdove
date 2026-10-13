@@ -6,7 +6,7 @@ import { newId, nowIso } from './util.js';
 /**
  * 模型调用的上下文 {accountId, conversationId, purpose?, call?}。
  * service.js 处理会话时用 llmScope 包住，期间的模型调用都记到这个号和会话上；purpose 给了就覆盖按方法名推出的用途
- * （以后红线体检跑回复引擎时传 redteam）。call 是 withLlmCallLog 给每次调用准备的格子，real.js 往里填格式、模型和 token。
+ * （F5 红线体检跑回复引擎时传 redteam，见 redteam/runner.js）。call 是 withLlmCallLog 给每次调用准备的格子，real.js 往里填格式、模型和 token。
  */
 const llmContext = new AsyncLocalStorage();
 

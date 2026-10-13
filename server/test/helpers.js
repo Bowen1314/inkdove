@@ -52,6 +52,9 @@ export async function startApp({ env = {}, options = {} } = {}) {
     historyImportDelayMs: 0,
     // F6：不启动客户线索的定时扫描，要测时手动调 ctx.leads.scan()
     leadsScanIntervalMs: 0,
+    // F11：外联不启动定时检查（要测时手动调 ctx.outreach.tick()），两条之间不等
+    outreachTickMs: 0,
+    outreachIntervalMs: () => 0,
     ...options,
   });
   const { app, ctx, close } = created;
@@ -286,6 +289,14 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     /** sendText 晚这么多毫秒再返回（F12：测回声比 API 响应先到）；收到请求时记进 sendStarted */
     sendDelayMs: 0,
     sendStarted: [],
+    /** F11 查号 GET /api/contacts/check-exists 的请求 {phone, session} */
+    checks: [],
+    /** 这些号码（纯数字）查号返回 numberExists=false */
+    notOnWhatsapp: new Set(),
+    /** 号码 → 查号返回的 chatId（比如 <lid>@lid）；没有的返回 <号码>@c.us */
+    checkChatIds: {},
+    /** 为真时查号返回 500 */
+    failCheckExists: false,
   };
   const masked = (cfg) => {
     if (!maskSecrets || !cfg) return cfg;
@@ -434,6 +445,14 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
       res.writeHead(200, { 'content-type': f.mime, 'content-length': f.buffer.length });
       return res.end(f.buffer);
     }
+    // F11 查号：形状按文档 https://waha.devlike.pro/docs/how-to/contacts/（numberExists、chatId）
+    if (req.method === 'GET' && u.pathname === '/api/contacts/check-exists') {
+      const phone = u.searchParams.get('phone');
+      state.checks.push({ phone, session: u.searchParams.get('session') });
+      if (state.failCheckExists) return json(500, { message: 'check-exists failed' });
+      if (state.notOnWhatsapp.has(phone)) return json(200, { numberExists: false });
+      return json(200, { numberExists: true, chatId: state.checkChatIds[phone] || `${phone}@c.us` });
+    }
     if (req.method === 'POST' && u.pathname === '/api/sendText') {
       state.sendStarted.push(body);
       if (state.sendDelayMs) await sleep(state.sendDelayMs);
@@ -456,6 +475,43 @@ export async function startFakeWaha({ initialStatus = 'WORKING', lids = {}, mask
     seenFor: (chatId) => state.seen.filter((m) => m.chatId === chatId),
     presenceFor: (chatId) => state.presence.filter((m) => m.chatId === chatId),
     timelineFor: (chatId) => state.timeline.filter((e) => e.chatId === chatId).map((e) => e.kind),
+    close: () => {
+      server.closeAllConnections?.();
+      return new Promise((r) => server.close(r));
+    },
+  };
+}
+
+/**
+ * F11：假 Graph API（Meta）。记录请求；发消息返回 wamid.SENT<n>；state.fail 为真时返回 400（Graph 的错误形状）。
+ */
+export async function startFakeMeta() {
+  const state = { requests: [], fail: false };
+  const server = http.createServer(async (req, res) => {
+    let raw = '';
+    for await (const c of req) raw += c;
+    let body = null;
+    try {
+      body = raw ? JSON.parse(raw) : null;
+    } catch {
+      body = raw;
+    }
+    state.requests.push({ method: req.method, path: req.url, headers: req.headers, body });
+    if (state.fail) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'Template name does not exist in the translation', code: 132001 } }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ messaging_product: 'whatsapp', contacts: [{ input: 'x', wa_id: 'x' }], messages: [{ id: `wamid.SENT${state.requests.length}` }] }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    state,
+    /** 发出去的模板消息 */
+    templates: (to) => state.requests.filter((r) => r.body?.type === 'template' && (!to || r.body.to === to)),
+    /** 发出去的文本消息 */
+    texts: (to) => state.requests.filter((r) => r.body?.type === 'text' && (!to || r.body.to === to)),
     close: () => {
       server.closeAllConnections?.();
       return new Promise((r) => server.close(r));

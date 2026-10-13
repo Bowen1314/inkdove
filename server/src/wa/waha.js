@@ -154,6 +154,22 @@ export function createWahaClient(config) {
       });
       return Array.isArray(data) ? data : [];
     },
+    /**
+     * F11：号码有没有 WhatsApp。GET /api/contacts/check-exists?phone=<纯数字>&session=<session>
+     * → {numberExists:boolean, chatId?:string, pn?:string|null}。按文档写的（https://waha.devlike.pro/docs/how-to/contacts/
+     * 「Check phone number exists」，功能表标 WEBJS、WPP、NOWEB、GOWS 都支持），还没在真机上核实。
+     * chatId 可能是 <lid>@lid（文档示例就是），发消息就发到这个 chatId；没给时由调用方用 <号码>@c.us。
+     * @returns {Promise<{exists:boolean, chatId:string|null}>}
+     */
+    async checkExists(session, phone) {
+      const q = `phone=${enc(phone)}&session=${enc(session)}`;
+      const data = await request('GET', `/api/contacts/check-exists?${q}`, { timeoutMs: 15_000 });
+      if (!data || typeof data !== 'object' || typeof data.numberExists !== 'boolean') {
+        throw new WahaError('WAHA 查号接口的返回里没有 numberExists');
+      }
+      const chatId = typeof data.chatId === 'string' && data.chatId ? data.chatId.replace(/@s\.whatsapp\.net$/i, '@c.us') : null;
+      return { exists: data.numberExists, chatId: data.numberExists ? chatId : null };
+    },
     /** GET /api/{session}/lids/{lid} → {lid, pn}；返回纯数字手机号或 null */
     async lidToNumber(session, lid) {
       const data = await request('GET', `/api/${enc(session)}/lids/${enc(lid)}`, { timeoutMs: 5000 });

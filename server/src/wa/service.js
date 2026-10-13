@@ -12,7 +12,7 @@ import { buildReplyContext, decideReply, normalizeFileIds } from '../reply/engin
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse, sleep } from '../util.js';
 import { baseMime, MEDIA_LIMITS, mediaTypeOf, oggDurationSeconds, wahaVoiceSeconds } from './media.js';
-import { metaDownloadMedia, metaMarkRead, metaSendMedia, metaSendText, metaUploadMedia } from './meta.js';
+import { metaDownloadMedia, metaMarkRead, metaSendMedia, metaSendTemplate, metaSendText, metaUploadMedia } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
 import { needsRelay } from './relay.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
@@ -262,7 +262,7 @@ export const parseDraft = (raw) => {
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
  * }} [opts]
- *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（F11 外联接上之前的钩子，测试用）
+ *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -332,7 +332,7 @@ export function createWaService(ctx, opts = {}) {
 
   // ---------------- 发送 ----------------
   /**
-   * 记下本服务经 API 发出去的消息（bot 回复、后台人工、F3 转发和回执、通知、文件；以后的外联也走 sendRaw），
+   * 记下本服务经 API 发出去的消息（bot 回复、后台人工、F3 转发和回执、通知、文件、F11 外联），
    * 用来从 message.any 的 fromMe 消息里剔除回声（F12）。发请求之前就记，id 等 API 返回后再补：回声可能比 API 响应先到。
    */
   function rememberSent(accountId, chatId, text) {
@@ -724,6 +724,8 @@ export function createWaService(ctx, opts = {}) {
   function inScope(acc, number, chatId) {
     if (number && acc.blocklist.includes(number)) return false;
     if (acc.scope === 'allowlist') {
+      // F11：这个号发过外联的对象算在范围内（黑名单仍然优先）
+      if (ctx.outreach?.isContact(acc.id, number, chatId)) return true;
       if (!number) {
         log.info(`[wa] ${chatId} 换算不出手机号，allowlist 模式下按范围外处理`);
         return false;
@@ -780,6 +782,8 @@ export function createWaService(ctx, opts = {}) {
         return await handleNotifyReply(acc, m);
       }
       if (!inScope(acc, number, chatId)) return 'out_of_scope';
+      // F11：外联对象回复了，记 repliedAt（之后照常进回复流程）
+      ctx.outreach?.noteInbound({ accountId: acc.id, number, chatId, conversationId: convId });
       return archive(acc, m, number);
     } finally {
       if (key) inflight.delete(key);
@@ -1196,15 +1200,18 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
-   * F11 钩子：会话被判 declined 时调。外联做完后在这里给这个会话对应的外联对象（Recipient）记 declinedAt，
-   * 后续任务按 already_contacted 跳过他。外联的表还没建，现在只转给 opts.onDeclined（测试用）。
+   * F11：会话被判 declined 时调。这个会话对应的外联对象（Recipient）记 declinedAt；他有会话了，后续任务按 already_contacted
+   * 跳过他。opts.onDeclined 是测试用的钩子。
    */
   function customerDeclined(accountId, convId) {
-    if (!opts.onDeclined) return;
-    try {
-      opts.onDeclined({ accountId, conversationId: convId, ts: nowIso() });
-    } catch (err) {
-      log.warn(`[wa] 处理客户拒绝的钩子出错：${err?.message || err}`);
+    const p = { accountId, conversationId: convId, ts: nowIso() };
+    for (const fn of [ctx.outreach?.noteDeclined, opts.onDeclined]) {
+      if (!fn) continue;
+      try {
+        fn(p);
+      } catch (err) {
+        log.warn(`[wa] 处理客户拒绝的钩子出错：${err?.message || err}`);
+      }
     }
   }
 
@@ -2089,6 +2096,42 @@ export function createWaService(ctx, opts = {}) {
         resumeBot(id);
       }
       return conversationById(id);
+    },
+    /**
+     * F11：发一条外联开场消息并落库（outreach/store.js 的发送循环调）。WAHA 用 sendText 发 text；Meta 发审核过的模板
+     * （type:"template"），text 只存档。和其他经 API 发出的消息一样先登记回声，手机那边推回来的 fromMe 消息会被剔除。
+     * 会话不存在就新建、已有就复用；消息记 author=bot、via=campaign。发送失败直接抛错，不落库。
+     * @param {any} acc
+     * @param {{chatId:string, number:string, text:string, template?:{name:string, languageCode:string}|null}} p
+     * @returns {Promise<{conversationId:string, messageId:string, externalId:string|null}>}
+     */
+    async sendCampaignMessage(acc, { chatId, number, text, template = null }) {
+      if (!acc) throw new Error('这个号已删除');
+      const entry = rememberSent(acc.id, chatId, text);
+      let externalId;
+      if (acc.channel === 'waha') externalId = await waha.sendText(acc.sessionName, chatId, text);
+      else if (acc.channel === 'meta') externalId = await metaSendTemplate(config.metaGraphUrl, acc.meta, chatId, template);
+      else throw new Error('未知的接入方式');
+      entry.id = externalId || null;
+      entry.short = externalId ? shortMessageId(externalId) : null;
+      const convId = conversationIdOf(acc.id, chatId);
+      const ts = nowIso();
+      const messageId = newId();
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO conversations(id, account_id, chat_id, channel, contact_name, contact_number, created_at, updated_at)
+           VALUES(?, ?, ?, ?, '', ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             updated_at = excluded.updated_at,
+             contact_number = CASE WHEN conversations.contact_number = '' THEN excluded.contact_number ELSE conversations.contact_number END`,
+        ).run(convId, acc.id, chatId, acc.channel, number || '', ts, ts);
+        const dup = externalId && db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, externalId);
+        db.prepare(
+          `INSERT INTO messages(id, conversation_id, external_id, direction, author, kind, text, ts, status, handled, via)
+           VALUES(?, ?, ?, 'out', 'bot', 'text', ?, ?, 'sent', 1, 'campaign')`,
+        ).run(messageId, convId, dup ? null : externalId || null, text, ts);
+      })();
+      return { conversationId: convId, messageId, externalId: externalId || null };
     },
     /** 测试用：防抖和处理都结束了 */
     idle() {

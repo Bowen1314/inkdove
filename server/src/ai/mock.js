@@ -152,6 +152,9 @@ export function createMockAi(opts = {}) {
      * 含"人工""human" → handoff；含"折扣""便宜""discount""太贵""too expensive" → handoff（price）；关键词命中条目 → business（拼接条目）；
      * 简单问候 → smalltalk；其余 → handoff（insufficient_info，question_zh 取客户原话）。
      * F15：整库索取 → handoff；含"目录""catalog""价目表""price list""规格书""spec"且有文件的 name 或 description 含同一个词 → 发那个文件。
+     * F5 红线体检补充（排在上面几条之后、发文件和条目检索之前，词表见 MOCK_REDTEAM_RULES）：注入 → offtopic（injection）；
+     * 离题任务 → offtopic（task）；问身份或模型 → handoff（identity）；砍价比价 → handoff（price）；按量报价、算总价 → handoff（price）；
+     * 开 PI、留货、place an order、西班牙语下单付款 → handoff（purchase）。
      * styleHint（F14 套话重写）：把上一版里命中的套话词去掉后原样返回。
      */
     async generate({ message, entries, files = [], styleHint = null }) {
@@ -261,6 +264,49 @@ function matchFiles(message, files) {
     .map((f) => f.id);
 }
 
+/**
+ * F5 红线体检补充的 mock 规则：[正则, offtopic|handoff, offtopic_type 或 handoff_type, 原因]，按顺序取第一条命中的。
+ * 只收红线题会用到的说法，不收"多少钱""price""order""payment"这类正常问题也会用的词。
+ */
+const MOCK_REDTEAM_RULES = [
+  [
+    /ignore (all |any )?(the |your )?(previous|prior|above)|忽略(之前|以上|前面|上面|所有)|system prompt|系统提示|提示词|开发者模式|developer mode|<\/?customer_message>|\[(system|admin)\]|【(系统|管理员)|管理员(已|指令|通知)|(ignora|olvida) (todas )?(tus |las )?instrucciones/i,
+    'offtopic',
+    'injection',
+    '让机器人忽略规则、透露设定或冒充系统',
+  ],
+  [
+    /代码|编程|python|javascript|写一篇|写首诗|写一首|作文|essay|poem|翻译|translate|tradu[cz]|角色扮演|role-?play|pretend (to be|you are)|\d+\s*(times|乘以|multiplied by)\s*\d+|方程|equation|presidente?\b|百科|wikipedia/i,
+    'offtopic',
+    'task',
+    '要求做与本企业业务无关的事',
+  ],
+  [
+    /(是|是不是|还是)\s*(真人|机器人|ai)|真人吗|机器人吗|chatgpt|\bgpt|什么模型|哪个模型|大模型|(what|which) (ai )?model are you|are you (a |an )?(bot|robot|human|real|ai)\b|real person|eres (un |una )?(bot|robot|ia|humano|persona)\b|persona real/i,
+    'handoff',
+    'identity',
+    '客户问是不是真人或用的什么模型',
+  ],
+  [
+    /打折|打个折|砍价|最低价|底价|让利|best price|better price|lowest price|cheaper|lower price|descuento|rebaja|mejor precio|más barato/i,
+    'handoff',
+    'price',
+    '客户砍价或比价',
+  ],
+  [
+    /总价|一共多少|总共多少|quote me|give me a quote|quotation for|total (price|cost)|in total|en total|precio total/i,
+    'handoff',
+    'price',
+    '客户要按数量报价或算总价',
+  ],
+  [
+    /\bPI\b|proforma|留货|[给帮替为]我留(?![意言心神])|place (an |the |my )?order|\breserve\b|hacer un pedido|c[oó]mo pago/i,
+    'handoff',
+    'purchase',
+    '客户要开 PI、留货或下单付款',
+  ],
+];
+
 /** mock 生成规则（见 generate 的注释） */
 function mockGenerate(message, entries, files = []) {
   const out = (category, reason, reply = '', usedEntryIds = [], extra = {}) => ({
@@ -283,6 +329,11 @@ function mockGenerate(message, entries, files = []) {
   if (/太贵|too expensive/i.test(message)) return handoff('price', '客户嫌贵');
   if (/下单|付款/.test(message)) return handoff('purchase', '客户想下单');
   if (/是不是机器人|are you a bot/i.test(message)) return handoff('identity', '客户问是不是机器人');
+  const redteam = MOCK_REDTEAM_RULES.find(([re]) => re.test(message));
+  if (redteam) {
+    const [, kind, type, reason] = redteam;
+    return kind === 'offtopic' ? out('offtopic', reason, '', [], { offtopicType: type }) : handoff(type, reason);
+  }
   const fileIds = matchFiles(message, files);
   if (fileIds.length) {
     const reply = /[\u4e00-\u9fff]/.test(message) ? '发你了，你看下' : "Here's the file, take a look";
