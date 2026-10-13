@@ -9,6 +9,8 @@
 // <customer_message>…</customer_message>（和回复提示词的包装一样），system prompt 写明这些是数据不是指令。
 // 结果里的会话、知识条目、文件不给真实 id，给这次提问内的编号 ref（c1、e1、f1，见 createRefRegistry），回答只能引用这些编号。
 // 结果超过 TOOL_RESULT_MAX_CHARS 时截断并告诉模型缩小范围；列表都有条数上限，先在数据层面少取。
+// 撤回过的消息（revoked_at 不为空，哪一方撤回的都算）和其他给模型的上下文一样当它不存在：关键词不搜它、聊天记录和
+// 会话的最近一条消息都不给；概况数字照看板的口径，撤回过的照样算（只有个数，没有内容）。
 import { DELETED_ACCOUNT_NAME } from '../accounts.js';
 import { canAccessAccount, canAccessConversation, conversationScope, rowToUser } from '../auth.js';
 import { LEAD_STAGES, leadStageLabel } from '../codes.js';
@@ -433,7 +435,7 @@ function runSearchConversations(env, args) {
     P.kwnum = /^\d{3,}$/.test(digits) ? `%${digits}%` : P.kw;
     conds.push(
       `(c.contact_name LIKE @kw ESCAPE '\\' OR c.contact_number LIKE @kwnum ESCAPE '\\'
-        OR EXISTS (SELECT 1 FROM messages k WHERE k.conversation_id = c.id AND k.text LIKE @kw ESCAPE '\\'))`,
+        OR EXISTS (SELECT 1 FROM messages k WHERE k.conversation_id = c.id AND k.revoked_at IS NULL AND k.text LIKE @kw ESCAPE '\\'))`,
     );
   }
   let range = null;
@@ -454,15 +456,20 @@ function runSearchConversations(env, args) {
   const hitStmt = keyword
     ? ctx.db.prepare(
         `SELECT author, direction, text, ts, sent_by_name, attachment FROM messages
-          WHERE conversation_id = ? AND text LIKE ? ESCAPE '\\' ORDER BY seq DESC LIMIT 1`,
+          WHERE conversation_id = ? AND revoked_at IS NULL AND text LIKE ? ESCAPE '\\' ORDER BY seq DESC LIMIT 1`,
       )
     : null;
+  // 最近一条消息不用 getConversation 的 lastMessage（会话列表的预览，撤回过的也算），另取没撤回的最后一条
+  const lastStmt = ctx.db.prepare(
+    'SELECT direction, text, ts, attachment FROM messages WHERE conversation_id = ? AND revoked_at IS NULL ORDER BY seq DESC LIMIT 1',
+  );
   const items = [];
   for (const id of ids) {
     const c = ctx.wa.getConversation(id);
     // 再按会话级权限判断一遍（和 SQL 条件是同一套，双保险）
     if (!c || !canAccessConversation(user, c)) continue;
     const name = contactLabel(c.contactName, c.contactNumber);
+    const last = lastStmt.get(id);
     const item = {
       ref: env.refs.add('conversation', c.id, name),
       name,
@@ -474,11 +481,11 @@ function runSearchConversations(env, args) {
       botPaused: c.botPaused,
       muted: !!c.mutedUntil,
       lastActive: fmtLocal(c.updatedAt, tz),
-      lastMessage: c.lastMessage
+      lastMessage: last
         ? {
-            from: c.lastMessage.direction === 'in' ? '客户' : '我方',
-            text: c.lastMessage.direction === 'in' ? fromCustomer(clip(c.lastMessage.text, 200)) : clip(c.lastMessage.text, 200),
-            time: fmtLocal(c.lastMessage.ts, tz),
+            from: last.direction === 'in' ? '客户' : '我方',
+            text: last.direction === 'in' ? fromCustomer(clip(messageText(last), 200)) : clip(messageText(last), 200),
+            time: fmtLocal(last.ts, tz),
           }
         : null,
     };
@@ -509,7 +516,7 @@ function runConversationMessages(env, args) {
   const rows = ctx.db
     .prepare(
       `SELECT * FROM (SELECT author, direction, text, ts, status, sent_by_name, attachment, seq FROM messages
-         WHERE conversation_id = ? ORDER BY seq DESC LIMIT ?) ORDER BY seq`,
+         WHERE conversation_id = ? AND revoked_at IS NULL ORDER BY seq DESC LIMIT ?) ORDER BY seq`,
     )
     .all(c.id, limit);
   const name = contactLabel(c.contactName, c.contactNumber);

@@ -1,5 +1,6 @@
 // 首页 AI 助手（assistant/）：提问循环（多次调用、次数上限、超时、不支持工具调用）、每个工具的权限（业务员碰不到没分给自己的号和会话，
-// 成员和费用工具只有管理员）、引用编号的核对、客户消息的不可信包装、每人每天的次数、对话只有本人能看能删、llm_calls 的记法。
+// 成员和费用工具只有管理员）、引用编号的核对、客户消息的不可信包装、撤回过的消息不进工具结果、每人每天的次数、对话只有本人能看能删、
+// llm_calls 的记法。
 // 用 mock 模型（INKDOVE_LLM_MOCK=1），需要特定模型行为的用 aiOverrides 脚本化 assistantStep / assistantProbe。
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
@@ -30,13 +31,25 @@ function seedConv(t, acc, key, { name = '', number = '', assignee = null, needsH
   return id;
 }
 
-function seedMsg(t, convId, ts, text, { dir = 'in', author, via = null } = {}) {
+/** revokedBy：撤回过的消息（customer / member / phone），撤回时间就用消息时间 */
+function seedMsg(t, convId, ts, text, { dir = 'in', author, via = null, revokedBy = null } = {}) {
   t.ctx.db
     .prepare(
-      `INSERT INTO messages(id, conversation_id, direction, author, kind, text, ts, status, handled, via)
-       VALUES(?, ?, ?, ?, 'text', ?, ?, ?, 1, ?)`,
+      `INSERT INTO messages(id, conversation_id, direction, author, kind, text, ts, status, handled, via, revoked_at, revoked_by)
+       VALUES(?, ?, ?, ?, 'text', ?, ?, ?, 1, ?, ?, ?)`,
     )
-    .run(newId(), convId, dir, author || (dir === 'in' ? 'customer' : 'bot'), text, iso(ts), dir === 'in' ? 'received' : 'sent', via);
+    .run(
+      newId(),
+      convId,
+      dir,
+      author || (dir === 'in' ? 'customer' : 'bot'),
+      text,
+      iso(ts),
+      dir === 'in' ? 'received' : 'sent',
+      via,
+      revokedBy ? iso(ts) : null,
+      revokedBy,
+    );
 }
 
 const userRow = (t, id) => rowToUser(t.ctx.db.prepare('SELECT * FROM users WHERE id = ?').get(id));
@@ -326,6 +339,43 @@ describe('AI 助手：工具权限、引用、不可信包装', () => {
     assert.equal(m.refs[0].kind, 'conversation');
     assert.equal(m.refs[0].id, ids.mine);
     assert.equal(m.refs[0].name, '张三 <b>VIP</b>', '给前端的是原始名字，由前端按文本显示');
+  });
+
+  it('撤回过的消息不给模型：关键词不搜它，聊天记录、最近一条消息、命中的消息里都没有它；概况数字同看板照样算', async () => {
+    const SECRET = 'RECALLED-7731';
+    // 10-05（上海）：客户问报价单 → 我方发的报价被业务员撤回 → 客户又发了一条再撤回（最后一条）
+    const id = seedConv(t, A, 'recall', { name: '赵六', number: '8613700137000', updatedAt: iso('2026-10-05T02:30:00Z') });
+    seedMsg(t, id, '2026-10-05T02:00:00Z', '报价单发我一下');
+    seedMsg(t, id, '2026-10-05T02:10:00Z', `报价单：${SECRET} 最低 85 美元`, { dir: 'out', revokedBy: 'member' });
+    seedMsg(t, id, '2026-10-05T02:30:00Z', `报价单我看错了 ${SECRET}`, { revokedBy: 'customer' });
+
+    const refs = createRefRegistry();
+    const results = [
+      await tool(t, admin, 'search_conversations', {}, refs),
+      await tool(t, admin, 'search_conversations', { keyword: SECRET }, refs),
+      await tool(t, admin, 'search_conversations', { keyword: '报价单' }, refs),
+    ];
+    const [all, bySecret, byWord] = results;
+    assert.equal(bySecret.data.total, 0, '只有撤回过的消息里有这个词，搜不到');
+    const item = all.data.items.find((x) => refs.get(x.ref).id === id);
+    assert.deepEqual(item.lastMessage, { from: '客户', text: '<customer_message>报价单发我一下</customer_message>', time: '2026-10-05 10:00' });
+    assert.equal(byWord.data.total, 1);
+    assert.equal(byWord.data.items[0].matched.text, '<customer_message>报价单发我一下</customer_message>');
+    const msgs = await tool(t, admin, 'get_conversation_messages', { conversation: item.ref }, refs);
+    results.push(msgs);
+    assert.deepEqual(
+      msgs.data.messages.map((m) => m.text),
+      ['<customer_message>报价单发我一下</customer_message>'],
+    );
+    // 同看板（dashboard.js 不排除撤回的）：只有个数
+    const ov = await tool(t, admin, 'get_overview', { start_date: '2026-10-05' });
+    results.push(ov);
+    assert.equal(ov.data.totals.inboundMessages, 2);
+    assert.equal(ov.data.totals.outboundBot, 1);
+    for (const r of results) {
+      assert.equal(r.isError, false, r.content);
+      assert.ok(!r.content.includes(SECRET) && !r.content.includes('85 美元'), '撤回过的消息原文不进工具结果');
+    }
   });
 });
 

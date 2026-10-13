@@ -29,6 +29,7 @@ export const CATEGORIES = {
   file: '产品资料',
   lead: '客户线索',
   campaign: '主动外联',
+  assistant: 'AI 助手',
   settings: '设置',
   system: '在线更新',
   other: '其他',
@@ -758,6 +759,12 @@ export const RULES = [
     before: ({ ctx, params }) => ctx.db.prepare('SELECT name FROM campaigns WHERE id = ?').get(params.id)?.name ?? null,
     run: (x) => ({ summary: `${verb}{了}外联任务${q(x.before ?? x.params.id)}`, target: { type: 'campaign', id: x.params.id, name: x.before } }),
   })),
+
+  /* ---------- AI 助手 ---------- */
+  // 对话只有本人看得到：只记用了助手，问的内容不记；对话标题是第一个问题的前 40 字，删除时也不记
+  { m: 'POST', p: '/assistant/ask', a: 'assistant.ask', run: () => ({ summary: '向 AI 助手提问{了}' }) },
+  { m: 'POST', p: '/assistant/chats/:id/retry', a: 'assistant.retry', run: () => ({ summary: '重新问{了} AI 助手' }) },
+  { m: 'DELETE', p: '/assistant/chats/:id', a: 'assistant.chat_delete', run: () => ({ summary: '删除{了}一个 AI 助手对话' }) },
 
   /* ---------- 设置 ---------- */
   {

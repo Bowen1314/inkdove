@@ -1,13 +1,15 @@
 // 操作日志：各类改动都记下来（谁、什么时候、改了什么、成功失败、IP）；给客户发消息和页面自动发的请求不记；
 // 登录成功失败都记（不记密码）；密钥只记「已修改」绝不落明文；agent 越权的 403 记为失败；只有 admin 能查，没有改和删的接口；
-// 撤回消息不记内容；全局代理的订阅地址、粘贴的配置和节点的凭证不落库；筛选和游标分页；过期清理。模型都用 mock。
+// 撤回消息不记内容；AI 助手不记问的内容和对话标题；全局代理的订阅地址、粘贴的配置和节点的凭证不落库；筛选和游标分页；过期清理。模型都用 mock。
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
+import { ASSISTANT_DAILY_QUESTIONS } from '../src/assistant/store.js';
 import { loadConfig } from '../src/config.js';
+import { localDay } from '../src/wa/service.js';
 import { ADMIN_EMAIL, convIdOf, convPath, PASSWORD, startApp, startFakeWaha, waitFor, wahaSend } from './helpers.js';
 
 describe('操作日志', () => {
@@ -269,6 +271,54 @@ describe('操作日志', () => {
       assert.match(row.summary, /^撤回会话「.+」里的一条消息$/);
       assert.equal(row.error, '这条消息已经撤回了');
       assert.ok(!dump().includes('revoke-body-should-not-be-stored'), '消息内容不落库');
+    });
+
+    it('AI 助手：提问、重试、删除对话都记，问的内容和对话标题（问题的前 40 字）不记；次数用完（429）记成失败', async () => {
+      const question = 'assistant-question-not-stored 张三上周的报价是多少';
+      let r = await t.req('POST', '/api/assistant/ask', { body: { question } });
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      const chatId = r.body.chat.id;
+      const msgId = r.body.message.id;
+      let row = last('assistant.ask');
+      assert.equal(row.summary, '向 AI 助手提问了');
+      assert.equal(row.ok, 1);
+      assert.equal(row.category, 'assistant');
+      assert.equal(row.target_type, null);
+      assert.equal(row.changes, '[]');
+
+      // 等它答完（答没答成都行），改成失败再重试
+      const status = () => t.ctx.db.prepare('SELECT status FROM assistant_messages WHERE id = ?').get(msgId).status;
+      await waitFor(() => status() !== 'running');
+      t.ctx.db.prepare("UPDATE assistant_messages SET status = 'failed', answer = NULL WHERE id = ?").run(msgId);
+      r = await t.req('POST', `/api/assistant/chats/${chatId}/retry`);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      row = last('assistant.retry');
+      assert.equal(row.summary, '重新问了 AI 助手');
+      assert.equal(row.category, 'assistant');
+      await waitFor(() => status() !== 'running');
+
+      r = await t.req('DELETE', `/api/assistant/chats/${chatId}`);
+      assert.equal(r.status, 200);
+      row = last('assistant.chat_delete');
+      assert.equal(row.summary, '删除了一个 AI 助手对话');
+      assert.equal(row.target_name, null);
+
+      // 今天的次数用完：429 记成失败，错误信息里也没有问的内容
+      const adminId = t.ctx.db.prepare('SELECT id FROM users WHERE email = ?').get(ADMIN_EMAIL).id;
+      t.ctx.db
+        .prepare('INSERT INTO assistant_usage(user_id, day, questions) VALUES(?, ?, ?) ON CONFLICT(user_id, day) DO UPDATE SET questions = excluded.questions')
+        .run(adminId, localDay(), ASSISTANT_DAILY_QUESTIONS);
+      r = await t.req('POST', '/api/assistant/ask', { body: { question } });
+      assert.equal(r.status, 429);
+      row = last('assistant.ask');
+      assert.equal(row.ok, 0);
+      assert.equal(row.status, 429);
+      assert.equal(row.summary, '向 AI 助手提问');
+      assert.match(row.error, /今天的提问次数用完了/);
+      t.ctx.db.prepare('DELETE FROM assistant_usage WHERE user_id = ?').run(adminId);
+
+      const all = dump();
+      assert.ok(!all.includes('assistant-question-not-stored') && !all.includes('张三上周的报价'), '问的内容、对话标题都不落库');
     });
 
     it('号的代理改成「用全局代理」：记成 关 → 开', async () => {
