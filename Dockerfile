@@ -18,6 +18,8 @@ COPY server/package.json server/package-lock.json ./
 RUN npm ci --omit=dev
 
 # 3) 运行
+# 全局 fetch 靠 server/src/builtin-fetch.js 绕开 npm undici 7.30 的崩溃 bug，Node 22 自带的是 undici 6；
+# 换大版本（比如 Node 24 自带 undici 7）前先跑 server/test/builtin-fetch.test.js 和 server/test/media.test.js 确认不崩。
 FROM node:22-slim
 ENV NODE_ENV=production \
     INKDOVE_PORT=8794 \

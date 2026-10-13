@@ -372,6 +372,9 @@ describe('F12 记录的数据和 F11 拒绝（mock）', () => {
       const chat = newChat();
       await customer(chat, '保温杯 A100 多少钱');
       await waitFor(() => fake.sentTo(chat).length === 1);
+      // 假 WAHA 先记下再回响应，inkdove 拿到响应才记下这条的 id（之后才把回复存进库）。只看假 WAHA 就推回声的话，
+      // 下面文字不同、只能按 id 认的那条可能赶在 id 记下之前，被当成机主发的存下来：等回复进了库再推
+      await waitFor(async () => (await getMessages(t, cid(chat))).some((m) => m.author === 'bot'), { message: '机器人回复迟迟没有存进库' });
       const sent = fake.sentTo(chat)[0];
       assert.equal(await ownerSays(chat, sent.text, { id: sent.id }), 'ignored_echo');
       const short = sent.id.split('_').at(-1);

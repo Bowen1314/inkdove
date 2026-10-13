@@ -13,6 +13,7 @@ import {
   startFakeWaha,
   TINY_PNG,
   waitDecided,
+  waitFor,
   WAHA_SECRET,
   wahaMessage,
   wahaSend,
@@ -268,6 +269,8 @@ describe('WAHA 号', () => {
     await send(chat2, '保温杯这个多少钱', { hasMedia: true, media: { mimetype: 'image/jpeg' } });
     const m2 = await waitDecided(t, cid(chat2), 1);
     assert.equal(m2[0].botDecision, 'replied');
+    // replied 是在调 sendText 之前记上的，waitDecided 看到它时假 WAHA 可能还没收到这条回复：等它收到再数
+    await waitFor(() => fake.sentTo(chat2).length >= 1, { message: '回复迟迟没有发到 WAHA' });
     assert.equal(fake.sentTo(chat2).length, 1);
   });
 
