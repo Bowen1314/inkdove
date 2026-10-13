@@ -13,6 +13,7 @@ import LeadsSection from './LeadsSection.jsx';
 import EmailSection from './EmailSection.jsx';
 import BrandSection from './BrandSection.jsx';
 import OutreachSection from './OutreachSection.jsx';
+import BlockwordsSection from './BlockwordsSection.jsx';
 import PricingSection from './PricingSection.jsx';
 import VersionSection from './VersionSection.jsx';
 
@@ -27,12 +28,13 @@ const NAV = [
   { to: '/settings/leads', label: '客户线索' },
   { to: '/settings/email', label: '发信方式' },
   { to: '/settings/outreach', label: '主动外联' },
+  { to: '/settings/blockwords', label: '屏蔽词' },
   { to: '/settings/pricing', label: '模型单价' },
   { to: '/settings/brand', label: '品牌' },
   { to: '/settings/version', label: '版本' },
 ];
 
-const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'translation', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
+const GROUPS = ['llm', 'embedding', 'reply', 'suggest', 'translation', 'media', 'leads', 'email', 'outreach', 'blockwords', 'pricing', 'brand', 'version'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -97,6 +99,7 @@ export default function SettingsPage() {
         <Route path="leads" element={<LeadsSection {...props} />} />
         <Route path="email" element={<EmailSection {...props} />} />
         <Route path="outreach" element={<OutreachSection {...props} />} />
+        <Route path="blockwords" element={<BlockwordsSection {...props} />} />
         <Route path="pricing" element={<PricingSection {...props} />} />
         <Route path="brand" element={<BrandSection {...props} />} />
         <Route path="version" element={<VersionSection />} />

@@ -57,6 +57,8 @@ export const AI_METHOD_PURPOSE = {
   searchTerms: 'kb_search',
   // 可选的向量检索（kb/vectors.js）：后台算条目的一批、检索时算查询向量都记，不计入会话每日模型次数
   embed: 'embedding',
+  // 设置 → 屏蔽词的「AI 扩充」（blockwords/expand.js），管理员手动点，不在会话里
+  expandBlockwords: 'blocklist',
   test: 'test',
 };
 

@@ -177,15 +177,18 @@ async function afterApiError(ctx, conv, err, tr, canUseAi, aiFn) {
 
 /**
  * 把业务员写的话直译成这个会话客户的语言。权限由路由检查（同手动回复）。
+ * 原文里有屏蔽词的不翻译（400 blockword_hit），和发送时命中一样记一条、提醒管理员。
  * @param {any} ctx
  * @param {{id:string, accountId:string|null}} conv 路由 loadConv 返回的会话
  * @param {unknown} text
+ * @param {any} [user] 点翻译的人（屏蔽词记录用）
  * @returns {Promise<{text:string, language:string, via:string, fallbackReason?:string}>}
  */
-export async function translateForConversation(ctx, conv, text) {
+export async function translateForConversation(ctx, conv, text, user = null) {
   if (typeof text !== 'string' || !text.trim()) throw badRequest('要翻译的内容不能为空');
   const source = text.trim();
   if (source.length > MAX_TRANSLATE_TEXT) throw badRequest(`要翻译的内容不能超过 ${MAX_TRANSLATE_TEXT} 字`, 'text_too_long');
+  ctx.blockwords?.guard(source, { source: 'translate', accountId: conv.accountId, conversationId: conv.id, user });
   const settings = ctx.getSettings();
   const tr = settings.translation;
   const canUseAi = llmConfigured(settings, ctx.config);

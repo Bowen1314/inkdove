@@ -361,6 +361,23 @@ export const api = {
   /** 用表单里当前（可能未保存）的值拉模型列表。总是 200 → {ok:true, models:[{id, label?}]} | {ok:false, error} */
   listLlmModels: (body) => post('/api/settings/llm/models', body),
 
+  // 屏蔽词（admin）：开关和词表走 putSettings 的 blockwords
+  /** 还没处理的命中（弹窗轮询用）→ {total, items: Hit[]}，最早的在前，最多 20 条 */
+  getBlockwordAlerts: (o) => get('/api/blockwords/alerts', o),
+  /** 「知道了」→ 这条 Hit（别人已经处理过的照样返回，处理人不变） */
+  ackBlockwordHit: (id, o) => post(`/api/blockwords/hits/${enc(id)}/ack`, {}, o),
+  /**
+   * 命中记录，新到旧，page 从 1 开始。status：pending | acked，空为全部；who：成员 id，或 bot、phone、relay；
+   * from、to：ISO 时间 → {total, page, pageSize, items: Hit[], senders: [{id, name}]}
+   */
+  listBlockwordHits: ({ status, who, from, to, page, pageSize } = {}, o) =>
+    get('/api/blockwords/hits', { ...o, query: { status, who, from, to, page, pageSize } }),
+  /**
+   * AI 扩充：{seeds, languages, existing} → {candidates: [{word, language, seed, risk, reason, forced}]}，不存。
+   * 默认不弹 toast，由弹窗自己显示错误
+   */
+  expandBlockwords: (body, o) => post('/api/blockwords/expand', body, { silent: true, ...o }),
+
   // 品牌（网站名称和 Logo）
   /** 公开接口，不用登录 → {title, logoUrl}；失败由调用方静默回退到默认值 */
   getBranding: () => get('/api/branding', { silent: true }),

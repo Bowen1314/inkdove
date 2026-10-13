@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { conversationIdOf, DELETED_ACCOUNT_NAME, metaConfigured } from '../accounts.js';
+import { hitMessage, quoteWords } from '../blockwords/store.js';
 import { internalFileUrl } from '../files/signed.js';
 import { MAX_FILES_PER_REPLY } from '../files/store.js';
 import { ENTRY_TYPES, normalizeTags } from '../kb/store.js';
@@ -988,6 +989,8 @@ export function createWaService(ctx, opts = {}) {
         ).changes;
     })();
     if (!inserted) return 'ignored_duplicate';
+    // 屏蔽词：手机上发的已经发出去了，拦不住，只记下来提醒管理员
+    if (m.text) ctx.blockwords.check(m.text, { source: 'phone', blocked: false, accountId: acc.id, conversationId: convId });
     ctx.records.handoffResponse({ conversationId: convId, kind: 'phone', at: now });
     // 手机上回了：推荐回复作废
     clearSuggestion(convId);
@@ -1397,7 +1400,7 @@ export function createWaService(ctx, opts = {}) {
       )
       .get(convId, dayStart).n;
 
-    const result = await decideReply(ctx, {
+    let result = await decideReply(ctx, {
       message,
       history,
       persona: acc.persona,
@@ -1412,6 +1415,11 @@ export function createWaService(ctx, opts = {}) {
     const accNow = accounts.get(acc.id);
     if (!accNow) return void settle('skipped', '这个号已删除');
     if (conv.bot_paused || closed) return void settle('skipped', '生成回复期间人工接管了这个会话');
+    // 屏蔽词：自动回复里有就不发，按「回复被拦截」转人工（和规则拦截一样暂停、起草、通知），管理员另外会收到提醒
+    if (result.decision === 'replied') {
+      const hit = ctx.blockwords.check(result.reply, { source: 'bot', accountId: acc.id, conversationId: convId });
+      if (hit) result = { ...result, decision: 'blocked', code: 'blockword', reason: `回复里有屏蔽词${quoteWords(hit.words)}，没有发出，已转人工` };
+    }
 
     switch (result.decision) {
       case 'replied':
@@ -1835,6 +1843,12 @@ export function createWaService(ctx, opts = {}) {
         await replyAdmin('这个会话没有草稿');
         return 'command_no_draft';
       }
+      // 屏蔽词：草稿文字里有就整份不发（文件也不发），草稿留着
+      const hit = draft.text.trim() ? ctx.blockwords.check(draft.text, { source: 'relay', accountId: acc.id, conversationId: convId }) : null;
+      if (hit) {
+        await replyAdmin(`❌ 草稿里有屏蔽词${quoteWords(hit.words)}，没有发出去，管理员会收到提醒`);
+        return 'command_blocked';
+      }
       // F15：先发草稿文字，再发草稿里的文件；视为人工亲自发送
       const errors = [];
       operatorTakeover(convId);
@@ -1857,6 +1871,12 @@ export function createWaService(ctx, opts = {}) {
       }
       await replyAdmin(`❌ 发送失败：${errors.join('；')}`);
       return 'command_failed';
+    }
+    // 屏蔽词：转发的话里有就不发
+    const hit = ctx.blockwords.check(m.text, { source: 'relay', accountId: acc.id, conversationId: convId });
+    if (hit) {
+      await replyAdmin(`❌ ${hitMessage('relay', hit.words)}`);
+      return 'command_blocked';
     }
     const msg = await operatorDeliver(acc, convId, m.text, { via: 'whatsapp', sentBy: null });
     if (msg.status === 'sent') {
@@ -2470,6 +2490,8 @@ export function createWaService(ctx, opts = {}) {
       if (typeof text !== 'string' || !text.trim()) throw badRequest('消息不能为空');
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
       if (!acc) throw badRequest('这个会话所属的号已删除，不能再发送', 'account_deleted');
+      // 屏蔽词：命中了不发，400（blockword_hit），会话状态不变
+      ctx.blockwords.guard(text.trim(), { source: 'operator', accountId: acc.id, conversationId: id, user });
       return operatorDeliver(acc, id, text.trim(), { via: 'admin', sentBy: user ? { id: user.id, name: user.name } : null });
     },
     /** F15：后台人工发文件（权限同手动回复）。发完会话进入 botPaused */
@@ -2485,6 +2507,8 @@ export function createWaService(ctx, opts = {}) {
       if (file.status !== 'active') throw badRequest('这个文件已停用，启用后才能发送', 'file_disabled');
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
       if (!acc) throw badRequest('这个会话所属的号已删除，不能再发送', 'account_deleted');
+      // 屏蔽词：说明文字命中了，文件也不发
+      if (caption.trim()) ctx.blockwords.guard(caption.trim(), { source: 'file', accountId: acc.id, conversationId: id, user });
       return operatorDeliverFile(acc, id, file, {
         via: 'admin',
         sentBy: user ? { id: user.id, name: user.name } : null,

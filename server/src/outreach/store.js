@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { DELETED_ACCOUNT_NAME } from '../accounts.js';
 import { canAccessAccount, forbidden } from '../auth.js';
+import { quoteWords } from '../blockwords/store.js';
 import { campaignStatusLabel } from '../codes.js';
 import { badRequest, clip, HttpError, newId, safeJsonParse } from '../util.js';
 import { localDay } from '../wa/service.js';
@@ -235,6 +236,16 @@ export function createOutreach(ctx, opts = {}) {
       throw badRequest('选中的号里有 Meta 号：Meta 主动发起会话必须用审核通过的模板消息，请填写模板名和语言', 'template_required');
     }
     if (accs.some((a) => a.channel !== 'meta') && !message) throw badRequest('请填写开场消息', 'message_required');
+    // 屏蔽词：开场消息里有就不建任务（400），管理员会收到提醒。只选了 Meta 号时发的是模板，这段消息不发出去，不查
+    if (message && accs.some((a) => a.channel !== 'meta')) {
+      ctx.blockwords.guard(message, {
+        source: 'campaign',
+        accountId: accs.length === 1 ? accs[0].id : null,
+        accountName: accs.map((a) => a.name).join('、'),
+        campaign: { id: null, name },
+        user,
+      });
+    }
 
     // 号码文件：.txt，UTF-8，≤1MB（multer 限制），号码行 ≤10000
     if (!file) throw badRequest('请上传号码文件（字段名 file）', 'file_required');
@@ -430,7 +441,7 @@ export function createOutreach(ctx, opts = {}) {
     if (!open.length) return null;
     return db
       .prepare(
-        `SELECT r.*, c.message, c.meta_template_name, c.meta_template_language, c.created_by_id ${PENDING_JOIN}
+        `SELECT r.*, c.message, c.meta_template_name, c.meta_template_language, c.created_by_id, c.created_by_name, c.name AS campaign_name ${PENDING_JOIN}
            AND COALESCE(r.tz, 'UTC') IN (${open.map(() => '?').join(', ')})
          ORDER BY c.started_at, c.rowid, r.seq LIMIT 1`,
       )
@@ -469,6 +480,22 @@ export function createOutreach(ctx, opts = {}) {
       skipRecipient(r.id, late);
       checkDone(r.campaign_id);
       return false;
+    }
+    // 屏蔽词：建任务之后才加的词，发之前再查一遍（扫码号发的是这段原文；Meta 发模板，不查）。命中就暂停整个任务、只记一条，
+    // 这个号码留着不发。去掉这个词或者重建任务之后才能继续
+    if (acc.channel !== 'meta') {
+      const hit = ctx.blockwords.check(r.message, {
+        source: 'campaign',
+        accountId: acc.id,
+        campaign: { id: r.campaign_id, name: r.campaign_name },
+        user: r.created_by_id ? { id: r.created_by_id, name: r.created_by_name } : null,
+      });
+      if (hit) {
+        const error = `开场消息里有屏蔽词${quoteWords(hit.words)}，任务已自动暂停，没有发出`;
+        db.prepare("UPDATE campaigns SET status = 'paused', error = ? WHERE id = ? AND status = 'running'").run(error, r.campaign_id);
+        log.warn(`[outreach] 外联任务 ${r.campaign_id} 的开场消息命中屏蔽词，已自动暂停`);
+        return false;
+      }
     }
     let chatId = acc.channel === 'meta' ? r.number : `${r.number}@c.us`;
     try {

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createAccountStore, migrateLegacy } from './accounts.js';
 import { canAccessAccount, createAuth } from './auth.js';
+import { createBlockwords } from './blockwords/store.js';
 import { createDashboard } from './dashboard.js';
 import { openDb } from './db.js';
 import { createMailer } from './email.js';
@@ -21,6 +22,7 @@ import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
 import { createRecords, withLlmCallLog } from './records.js';
 import { createRedteamRunner } from './redteam/runner.js';
 import { accountsRouter } from './routes/accounts.js';
+import { blockwordsRouter } from './routes/blockwords.js';
 import { campaignsRouter } from './routes/campaigns.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { distillRouter } from './routes/distill.js';
@@ -134,6 +136,7 @@ export function createApp(config, options = {}) {
     outreach: null,
     redteam: null,
     dashboard: null,
+    blockwords: null,
   };
   ctx.mailer = createMailer({
     getSettings: ctx.getSettings,
@@ -149,6 +152,8 @@ export function createApp(config, options = {}) {
   ctx.vectors = createVectorIndexer(ctx, { debounceMs: options.vectorDebounceMs ?? VECTOR_DEBOUNCE_MS, now: options.vectorNow });
   ctx.vectors.start();
   ctx.distill = createDistillRunner(ctx);
+  // 屏蔽词：发出前检查、命中记录和给管理员的提醒（blockwords/store.js），发送的地方都要用，先建
+  ctx.blockwords = createBlockwords(ctx);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
   ctx.wa = createWaService(ctx, {
@@ -252,6 +257,7 @@ export function createApp(config, options = {}) {
   api.use('/redteam', auth.requireAdmin, redteamRouter(ctx));
   api.use('/dashboard', auth.requireAdmin, dashboardRouter(ctx));
   api.use('/update', auth.requireAdmin, updateRouter(ctx));
+  api.use('/blockwords', auth.requireAdmin, blockwordsRouter(ctx));
   api.use('/kb', kbRouter(ctx, auth));
   api.use('/files', filesRouter(ctx, auth));
   api.use('/wa', waRouter(ctx));

@@ -115,7 +115,7 @@ export function waRouter(ctx) {
   // 输入框一键翻译成客户的语言，权限同手动回复；不改会话状态，不计入会话每日模型次数
   router.post('/conversations/:id/translate', async (req, res) => {
     const c = loadConv(req);
-    res.json(await translateForConversation(ctx, c, req.body?.text));
+    res.json(await translateForConversation(ctx, c, req.body?.text, req.user));
   });
   // 一条消息译成简体中文（按「设置 → 翻译」的方式），权限同看这个会话；译文存进消息，再请求直接返回。不计入会话每日模型次数
   router.post('/conversations/:id/messages/:messageId/translation', async (req, res) => {

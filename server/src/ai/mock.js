@@ -244,6 +244,20 @@ export function createMockAi(opts = {}) {
       return mockExtractLead(messages);
     },
 
+    /**
+     * 屏蔽词扩充 mock：每个种子词按每种语言给一个「种子_语言」的示例词，再给一个只取种子第一个字的（太短，服务端会改成高风险）。
+     * 和真实实现一样返回 {candidates}，不发网络请求
+     */
+    async expandBlockwords({ seeds = [], languages = [] }) {
+      await wait();
+      const candidates = [];
+      for (const seed of seeds) {
+        for (const language of languages) candidates.push({ word: `${seed}_${language}`, language, seed, risk: 'low', reason: '演示模式生成的示例词' });
+        candidates.push({ word: [...seed][0], language: languages[0] || 'zh', seed, risk: 'low', reason: '演示模式生成的示例词' });
+      }
+      return { candidates };
+    },
+
     /** F4 mock 识图：图片字节本身是可读文字时（测试用）照抄，否则给通用描述 */
     async describeImage({ mime, data }) {
       await wait();

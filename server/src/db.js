@@ -451,6 +451,40 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
 );
 CREATE INDEX IF NOT EXISTS embeddings_model ON embeddings(model_key, kind);
 `);
+
+  // ---- 屏蔽词命中记录（写入和查询见 blockwords/store.js），只有管理员能看 ----
+  // source：operator 后台发消息、file 发文件的说明文字、translate 一键翻译的原文、bot 自动回复、relay 通知号码上转发或 /d 发草稿、
+  //   campaign 外联开场消息、phone 机主在手机上发的（拦不住，只提醒）
+  // blocked：1 拦下了没发（翻译的是没翻译），0 已经发出去了（phone）
+  // 号名、联系人名、发送人名、外联任务名都存一份当时的，号或会话删了记录照样看得懂
+  // words：命中的词（管理员填的原样，JSON 数组）；ranges：原文里命中的位置 [[开始, 结束), …]（UTF-16 下标，JSON），前端标红用
+  // acked_*：哪位管理员点了「知道了」，点过的其他管理员不再弹
+  // blockword_hits_pending：只索引还没处理的，弹窗轮询（每几秒一次）只扫这一小部分
+  db.exec(`CREATE TABLE IF NOT EXISTS blockword_hits (
+  id TEXT PRIMARY KEY,
+  ts TEXT NOT NULL,
+  source TEXT NOT NULL,
+  blocked INTEGER NOT NULL,
+  account_id TEXT,
+  account_name TEXT NOT NULL DEFAULT '',
+  conversation_id TEXT,
+  contact_name TEXT NOT NULL DEFAULT '',
+  campaign_id TEXT,
+  campaign_name TEXT NOT NULL DEFAULT '',
+  user_id TEXT,
+  user_name TEXT NOT NULL DEFAULT '',
+  words TEXT NOT NULL,
+  ranges TEXT NOT NULL,
+  text TEXT NOT NULL,
+  acked_at TEXT,
+  acked_by_id TEXT,
+  acked_by_name TEXT
+);
+CREATE INDEX IF NOT EXISTS blockword_hits_ts ON blockword_hits(ts);
+CREATE INDEX IF NOT EXISTS blockword_hits_pending ON blockword_hits(ts) WHERE acked_at IS NULL;
+CREATE INDEX IF NOT EXISTS blockword_hits_user ON blockword_hits(user_id, ts);
+CREATE INDEX IF NOT EXISTS blockword_hits_source ON blockword_hits(source, ts);
+`);
 }
 
 /**

@@ -1,5 +1,6 @@
 // 枚举值 → 中文标签（SPEC-phase2 F12）。看板按 code 分组统计，通知和看板共用这里的文案。
 // 枚举值本身和规格一字不差；F15 在 F12 的表外新增了 blocked 的 bad_file 和 handoff 的 file_limit（docs/deviations.md 第 23 条）。
+// 屏蔽词另加了 blocked 的 blockword（自动回复里有屏蔽词，没发，转人工）。
 
 /** 处理结果（decisions.decision）。skipped 不写进 decisions 表，这里只为显示 */
 export const DECISION_LABELS = {
@@ -48,6 +49,7 @@ export const DECISION_CODES = {
     code_block: '回复里有代码块',
     canary: '疑似提示词泄露',
     bad_file: '要发的文件不存在或超量',
+    blockword: '回复里有屏蔽词',
   },
   offtopic: {
     task: '让机器人干别的活',
@@ -96,6 +98,7 @@ export const LLM_PURPOSES = {
   translate: '翻译',
   kb_search: '知识库检索改写',
   embedding: '向量检索',
+  blocklist: '屏蔽词扩充',
   test: '测试连接',
 };
 export const purposeLabel = (p) => LLM_PURPOSES[p] ?? p;

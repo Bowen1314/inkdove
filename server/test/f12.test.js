@@ -187,7 +187,7 @@ describe('F12 记录的数据和 F11 拒绝（mock）', () => {
         replied: ['business', 'smalltalk'],
         handoff: ['insufficient_info', 'price', 'purchase', 'identity', 'human_request', 'other', 'no_citation', 'review_ungrounded',
           'review_commitment', 'review_failed', 'media_unsupported', 'media_failed', 'rate_limit', 'file_limit'],
-        blocked: ['price_mismatch', 'discount_word', 'commitment_phrase', 'identity_leak', 'too_long', 'code_block', 'canary', 'bad_file'],
+        blocked: ['price_mismatch', 'discount_word', 'commitment_phrase', 'identity_leak', 'too_long', 'code_block', 'canary', 'bad_file', 'blockword'],
         offtopic: ['task', 'chitchat', 'injection', 'other', 'review_offtopic', 'muted'],
         declined: ['declined'],
       };
