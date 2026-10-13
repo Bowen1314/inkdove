@@ -99,4 +99,5 @@ INKDOVE_COOKIE_SECURE=1
 | `INKDOVE_UPDATE_REPO` | | 查哪个仓库的发布，默认 `Bowen1314/inkdove`；镜像名按它推出来（`ghcr.io/<小写的 owner/repo>`） |
 | `INKDOVE_UPDATER_URL` | | 更新助手的地址，默认 `http://updater:8080`（compose 内网） |
 | `INKDOVE_IMAGE_TAG` | | 应用镜像的标签，默认 `latest`；compose 用它拼镜像名，也传给应用判断能不能一键升级 |
+| `INKDOVE_AUDIT_RETENTION_DAYS` | | 操作日志保留多少天，默认 365（1–36500 的整数），过期的每天自动清掉 |
 | `INKDOVE_META_GRAPH_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |

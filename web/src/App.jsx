@@ -20,6 +20,7 @@ import WhatsAppPage, { WhatsAppIndex } from './pages/wa/WhatsAppPage.jsx';
 import Outreach from './pages/Outreach.jsx';
 import Leads from './pages/Leads.jsx';
 import MembersPage from './pages/Members.jsx';
+import AuditLogPage from './pages/AuditLog.jsx';
 import SettingsPage from './pages/settings/SettingsPage.jsx';
 
 /** 登录守卫：GET /api/auth/me → {user}，把 user 放进 AuthContext */
@@ -166,6 +167,14 @@ export default function App() {
               element={
                 <AdminOnly>
                   <MembersPage />
+                </AdminOnly>
+              }
+            />
+            <Route
+              path="audit"
+              element={
+                <AdminOnly>
+                  <AuditLogPage />
                 </AdminOnly>
               }
             />

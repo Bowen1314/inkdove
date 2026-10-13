@@ -54,6 +54,8 @@ export function loadConfig(env = process.env) {
     updaterToken: get('INKDOVE_UPDATER_TOKEN').trim(),
     // compose 里应用镜像的标签（默认 latest）。钉成 x.y.z 时一键更新升不上去，只提示命令
     imageTag: get('INKDOVE_IMAGE_TAG').trim() || 'latest',
+    // 操作日志保留多少天（默认 365），过期的每天清一次
+    auditRetentionDays: num('INKDOVE_AUDIT_RETENTION_DAYS', 365),
     // 仅测试用：覆盖 Meta Graph API 基址
     metaGraphUrl: (get('INKDOVE_META_GRAPH_URL').trim() || 'https://graph.facebook.com').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Resend API 地址
@@ -75,6 +77,9 @@ export function loadConfig(env = process.env) {
   }
   if (!/^[\w.-]+\/[\w.-]+$/.test(config.updateRepo)) errors.push('INKDOVE_UPDATE_REPO 要写成 owner/repo');
   if (!/^[\w][\w.-]{0,127}$/.test(config.imageTag)) errors.push('INKDOVE_IMAGE_TAG 不是合法的镜像标签');
+  if (!Number.isInteger(config.auditRetentionDays) || config.auditRetentionDays < 1 || config.auditRetentionDays > 36500) {
+    errors.push('INKDOVE_AUDIT_RETENTION_DAYS 必须是 1–36500 的整数（天）');
+  }
   if (errors.length) {
     const err = new Error(errors.join('；'));
     err.name = 'ConfigError';
