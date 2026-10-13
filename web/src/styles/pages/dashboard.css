@@ -1,0 +1,469 @@
+/* 看板（F12）。见 DESIGN.md 第 7 节「看板」。颜色、字号、圆角只引用 token；图表配色见 pages/dashboard/charts.jsx */
+
+/* ---- 头部筛选：时间段 + 号。窄屏时整组换到第二行，靠左 ---- */
+.dash .page-header {
+  flex-wrap: wrap;
+}
+.dash__filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.dash__account {
+  max-width: 220px;
+}
+@media (max-width: 640px) {
+  .dash .page-header__actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+  .dash__filters {
+    flex: 1;
+  }
+  .dash__account {
+    flex: 1 1 0;
+    max-width: none;
+  }
+}
+
+/* 切换筛选重新拉数据时，旧数据变淡 */
+.dash__grid {
+  transition: opacity var(--dur) var(--ease);
+}
+.dash__grid.is-refreshing {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ---- 指标卡：同一行等高 ---- */
+.dash-metric {
+  min-width: 0;
+}
+.dash-metric > .card {
+  height: 100%;
+}
+.dash-skeleton__label {
+  width: 56px;
+}
+.dash-skeleton__metric {
+  width: 64px;
+  height: 24px;
+  margin-top: var(--sp-2);
+}
+.dash-skeleton__title {
+  width: 96px;
+  margin-bottom: var(--sp-3);
+}
+
+/* ---- 卡片：标题不折行，右边的图例、说明放不下时换到下一行 ---- */
+.dash-card {
+  min-width: 0;
+}
+.dash-card > .card__head {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+.dash-card .card__title {
+  white-space: nowrap;
+}
+.dash-card__aside {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.dash-card__note {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  white-space: nowrap;
+}
+.dash-card__hint {
+  margin: var(--sp-3) 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.dash-card .empty--compact {
+  padding: var(--sp-6) var(--sp-4);
+}
+.dash-sub .empty--compact {
+  padding: var(--sp-4) 0;
+}
+
+/* 卡片里的小节 */
+.dash-sub + .dash-sub,
+.dash-stats + .dash-sub,
+.dash-stats + .dash-split,
+.dash-split + .dash-sub {
+  margin-top: var(--sp-4);
+}
+.dash-sub--rule {
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+}
+.dash-sub__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-height: 24px;
+  margin-bottom: var(--sp-2);
+}
+.dash-sub__title {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.dash-sub__hint {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  text-align: right;
+}
+
+/* 两栏（知识库的两个 Top 10、国家和产品）；放不下时上下排 */
+.dash-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-4) var(--sp-6);
+}
+.dash-split > .dash-sub + .dash-sub {
+  margin-top: 0;
+}
+@media (max-width: 1279px) and (min-width: 1024px), (max-width: 640px) {
+  .dash-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* 小号指标（卡片顶部一排） */
+.dash-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: var(--sp-3) var(--sp-4);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.dash-stats--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.dash-stat {
+  min-width: 0;
+}
+.dash-stat__label {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: 500;
+}
+.dash-stat__value {
+  margin-top: 2px;
+  font-size: var(--fs-h2);
+  line-height: var(--lh-h2);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dash-stat__value small {
+  margin-left: 4px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.dash-stat__sep {
+  margin: 0 6px;
+  color: var(--text-faint);
+}
+.dash-stat__foot {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
+/* ---- 图例 ---- */
+.dash-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.dash-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.dash-legend__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.dash-legend__value {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ---- SVG 图表 ---- */
+.dash-chart {
+  width: 100%;
+  min-width: 0;
+}
+.dash-chart__svg {
+  display: block;
+  overflow: visible;
+}
+.dash-chart__grid {
+  stroke: var(--border);
+  stroke-dasharray: 2 3;
+}
+.dash-chart__axis {
+  stroke: var(--border);
+}
+.dash-chart__tick {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 趋势：每天一列，悬停或聚焦时底下铺一层浅色 */
+.dash-trend__band {
+  cursor: default;
+  outline: none;
+}
+.dash-trend__hit {
+  fill: transparent;
+  transition: fill var(--dur-fast) ease;
+}
+.dash-trend__band:hover .dash-trend__hit {
+  fill: var(--bg-muted);
+}
+/* <g> 上的 outline 浏览器画不出来，改成描边做焦点环 */
+.dash-trend__band:focus-visible .dash-trend__hit {
+  fill: var(--bg-muted);
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+
+/* 热力图 */
+.dash-heat__cell {
+  fill: var(--primary);
+}
+.dash-heat__cell--zero {
+  fill: var(--bg-muted);
+}
+.dash-heat__cell:hover {
+  stroke: var(--text);
+  stroke-width: 1;
+}
+.dash-heat__legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.dash-heat__swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--primary);
+}
+.dash-heat__swatch--zero {
+  background: var(--bg-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.dash-heat__max {
+  margin-left: var(--sp-3);
+}
+
+/* 图表 Tooltip 的多行内容（外框用 components.css 的 .tooltip） */
+.dash-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 120px;
+}
+.dash-tip__title {
+  font-weight: 600;
+}
+.dash-tip__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dash-tip__label {
+  flex: 1;
+}
+.dash-tip__foot {
+  margin-top: 2px;
+  padding-top: 2px;
+  border-top: 1px solid color-mix(in srgb, var(--on-primary) 25%, transparent);
+}
+
+/* ---- 横向条形排行 ---- */
+.dash-rank {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-rank__item {
+  min-width: 0;
+}
+.dash-rank__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.dash-rank__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dash-rank__label--link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.dash-rank__note {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.dash-rank__count {
+  flex: none;
+  font-weight: 500;
+}
+.dash-rank__count small {
+  margin-left: 2px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+.dash-rank__bar {
+  height: 4px;
+  margin-top: var(--sp-1);
+  min-width: 0;
+}
+
+/* ---- 漏斗：阶段 | 条 | 人数 | 较上一阶段 ---- */
+.dash-funnel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-funnel__row {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) 48px 56px;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 24px;
+}
+.dash-funnel__label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dash-funnel__track {
+  height: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-muted);
+  overflow: hidden;
+}
+.dash-funnel__fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  transition: width var(--dur) var(--ease);
+}
+.dash-funnel__num {
+  text-align: right;
+  font-weight: 500;
+}
+.dash-funnel__rate {
+  text-align: right;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+@media (max-width: 640px) {
+  .dash-funnel__row {
+    grid-template-columns: 72px minmax(0, 1fr) 40px 48px;
+    gap: var(--sp-2);
+  }
+}
+
+/* ---- 卡片里的贴边表格（号码、成员）：首尾列对齐卡片内边距 ---- */
+.dash-table {
+  --gutter: var(--sp-4);
+}
+.dash-table .table th {
+  position: static;
+}
+.dash-table .table tbody tr:last-child > td {
+  border-bottom: 0;
+}
+.dash-table__link {
+  font-weight: 500;
+}
+.dash-table__link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---- 卡片里的小表格（成本按用途、外联按号）：不贴边，行高收紧 ---- */
+.dash-mini {
+  --gutter: 0;
+  margin-top: var(--sp-3);
+}
+.dash-mini th {
+  position: static;
+  height: 32px;
+}
+.dash-mini td {
+  height: 36px;
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
+}
+.dash-mini tbody tr:last-child > td {
+  border-bottom: 0;
+}
+.dash-mini__name {
+  max-width: 0;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 768px) {
+  /* 小表格不横向滚动，首列不用吸附 */
+  .table.dash-mini th:first-child,
+  .table.dash-mini td:first-child {
+    position: static;
+  }
+}

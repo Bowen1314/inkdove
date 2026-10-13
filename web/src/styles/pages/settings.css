@@ -72,3 +72,89 @@
   font-size: var(--fs-sm);
   line-height: var(--lh-sm);
 }
+
+/* 模型单价表：单元格直接是输入框（DESIGN 第 5 节「行内编辑」）。不贴页面边距，数字列定宽 */
+.pricing-table {
+  --gutter: 0;
+  margin-top: var(--sp-2);
+}
+.pricing-table th {
+  position: static;
+}
+.pricing-table td {
+  vertical-align: top;
+  padding-top: var(--sp-2);
+  padding-bottom: var(--sp-2);
+}
+.pricing-table td.is-num {
+  width: 168px;
+}
+.pricing-table__price {
+  text-align: right;
+}
+.pricing-table td .field__error {
+  margin-top: var(--sp-1);
+  text-align: left;
+  white-space: normal;
+}
+.pricing-table__actions {
+  padding-left: var(--sp-1);
+}
+.pricing-table__cell-label {
+  display: none;
+}
+.pricing-table__foot {
+  padding-top: var(--sp-3);
+}
+.pricing-table__error {
+  margin-top: var(--sp-2);
+}
+@media (max-width: 768px) {
+  .table.pricing-table th:first-child,
+  .table.pricing-table td:first-child {
+    position: static;
+  }
+}
+/* 窄屏：每行折成两排，模型占一整排，两个单价和删除按钮在第二排，格子上方显示小标签 */
+@media (max-width: 640px) {
+  .pricing-table,
+  .pricing-table tbody {
+    display: block;
+  }
+  .pricing-table thead {
+    display: none;
+  }
+  .pricing-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    gap: var(--sp-2);
+    padding: var(--sp-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .pricing-table td,
+  .pricing-table td.is-num {
+    display: block;
+    width: auto;
+    height: auto;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .pricing-table td.pricing-table__model {
+    grid-column: 1 / -1;
+  }
+  .pricing-table__actions {
+    align-self: end;
+  }
+  .pricing-table__cell-label {
+    display: block;
+    margin-bottom: var(--sp-1);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    line-height: var(--lh-sm);
+  }
+  .table.pricing-table tbody tr:hover > td,
+  .table.pricing-table tbody tr:focus-within > td {
+    background: none;
+  }
+}

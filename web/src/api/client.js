@@ -190,6 +190,10 @@ export const api = {
   getRedteamRun: (id, o) => get(`/api/redteam/runs/${enc(id)}`, o),
   cancelRedteamRun: (id, o) => post(`/api/redteam/runs/${enc(id)}/cancel`, {}, o),
 
+  // 看板（F12，admin）：range 取 today | 7d | 30d；accountId 空为全部号码；tz 是浏览器的 IANA 时区
+  /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach}，结构见 SPEC-phase2 F12 */
+  getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
+
   // WhatsApp 号码（F7）
   listAccounts: (o) => get('/api/accounts', o),
   createAccount: ({ name, channel }) => post('/api/accounts', { name, channel }),

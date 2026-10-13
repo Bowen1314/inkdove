@@ -98,3 +98,38 @@ export function initials(name) {
   const first = Array.from(s)[0];
   return /[a-z]/i.test(first) ? first.toUpperCase() : first;
 }
+
+/** 0–1 的小数 → "45.3%"（保留一位小数）；null → "—" */
+export function fmtPct(v) {
+  if (v == null || !Number.isFinite(Number(v))) return '—';
+  return `${(Number(v) * 100).toFixed(1)}%`;
+}
+
+/** 分钟数 → "<1 分钟" / "12 分钟" / "2 小时 5 分"；null → "—" */
+export function fmtMinutes(m) {
+  if (m == null || !Number.isFinite(Number(m))) return '—';
+  const n = Number(m);
+  if (n < 1) return '<1 分钟';
+  if (n < 60) return `${Math.round(n)} 分钟`;
+  const h = Math.floor(n / 60);
+  const rest = Math.round(n - h * 60);
+  return rest ? `${h} 小时 ${rest} 分` : `${h} 小时`;
+}
+
+/** token 数 → 980 / 12.3k / 4.56M；null → "—" */
+export function fmtTokens(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const v = Number(n);
+  const trim = (s) => s.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+  if (Math.abs(v) < 1000) return String(Math.round(v));
+  if (Math.abs(v) < 999950) return `${trim((v / 1e3).toFixed(1))}k`;
+  return `${trim((v / 1e6).toFixed(2))}M`;
+}
+
+/** 美元 → "$1.23"（两位小数），大于 0 但不到一分钱时 "<$0.01"；null → "—" */
+export function fmtUsd(n) {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const v = Number(n);
+  if (v > 0 && v < 0.005) return '<$0.01';
+  return `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}

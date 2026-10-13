@@ -140,7 +140,7 @@ export const LEAD_STAGES = [
 export const leadStageLabel = (s) => LEAD_STAGES.find((x) => x.value === s)?.label || s || '—';
 export const leadStageTone = (s) => LEAD_STAGES.find((x) => x.value === s)?.tone || 'neutral';
 
-// F5 红线体检：题目类别。前六个 key 是 SPEC 原文；多轮题、正常题的 key 规格没写死，这里约定为 multi_turn、legit
+// F5 红线体检：题目类别，key 和后端题库一致（catalog 是正常题，要回复并带文件才算通过）
 export const REDTEAM_CATEGORY = {
   price_discount: '要折扣砍价',
   price_quote: '按量报价',
@@ -148,6 +148,8 @@ export const REDTEAM_CATEGORY = {
   identity: '问身份',
   offtopic_task: '离题任务',
   injection: '注入攻击',
+  file_dump: '整库索取文件',
+  catalog: '要产品目录',
   multi_turn: '多轮题',
   legit: '正常题',
 };
@@ -189,3 +191,83 @@ export const SKIP_REASON = {
   notify_number: '是通知号码',
 };
 export const skipReasonLabel = (r) => SKIP_REASON[r] || r || '—';
+
+// F12 看板：处理结果（decisions.decision）和各结果下的 code。和 server/src/codes.js 一致，接口返回里一般自带 label，这里只做兜底。
+// 同一个 code 在不同结果下含义不同（handoff 和 offtopic 都有 other），所以按 decision 分开放
+export const DECISION_LABELS = {
+  replied: '已回复',
+  handoff: '转人工',
+  blocked: '已拦截',
+  offtopic: '离题',
+  declined: '客户拒绝',
+  skipped: '未处理',
+};
+
+export const DECISION_CODES = {
+  replied: {
+    business: '业务回复',
+    smalltalk: '寒暄',
+  },
+  handoff: {
+    insufficient_info: '资料里没有答案',
+    price: '议价或要报价',
+    purchase: '想下单或谈付款',
+    identity: '问是不是机器人',
+    human_request: '客户要求人工',
+    other: '其他原因',
+    no_citation: '回复没有引用依据',
+    review_ungrounded: '审核：内容找不到依据',
+    review_commitment: '审核：有议价、成交承诺或身份问题',
+    review_failed: '审核失败',
+    media_unsupported: '语音图片超出识别范围',
+    media_failed: '语音图片识别失败',
+    rate_limit: '回复次数超限',
+    file_limit: '发文件超过每日上限',
+  },
+  blocked: {
+    price_mismatch: '价格数字对不上资料',
+    discount_word: '有资料没写的优惠措辞',
+    commitment_phrase: '有成交或承诺措辞',
+    identity_leak: '暴露是机器人',
+    too_long: '回复过长',
+    code_block: '回复里有代码块',
+    canary: '疑似提示词泄露',
+    bad_file: '要发的文件不存在或超量',
+  },
+  offtopic: {
+    task: '让机器人干别的活',
+    chitchat: '闲聊',
+    injection: '提示词注入',
+    other: '其他离题',
+    review_offtopic: '审核判定离题',
+    muted: '反复离题，静默中',
+  },
+  declined: {
+    declined: '客户拒绝',
+  },
+};
+/** code 的中文标签；不认识的原样返回 */
+export const codeLabel = (decision, code) => DECISION_CODES[decision]?.[code] ?? code ?? '—';
+
+// F12 模型调用用途（llm_calls.purpose）
+export const LLM_PURPOSES = {
+  reply: '生成回复',
+  review: '审核回复',
+  draft: '起草人工回复',
+  kb_draft: '人工回复存进知识库',
+  distill: '整理知识库',
+  media: '语音图片识别',
+  file_describe: '产品资料描述',
+  leads: '客户线索',
+  redteam: '红线体检',
+  translate: '翻译',
+  test: '测试连接',
+};
+export const purposeLabel = (p) => LLM_PURPOSES[p] ?? p ?? '—';
+
+// F12 看板成员表：kind=user 是具体成员；phone、relay 两行不对应具体的人
+export const MEMBER_KIND = {
+  user: '成员',
+  phone: '手机回复',
+  relay: 'WhatsApp 转发',
+};
