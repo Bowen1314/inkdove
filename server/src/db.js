@@ -392,6 +392,9 @@ CREATE TABLE IF NOT EXISTS conversation_assignments (
 CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignments(conversation_id, at);
 `);
   migrateAssignments(db);
+
+  // ---- 推荐回复：业务员个人话术（每个成员自己改，起草推荐回复时拼进提示词） ----
+  ensureColumn(db, 'users', 'style_prompt', "TEXT NOT NULL DEFAULT ''");
 }
 
 /**

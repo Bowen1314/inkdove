@@ -1,4 +1,4 @@
-// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing、outreach。号级设置（自动回复开关、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing、outreach、suggest。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
 import { badRequest, isPlainObject } from './util.js';
 
@@ -38,8 +38,13 @@ function defaults(config) {
     pricing: [],
     // F11 主动外联：每个号每天最多发几条（所有外联任务合计）、两条之间随机等多少秒、收件人当地时间的发送时段
     outreach: { ...OUTREACH_DEFAULTS },
+    // 推荐回复：公司话术要求（所有业务员共用），拼进起草推荐回复的提示词
+    suggest: { companyPrompt: '' },
   };
 }
+
+/** 公司话术要求最长多少字符 */
+export const MAX_COMPANY_PROMPT = 4000;
 
 export const OUTREACH_DEFAULTS = Object.freeze({
   dailyCapPerAccount: 30,
@@ -176,6 +181,7 @@ export function loadSettings(db, config) {
   } catch {
     s.outreach = { ...OUTREACH_DEFAULTS };
   }
+  if (typeof s.suggest.companyPrompt !== 'string') s.suggest.companyPrompt = '';
   return s;
 }
 
@@ -249,6 +255,7 @@ export function publicSettings(s, config) {
     branding: { title: s.branding.title, logoSet: !!logoMeta(s), logoUrl: logoUrl(s) },
     pricing: s.pricing.map((p) => ({ ...p })),
     outreach: { ...s.outreach },
+    suggest: { companyPrompt: s.suggest.companyPrompt },
     webhookBase: config.publicBaseUrl,
   };
 }
@@ -383,6 +390,12 @@ export function applySettingsPatch(current, patch) {
   if (patch.pricing !== undefined) s.pricing = checkPricing(patch.pricing);
   // F11：外联设置（前端整块写；只给了部分字段时其余保持不变）
   if (patch.outreach !== undefined) s.outreach = checkOutreach(s.outreach, patch.outreach);
+  // 推荐回复：公司话术要求
+  if (patch.suggest !== undefined) {
+    const p = patch.suggest;
+    if (!isPlainObject(p)) throw badRequest('suggest 必须是对象');
+    if (p.companyPrompt !== undefined) s.suggest.companyPrompt = str(p.companyPrompt, 'suggest.companyPrompt', MAX_COMPANY_PROMPT);
+  }
   return s;
 }
 

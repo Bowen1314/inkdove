@@ -571,7 +571,7 @@ describe('F6 客户线索（mock）', () => {
         assert.equal(r.status, 200, JSON.stringify(r.body));
       });
 
-      it('列表和导出只含分给自己的会话的线索，自己号上没分给他的也没有；指定别人的号 403', async () => {
+      it('列表只含分给自己的会话的线索，自己号上没分给他的也没有；指定别人的号 403；导出 CSV 一律 403', async () => {
         const list = (await as('GET', '/api/leads')).body;
         assert.deepEqual(mine(list), [b]);
         assert.ok(list.every((l) => l.accountId === acc.id));
@@ -579,11 +579,11 @@ describe('F6 客户线索（mock）', () => {
         assert.deepEqual(mine((await as('GET', `/api/leads?accountId=${acc.id}`)).body), [b]);
         assert.deepEqual(mine((await as('GET', '/api/leads?q=maria')).body), []);
         assert.deepEqual(mine((await as('GET', '/api/leads?q=hans')).body), []);
-        const csv = (await as('GET', '/api/leads/export.csv')).body;
-        assert.ok(csv.includes('李四') && !csv.includes('Maria') && !csv.includes('Hans Müller'));
-        const forbidden = await as('GET', `/api/leads/export.csv?accountId=${acc2.id}`);
-        assert.equal(forbidden.status, 403);
-        assert.equal(forbidden.body.code, 'forbidden');
+        for (const q of ['', `?accountId=${acc.id}`, `?accountId=${acc2.id}`]) {
+          const r = await as('GET', `/api/leads/export.csv${q}`);
+          assert.equal(r.status, 403, q);
+          assert.equal(r.body.code, 'forbidden');
+        }
       });
 
       it('看、改、重新提取别人号的、自己号上没分给自己的线索 403；分给自己的可以', async () => {

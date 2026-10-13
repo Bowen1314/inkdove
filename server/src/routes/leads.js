@@ -1,5 +1,5 @@
-// F6 客户线索接口。admin 能看所有线索；agent 只能看、改、重新提取、导出自己负责的会话的线索（按客户分配，
-// 和会话用同一个判断 canAccessConversation），越权返回 403，列表和导出自动过滤。删除只有 admin。
+// F6 客户线索接口。admin 能看所有线索；agent 只能看、改、重新提取自己负责的会话的线索（按客户分配，
+// 和会话用同一个判断 canAccessConversation），越权返回 403，列表自动过滤。导出 CSV 和删除只有 admin。
 import express from 'express';
 import { canAccessAccount, canAccessConversation, conversationScope, forbidden } from '../auth.js';
 import { leadsToCsv } from '../leads/store.js';
@@ -31,8 +31,9 @@ export function leadsRouter(ctx) {
 
   router.get('/', (req, res) => res.json(leads.list(filtersOf(req))));
 
-  // 要注册在 /:id 前面，不然 export.csv 会被当成线索 id
+  // 要注册在 /:id 前面，不然 export.csv 会被当成线索 id。只有 admin
   router.get('/export.csv', (req, res) => {
+    if (req.user.role !== 'admin') throw forbidden();
     const list = leads.list(filtersOf(req));
     const d = new Date();
     const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;

@@ -10,6 +10,7 @@ import {
   buildReplyUserPrompt,
   buildReviewSystemPrompt,
   buildReviewUserPrompt,
+  buildSuggestUserPrompt,
   FILE_DESCRIBE_SYSTEM_PROMPT,
   IMAGE_DESCRIBE_PROMPT,
   KB_DRAFT_SYSTEM_PROMPT,
@@ -28,7 +29,7 @@ const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
 
 /**
  * 真实 LLM 实现。settings 每次调用时读取，保证设置页修改即时生效。
- * purpose：reply、review、draft、kb_draft、translate、leads、media、file_describe、distill、test。F12 的 llm_calls 由 records.js 的
+ * purpose：reply、review、draft、suggest、kb_draft、translate、leads、media、file_describe、distill、test。F12 的 llm_calls 由 records.js 的
  * withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
  * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number}} [opts]
@@ -41,6 +42,7 @@ export function createRealAi(getSettings, opts = {}) {
     reply: replyTimeout,
     review: opts.reviewTimeoutMs ?? REPLY_TIMEOUT,
     draft: replyTimeout,
+    suggest: replyTimeout,
     kb_draft: replyTimeout,
     translate: replyTimeout,
     leads: replyTimeout,
@@ -49,7 +51,7 @@ export function createRealAi(getSettings, opts = {}) {
     file_describe: distillTimeout,
     media: mediaTimeout,
   };
-  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, kb_draft: 2048, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
+  const MAX_TOKENS = { distill: 8192, reply: 2048, review: 512, draft: 2048, suggest: 2048, kb_draft: 2048, translate: 4096, leads: 1024, media: 1024, file_describe: 1024, test: 64 };
   /** 用哪个模型：识别图片、语音（含给图片文件写描述）用 media.mediaModel；蒸馏类用蒸馏模型；其余用回复模型。为空时都回退到回复模型 */
   const modelFor = (purpose, s, withAttachments) => {
     if (purpose === 'media' || (purpose === 'file_describe' && withAttachments)) return s.media.mediaModel || s.llm.model;
@@ -203,6 +205,21 @@ export function createRealAi(getSettings, opts = {}) {
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('草稿输出无法解析');
+      return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids) };
+    },
+
+    /**
+     * 推荐回复：草稿的提示词骨架，加公司话术、个人话术；previous 是「换一条」时的上一条推荐。
+     * 返回 {text, fileIds}；解析不了时抛错
+     */
+    async suggest({ message, history, entries, files = [], filesTruncated = false, profile, persona, companyPrompt = '', stylePrompt = '', previous = '' }) {
+      const { text } = await call(
+        'suggest',
+        buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, companyPrompt, stylePrompt }),
+        buildSuggestUserPrompt({ message, history, previous }),
+      );
+      const data = extractJson(text);
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('推荐回复输出无法解析');
       return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids) };
     },
 

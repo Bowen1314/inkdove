@@ -36,6 +36,8 @@ export const AI_METHOD_PURPOSE = {
   generate: 'reply',
   review: 'review',
   draft: 'draft',
+  // 推荐回复（号的回复方式为 suggest 时自动生成，以及会话页手动「换一条」），计入会话每日模型次数
+  suggest: 'suggest',
   kbDraft: 'kb_draft',
   extract: 'distill',
   consolidate: 'distill',

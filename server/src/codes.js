@@ -8,6 +8,8 @@ export const DECISION_LABELS = {
   blocked: '已拦截',
   offtopic: '离题',
   declined: '客户拒绝',
+  // 推荐回复模式：AI 起草了一条推荐回复，等业务员确认后发（不算自动回复，也不算转人工）
+  suggested: '已生成推荐回复',
   skipped: '未处理',
 };
 
@@ -86,6 +88,7 @@ export const LLM_PURPOSES = {
   media: '语音图片识别',
   file_describe: '产品资料描述',
   leads: '客户线索',
+  suggest: '推荐回复',
   redteam: '红线体检',
   translate: '翻译',
   test: '测试连接',

@@ -1,4 +1,4 @@
-// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式、自动回复开关、回复范围、通知和代理；
+// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式、回复方式（关闭 / 推荐回复 / 自动回复）、回复范围、通知和代理；
 // 会话 id 是 <accountId>:<chatId>。四层防滥用的第 4 层（会话级闸门）在这里，回复拟真（F1/F14）和
 // 在 WhatsApp 里处理转人工（F3）也在这里。
 import crypto from 'node:crypto';
@@ -36,6 +36,8 @@ export const WAHA_INLINE_MAX_BYTES = 15 * 1024 * 1024;
 const META_MEDIA_CACHE_MS = 25 * 24 * 3600 * 1000;
 const META_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_DRAFT_TEXT = 4000;
+/** 推荐回复：「客户这次的消息」最多合并最近几条 */
+const MAX_SUGGEST_MESSAGES = 20;
 const MAX_CAPTION = 1024;
 /** 手机号配对码：同一个号两次申请的最小间隔（连点会让 WhatsApp 风控这个号），等会话进入 SCAN_QR_CODE 的上限 */
 export const PAIR_CODE_INTERVAL_MS = 20_000;
@@ -244,14 +246,17 @@ export function parsePairingPhone(raw) {
 /** 日志里的手机号只留后 4 位 */
 export const maskPhone = (digits) => `***${String(digits).slice(-4)}`;
 
-/** 会话草稿 {text, fileIds, createdAt}（F2a / F15）。A 段存的 {text, createdAt} 也认，fileIds 记 []；文字和文件都没有时视为没有草稿 */
+/**
+ * 会话草稿 {kind, text, fileIds, createdAt}（F2a / F15 / 推荐回复）。kind：handoff 是转人工时起草的，suggest 是推荐回复；
+ * 老数据没有 kind，当 handoff。A 段存的 {text, createdAt} 也认，fileIds 记 []；文字和文件都没有时视为没有草稿
+ */
 export const parseDraft = (raw) => {
   const d = safeJsonParse(raw, null);
   if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
   const text = typeof d.text === 'string' ? d.text : '';
   const fileIds = normalizeFileIds(d.fileIds).slice(0, MAX_FILES_PER_REPLY);
   if (!text.trim() && !fileIds.length) return null;
-  return { text, fileIds, createdAt: typeof d.createdAt === 'string' ? d.createdAt : null };
+  return { kind: d.kind === 'suggest' ? 'suggest' : 'handoff', text, fileIds, createdAt: typeof d.createdAt === 'string' ? d.createdAt : null };
 };
 
 /**
@@ -577,6 +582,7 @@ export function createWaService(ctx, opts = {}) {
       partIndex,
     );
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(ts, conv.id);
+    if (status === 'sent') clearSuggestion(conv.id);
     return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id));
   }
 
@@ -622,6 +628,7 @@ export function createWaService(ctx, opts = {}) {
       JSON.stringify(attachment),
     );
     db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(ts, conv.id);
+    if (status === 'sent') clearSuggestion(conv.id);
     return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(id));
   }
 
@@ -652,6 +659,14 @@ export function createWaService(ctx, opts = {}) {
     if (fresh) ctx.records.handoffStart({ conversationId: convId, accountId: before.account_id, code });
     if (fresh && acc && notify) sendNotice(acc, convId, reason, detail);
     return fresh;
+  }
+
+  /**
+   * 我方发出了消息（机器人、手机上回、外联）：清掉推荐回复（kind=suggest 的草稿）。
+   * 转人工草稿照旧只在人工接管（operatorTakeover，同时也清推荐）和恢复机器人时清
+   */
+  function clearSuggestion(convId) {
+    db.prepare("UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest'").run(convId);
   }
 
   /** 人工接管：会话进入 botPaused，草稿清空，取消防抖和拟真发送 */
@@ -814,7 +829,8 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * F12：机主在手机上直接发的消息（fromMe、不是回声），存成 author=owner、via=phone 的消息，只用于统计和展示：
-   * 不暂停机器人、不取消防抖和拟真发送、不标待处理、不通知，只拿来填转人工记录的 phone 首次回复（时间按收到的时间）。
+   * 不暂停机器人、不取消防抖和拟真发送、不标待处理、不通知，只拿来填转人工记录的 phone 首次回复（时间按收到的时间），
+   * 以及清掉推荐回复。
    * 会话不存在就新建；联系人名字不从这条消息取（fromMe 消息里的 pushName 是机主自己），号码只补空的。
    */
   function archiveOwner(acc, m, number) {
@@ -848,6 +864,8 @@ export function createWaService(ctx, opts = {}) {
     })();
     if (!inserted) return 'ignored_duplicate';
     ctx.records.handoffResponse({ conversationId: convId, kind: 'phone', at: now });
+    // 手机上回了：推荐回复作废
+    clearSuggestion(convId);
     return 'archived_owner';
   }
 
@@ -864,15 +882,12 @@ export function createWaService(ctx, opts = {}) {
          contact_number = CASE WHEN excluded.contact_number <> '' THEN excluded.contact_number ELSE conversations.contact_number END`,
     ).run(convId, acc.id, m.chatId, acc.channel, clip(m.contactName || '', 100), number || '', now, now);
     const conv = getConvRow(convId);
-    // F4：开了对应的识别、这个号在自动回复、会话没暂停、模型已配置时，先存一条占位消息，识别成文字后再进回复流程
+    // 机器人要不要处理这条：自动回复看会话有没有暂停；推荐回复不看（人工发过消息会话就会暂停，推荐照样给下一条客户消息起草）
+    const suggest = acc.replyMode === 'suggest';
+    const botOn = suggest || (acc.replyMode === 'auto' && !conv.bot_paused);
+    // F4：开了对应的识别、机器人要处理（自动回复且会话没暂停，或推荐回复）、模型已配置时，先存一条占位消息，识别成文字后再进回复流程
     const s = settings();
-    if (
-      m.media &&
-      (m.media.type === 'voice' ? s.media.voice : s.media.image) &&
-      acc.autoReply &&
-      !conv.bot_paused &&
-      llmConfigured(s, config)
-    ) {
+    if (m.media && (m.media.type === 'voice' ? s.media.voice : s.media.image) && botOn && llmConfigured(s, config)) {
       const label = m.media.type === 'voice' ? '[语音]' : '[图片]';
       const msgId = newId();
       const res = db
@@ -893,10 +908,10 @@ export function createWaService(ctx, opts = {}) {
       startConversion(acc, convId, msgId, m);
       return 'converting';
     }
-    const willProcess = isText && acc.autoReply && !conv.bot_paused;
+    const willProcess = isText && botOn;
     let skipReason = null;
-    if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，已通知人工`;
-    else if (!acc.autoReply) skipReason = '这个号没开自动回复';
+    if (!isText) skipReason = `非文字消息${m.mediaLabel ? `${m.mediaLabel}` : ''}，${suggest ? '不生成推荐回复' : '已通知人工'}`;
+    else if (acc.replyMode === 'off') skipReason = '这个号没开自动回复';
     else if (conv.bot_paused) skipReason = '会话已暂停（人工接管中）';
     const res = db
       .prepare(
@@ -919,8 +934,9 @@ export function createWaService(ctx, opts = {}) {
     // F1 / F14：正在拟真发送时客户又来了消息，没发出去的取消，新消息合进去重新走
     abortSending(convId, 'new_message');
     if (!isText) {
-      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）
-      flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
+      // 没开识别时机器人处理不了这条：转人工记录的 code 记 media_unsupported（F12 的表里没有非文字消息这一项）。
+      // 推荐回复模式本来就是人来回，不标待处理、不通知
+      if (!suggest) flagNeedsHuman(acc, convId, 'non_text', m.mediaLabel || '', { pause: false, code: 'media_unsupported', pendingReason: skipReason });
       return 'archived_media';
     }
     if (willProcess) {
@@ -956,7 +972,8 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 下载 → 检查大小、格式、时长 → 转写或描述 → 把占位消息改成文字（kind=text，等下一轮处理）。
-   * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）。
+   * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）；
+   * 号在推荐回复模式时只记 skipped 和原因，不标待处理、不通知、不写处理记录。
    */
   async function convertMedia(acc, convId, msgId, m) {
     const started = Date.now();
@@ -966,7 +983,12 @@ export function createWaService(ctx, opts = {}) {
     const fail = (code, why) => {
       const row = db.prepare('SELECT handled FROM messages WHERE id = ?').get(msgId);
       if (!row || row.handled || closed) return;
-      const reason = code === 'media_unsupported' ? `${what}超出识别范围：${why}，已通知人工` : `${what}识别失败：${why}，已通知人工`;
+      const desc = code === 'media_unsupported' ? `${what}超出识别范围：${why}` : `${what}识别失败：${why}`;
+      if (accounts.get(acc.id)?.replyMode === 'suggest') {
+        db.prepare("UPDATE messages SET handled = 1, bot_decision = 'skipped', decision_reason = ? WHERE id = ?").run(desc, msgId);
+        return;
+      }
+      const reason = `${desc}，已通知人工`;
       db.prepare("UPDATE messages SET handled = 1, bot_decision = 'handoff', decision_reason = ?, decision_code = ? WHERE id = ?").run(
         reason,
         code,
@@ -1075,7 +1097,8 @@ export function createWaService(ctx, opts = {}) {
     const acc = conv.account_id ? accounts.get(conv.account_id) : null;
 
     if (!acc) return void settle('skipped', '这个号已删除');
-    if (!acc.autoReply) return void settle('skipped', '这个号没开自动回复');
+    if (acc.replyMode === 'suggest') return suggestPending(acc, conv, settle);
+    if (acc.replyMode !== 'auto') return void settle('skipped', '这个号没开自动回复');
     if (conv.bot_paused) return void settle('skipped', '会话已暂停（人工接管中）');
     if (!llmConfigured(s, config)) {
       log.warn('[wa] 模型未配置，跳过自动回复');
@@ -1123,14 +1146,7 @@ export function createWaService(ctx, opts = {}) {
       return;
     }
 
-    const history = db
-      .prepare('SELECT direction, text, attachment FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT 12')
-      .all(convId, pending[0].seq)
-      .reverse()
-      .map((r) => {
-        const label = attachmentLabel(r.attachment);
-        return { role: r.direction === 'in' ? 'customer' : 'bot', text: label ? `${label}${r.text ? ` ${r.text}` : ''}` : r.text };
-      });
+    const history = historyBefore(convId, pending[0].seq);
     const message = pending.map((p) => p.text).join('\n');
     // F15：这个会话今天还能自动发几个文件
     const d0 = new Date();
@@ -1223,6 +1239,122 @@ export function createWaService(ctx, opts = {}) {
     }
   }
 
+  /** seq 之前的最近 12 条消息（自动回复、草稿、推荐回复共用的上下文） */
+  function historyBefore(convId, seq) {
+    return db
+      .prepare('SELECT direction, text, attachment FROM messages WHERE conversation_id = ? AND seq < ? ORDER BY seq DESC LIMIT 12')
+      .all(convId, seq)
+      .reverse()
+      .map((r) => {
+        const label = attachmentLabel(r.attachment);
+        return { role: r.direction === 'in' ? 'customer' : 'bot', text: label ? `${label}${r.text ? ` ${r.text}` : ''}` : r.text };
+      });
+  }
+
+  // ---------------- 推荐回复（号的回复方式为 suggest，以及会话页手动「换一条」） ----------------
+  /**
+   * 推荐回复的输入：「客户这次的消息」= 我方最后一条消息之后客户发的所有消息（合并，最多最近 20 条），加上它们之前的最近对话。
+   * 我方最后一条之后客户没再发（我方已经回了）时：latest=true 取最近一段连续的客户消息（手动「换一条」用），否则 null。
+   * 会话里一条客户消息都没有也是 null。
+   */
+  function suggestInput(convId, { latest = false } = {}) {
+    const lastOut = db.prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out'").get(convId).n;
+    const inSince = (after, upTo) =>
+      db
+        .prepare("SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND seq > ? AND seq <= ? ORDER BY seq")
+        .all(convId, after, upTo);
+    let rows = inSince(lastOut, Number.MAX_SAFE_INTEGER);
+    if (!rows.length && latest) {
+      const lastIn = db.prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in'").get(convId).n;
+      if (lastIn == null) return null;
+      const outBefore = db
+        .prepare("SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq < ?")
+        .get(convId, lastIn).n;
+      rows = inSince(outBefore, lastIn);
+    }
+    rows = rows.slice(-MAX_SUGGEST_MESSAGES);
+    if (!rows.length) return null;
+    return { message: rows.map((r) => r.text).join('\n'), history: historyBefore(convId, rows[0].seq) };
+  }
+
+  /** 成员的个人话术（推荐回复用）；没有这个人或没填时为空 */
+  const stylePromptOf = (userId) => (userId ? db.prepare('SELECT style_prompt FROM users WHERE id = ?').get(userId)?.style_prompt ?? '' : '');
+
+  /**
+   * 调一次模型起草推荐回复（计入会话每日模型次数），返回 {draft, startSeq}，不存。生成失败、结果为空时抛错。
+   * startSeq 是开始生成时会话里最大的消息序号，调用方用它判断生成期间我方是不是已经回了。
+   * @param {{message:string, history:any[]}} input suggestInput 的结果
+   * @param {{stylePrompt?:string, previous?:string}} o
+   */
+  async function generateSuggestion(acc, convId, input, { stylePrompt = '', previous = '' }) {
+    const today = localDay();
+    const before = getConvRow(convId);
+    const startSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ?').get(convId).n;
+    db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(
+      today,
+      (before.llm_day === today ? before.llm_calls : 0) + 1,
+      convId,
+    );
+    const s = settings();
+    const c = buildReplyContext(ctx, input);
+    const out = await ctx.ai.suggest({
+      message: c.msg,
+      history: c.hist,
+      entries: c.entries,
+      files: c.files,
+      filesTruncated: c.filesTruncated,
+      profile: c.profile,
+      persona: acc.persona && acc.persona.trim() ? acc.persona : s.reply.persona,
+      companyPrompt: s.suggest.companyPrompt,
+      stylePrompt,
+      previous,
+    });
+    const active = new Set(c.activeFiles.map((f) => f.id));
+    const fileIds = normalizeFileIds(out?.fileIds)
+      .filter((id) => active.has(id))
+      .slice(0, MAX_FILES_PER_REPLY);
+    const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
+    if (!text && !fileIds.length) throw new Error('推荐回复是空的');
+    return { draft: { kind: 'suggest', text, fileIds, createdAt: nowIso() }, startSeq };
+  }
+
+  /** 从 startSeq 之后我方有没有发过消息（后台、手机、机器人、外联都算） */
+  const repliedSince = (convId, startSeq) =>
+    !!db.prepare("SELECT 1 FROM messages WHERE conversation_id = ? AND direction = 'out' AND seq > ? LIMIT 1").get(convId, startSeq);
+
+  /**
+   * 推荐回复模式下防抖后的一轮：起草一条推荐回复存进 draft（kind=suggest），不发送；
+   * 不暂停会话、不标待处理、不通知、不写处理记录（decisions）。消息记 suggested；模型没配置、到了当天上限、生成失败记 skipped。
+   * 生成期间我方已经回了的，丢掉结果（这时这几条消息一般已被人工接管记成 skipped）。
+   */
+  async function suggestPending(acc, conv, settle) {
+    if (!llmConfigured(settings(), config)) {
+      log.warn('[wa] 模型未配置，跳过推荐回复');
+      return void settle('skipped', '还没有配置模型');
+    }
+    const today = localDay();
+    const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
+    if (usedToday + 1 > DAILY_LLM_LIMIT) {
+      log.warn(`[wa] 会话 ${conv.id} 今天的模型调用已达上限（${usedToday}/${DAILY_LLM_LIMIT}）`);
+      return void settle('skipped', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`);
+    }
+    const input = suggestInput(conv.id);
+    if (!input) return void settle('skipped', '我方已经回复');
+    let r;
+    try {
+      // 自动生成用会话负责人的个人话术
+      r = await generateSuggestion(acc, conv.id, input, { stylePrompt: stylePromptOf(conv.assignee_id) });
+    } catch (err) {
+      log.warn(`[wa] 会话 ${conv.id} 生成推荐回复失败：${err?.message || err}`);
+      return void settle('skipped', clip(`生成推荐回复失败：${err?.message || err}`, 500));
+    }
+    if (closed) return;
+    if (!getConvRow(conv.id)) return;
+    if (repliedSince(conv.id, r.startSeq)) return void settle('skipped', '生成推荐回复期间我方已经回复，推荐作废');
+    db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(r.draft), conv.id);
+    settle('suggested', '已生成推荐回复');
+  }
+
   /**
    * F2a：转人工时给人工起草一条回复（不自动发送）。当天 LLM 次数不够、生成失败时不带草稿；
    * 生成期间人工已经回了或机器人已恢复的，丢掉这份草稿。
@@ -1257,7 +1389,7 @@ export function createWaService(ctx, opts = {}) {
         .slice(0, MAX_FILES_PER_REPLY);
       const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
       if (!text && !fileIds.length) throw new Error('草稿是空的');
-      draft = { text, fileIds, createdAt: nowIso() };
+      draft = { kind: 'handoff', text, fileIds, createdAt: nowIso() };
     } catch (err) {
       log.warn(`[wa] 会话 ${convId} 生成草稿失败，不带草稿通知：${err?.message || err}`);
       return;
@@ -2104,6 +2236,40 @@ export function createWaService(ctx, opts = {}) {
       };
     },
 
+    /**
+     * 手动要一条推荐回复（会话页「推荐回复」「换一条」）：号是什么回复方式都可以。用点按钮的人（user）的个人话术，
+     * 当前草稿的文字作为【上一条推荐】要求换个写法。成功后存进 draft 并返回；生成期间我方已经回了的照样返回、但不存。
+     * 不改消息的处理结果，不动防抖。
+     * @returns {Promise<{draft:any}>}
+     */
+    async suggestReply(convId, user) {
+      const conv = getConvRow(convId);
+      if (!conv) throw notFound('会话不存在');
+      const acc = conv.account_id ? accounts.get(conv.account_id) : null;
+      if (!acc) throw badRequest('这个会话所属的号已删除', 'account_deleted');
+      if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      const input = suggestInput(convId, { latest: true });
+      if (!input) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
+      const today = localDay();
+      const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
+      if (usedToday + 1 > DAILY_LLM_LIMIT) {
+        throw new HttpError(429, 'llm_daily_limit', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次），明天再试`);
+      }
+      const previous = parseDraft(conv.draft)?.text ?? '';
+      let r;
+      try {
+        r = await llmScope({ accountId: acc.id, conversationId: convId }, () =>
+          generateSuggestion(acc, convId, input, { stylePrompt: stylePromptOf(user?.id), previous }),
+        );
+      } catch (err) {
+        throw new HttpError(502, 'llm_error', `生成推荐回复失败：${err?.message || err}`);
+      }
+      if (getConvRow(convId) && !repliedSince(convId, r.startSeq)) {
+        db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(r.draft), convId);
+      }
+      return { draft: parseDraft(JSON.stringify(r.draft)) };
+    },
+
     setBotPaused(id, paused) {
       if (!getConvRow(id)) throw notFound('会话不存在');
       if (typeof paused !== 'boolean') throw badRequest('paused 必须是布尔值');
@@ -2120,7 +2286,7 @@ export function createWaService(ctx, opts = {}) {
     /**
      * F11：发一条外联开场消息并落库（outreach/store.js 的发送循环调）。WAHA 用 sendText 发 text；Meta 发审核过的模板
      * （type:"template"），text 只存档。和其他经 API 发出的消息一样先登记回声，手机那边推回来的 fromMe 消息会被剔除。
-     * 会话不存在就新建、已有就复用；消息记 author=bot、via=campaign。发送失败直接抛错，不落库。
+     * 会话不存在就新建、已有就复用；消息记 author=bot、via=campaign，推荐回复作废。发送失败直接抛错，不落库。
      * 会话还没有负责人、发起人（createdById）是有这个号权限的启用中 agent 时，分给发起人（见 assign.js 的 assignCampaignConversation）。
      * @param {any} acc
      * @param {{chatId:string, number:string, text:string, template?:{name:string, languageCode:string}|null, createdById?:string|null}} p
@@ -2153,6 +2319,7 @@ export function createWaService(ctx, opts = {}) {
         ).run(messageId, convId, dup ? null : externalId || null, text, ts);
         assignCampaignConversation(db, convId, createdById);
       })();
+      clearSuggestion(convId);
       return { conversationId: convId, messageId, externalId: externalId || null };
     },
     /** 测试用：防抖和处理都结束了 */

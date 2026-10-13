@@ -244,19 +244,20 @@ describe('F8 agent 只能看分给自己的号，和号上分给自己的会话'
     assert.equal(fake.sentTo(CUSTOMER).filter((x) => x.session === other.waha.sessionName).length, 0);
   });
 
-  it('自己的号：能改自动回复、范围、名单、通知，能扫码；改名、代理、删除 403', async () => {
-    const ok = await as('PUT', `/api/accounts/${mine.id}`, { autoReply: false, scope: 'allowlist', allowlist: ['8613700000001'], persona: 'p' });
-    assert.equal(ok.status, 200, JSON.stringify(ok.body));
-    assert.equal(ok.body.scope, 'allowlist');
-    assert.equal((await as('POST', `/api/accounts/${mine.id}/waha/start`)).status, 200);
-    for (const body of [{ name: '改名' }, { waha: { proxy: { enabled: true } } }]) {
+  it('自己的号：只能看；改设置、扫码、改名、代理、删除一律 403', async () => {
+    assert.equal((await as('GET', `/api/accounts/${mine.id}`)).status, 200);
+    for (const body of [{ autoReply: false }, { scope: 'allowlist', allowlist: ['8613700000001'] }, { persona: 'p' }, { name: '改名' }, { waha: { proxy: { enabled: true } } }]) {
       const r = await as('PUT', `/api/accounts/${mine.id}`, body);
       assert.equal(r.status, 403, JSON.stringify(body));
     }
+    assert.equal((await as('POST', `/api/accounts/${mine.id}/waha/start`)).status, 403);
     assert.equal((await as('DELETE', `/api/accounts/${mine.id}`)).status, 403);
     assert.equal((await as('POST', `/api/accounts/${mine.id}/proxy/test`)).status, 403);
     assert.equal((await as('POST', '/api/accounts', { name: 'x', channel: 'waha' })).status, 403);
-    await t.req('PUT', `/api/accounts/${mine.id}`, { body: { autoReply: true, scope: 'all', allowlist: [] } });
+    const acc = t.ctx.accounts.get(mine.id);
+    assert.equal(acc.replyMode, 'auto');
+    assert.equal(acc.scope, 'all');
+    assert.equal(acc.persona, '');
   });
 
   it('agent 从后台发的消息记下 sentBy，via=admin', async () => {
@@ -330,7 +331,7 @@ describe('第一期数据迁移', () => {
       const acc = accs[0];
       assert.equal(acc.name, '默认号');
       assert.equal(acc.sessionName, 'shop');
-      assert.equal(acc.autoReply, true);
+      assert.equal(acc.replyMode, 'auto', '第一期开着自动回复 → auto');
       assert.deepEqual(acc.blocklist, ['8613700000009']);
       assert.equal(acc.waha.proxy.host, '10.0.0.8');
       assert.deepEqual(acc.notify, { email: { enabled: true, to: ['boss@example.com'] }, whatsapp: { enabled: true, number: '8613900000000' } });
@@ -365,7 +366,7 @@ describe('号码配置导出 / 导入（admin）', () => {
   let wahaAcc;
   let metaAcc;
   const EMAIL = { provider: 'smtp', from: 'bot@example.com', smtp: { host: 'smtp.example.com' } };
-  const EXPORT_KEYS = ['allowlist', 'autoReply', 'blocklist', 'channel', 'meta', 'name', 'notify', 'persona', 'scope', 'waha'];
+  const EXPORT_KEYS = ['allowlist', 'blocklist', 'channel', 'meta', 'name', 'notify', 'persona', 'replyMode', 'scope', 'waha'];
   const fileOf = (doc, raw) => {
     const fd = new FormData();
     fd.append('file', new Blob([raw ?? JSON.stringify(doc)], { type: 'application/json' }), 'inkdove-accounts.json');
@@ -528,7 +529,7 @@ describe('号码配置导出 / 导入（admin）', () => {
       assert.deepEqual(w.notify.email, { enabled: false, to: ['boss@example.com'] });
       assert.deepEqual(w.notify.whatsapp, { enabled: true, number: '8613800000003' });
       assert.equal(w.waha.proxy.password, 'px-secret-1');
-      assert.equal(w.autoReply, true);
+      assert.equal(w.replyMode, 'auto');
       assert.equal(t3.ctx.accounts.get(m3.id).notify.email.enabled, false);
 
       // 其他校验错误仍然整体 400（即使同一批里有号开了邮件通知），一个都不建
@@ -573,7 +574,7 @@ describe('号码配置导出 / 导入（admin）', () => {
     assert.match(r.body.skipped[0].reason, /文件里前面的号「甲」/);
     // 缺的字段按新建号的默认值
     const yi = t.ctx.accounts.get(r.body.created[0].id);
-    assert.equal(yi.autoReply, false);
+    assert.equal(yi.replyMode, 'suggest');
     assert.equal(yi.meta.apiVersion, t.ctx.accounts.get(r.body.created[1].id).meta.apiVersion);
   });
 

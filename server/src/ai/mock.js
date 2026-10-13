@@ -51,7 +51,7 @@ export function createMockAi(opts = {}) {
   const delayMs = opts.delayMs ?? 150;
   const wait = (signal) => (delayMs > 0 ? sleep(delayMs, signal) : Promise.resolve());
 
-  return {
+  const ai = {
     async test() {
       return { model: 'mock', latencyMs: 0 };
     },
@@ -184,6 +184,14 @@ export function createMockAi(opts = {}) {
       return { text: parts.join('\n'), fileIds: matchFiles(message, files) };
     },
 
+    /** 推荐回复 mock：和草稿一样起草；「换一条」（带 previous）时换个开头，保证和上一条不同 */
+    async suggest({ message, entries, files = [], previous = '', signal }) {
+      const d = await ai.draft({ message, entries, files, signal });
+      if (!previous) return d;
+      const text = `换个说法：${d.text}`;
+      return { ...d, text: text === previous ? `再换个说法：${d.text}` : text };
+    },
+
     /** F2b mock：问题做标题，答案去掉电话号码和邮箱后做内容 */
     async kbDraft({ question, answer }) {
       const content = String(answer)
@@ -228,6 +236,7 @@ export function createMockAi(opts = {}) {
       return `${name}（${filename}）${head ? `：${head}` : image ? '：产品图片' : ''}`;
     },
   };
+  return ai;
 }
 
 /** 翻译 mock 的语言判断：按特有字符或常见词，依次看日文假名、韩文、汉字、阿拉伯字母、西里尔字母、西班牙语、葡萄牙语，其余算英语 */

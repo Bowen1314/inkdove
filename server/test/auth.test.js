@@ -114,6 +114,7 @@ describe('登录和会话', () => {
       'name',
       'pending',
       'role',
+      'stylePrompt',
     ]);
     assert.equal(me.body.user.role, 'admin');
     assert.equal(me.body.user.pending, false);
@@ -375,6 +376,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
       branding: { title: '', logoSet: false, logoUrl: null },
       pricing: [],
       outreach: { dailyCapPerAccount: 30, minIntervalSeconds: 90, maxIntervalSeconds: 240, windowStart: '09:00', windowEnd: '20:00' },
+      suggest: { companyPrompt: '' },
       webhookBase: 'https://kb.example.com',
     });
   });

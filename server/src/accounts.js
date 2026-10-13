@@ -7,6 +7,8 @@ import { badRequest, HttpError, isPlainObject, nowIso, safeJsonParse } from './u
 import { releaseLostAccess } from './wa/assign.js';
 
 export const CHANNELS = ['waha', 'meta'];
+/** 回复方式：off 不回复（只存消息）、suggest 推荐回复（AI 起草，业务员确认后发）、auto 自动回复 */
+export const REPLY_MODES = ['off', 'suggest', 'auto'];
 export const PROXY_PROTOCOLS = ['http', 'https', 'socks4', 'socks5'];
 export const DELETED_ACCOUNT_NAME = '（已删除）';
 
@@ -16,7 +18,7 @@ export const conversationIdOf = (accountId, chatId) => `${accountId}:${chatId}`;
 
 function defaultConfig(channel) {
   return {
-    autoReply: false,
+    replyMode: 'suggest',
     persona: '',
     scope: 'all',
     allowlist: [],
@@ -30,14 +32,19 @@ function defaultConfig(channel) {
   };
 }
 
+/** 旧的 autoReply 开关 → 回复方式：开 → auto，关（或没有）→ off */
+const replyModeOfLegacy = (autoReply) => (autoReply === true ? 'auto' : 'off');
+
 /** DB 行 → 内部对象（含密钥，只在服务端用） */
 export function rowToAccount(r) {
   if (!r) return null;
   const base = defaultConfig(r.channel);
-  const c = safeJsonParse(r.config, {});
+  const { autoReply, replyMode, ...c } = safeJsonParse(r.config, {}) || {};
   const cfg = {
     ...base,
     ...c,
+    // 升级前存的是 autoReply，没有 replyMode：开着的算 auto，关着的算 off（不会变成默认的 suggest）
+    replyMode: REPLY_MODES.includes(replyMode) ? replyMode : replyModeOfLegacy(autoReply),
     waha: base.waha ? { proxy: { ...base.waha.proxy, ...(c.waha?.proxy || {}) } } : null,
     meta: base.meta ? { ...base.meta, ...(c.meta || {}) } : null,
     notify: {
@@ -63,15 +70,25 @@ export function metaConfigured(acc) {
   return !!(m && m.phoneNumberId && m.accessToken && m.appSecret && m.verifyToken);
 }
 
-/** 对外视图：密钥不回传 */
-export function publicAccount(acc, config, status) {
+/**
+ * 对外视图：密钥不回传。viewer 是 agent 时再去掉 Meta 的 verifyToken 和通知的收件人（邮箱、号码），
+ * 这些只有 admin 能看能改
+ * @param {any} acc
+ * @param {any} config
+ * @param {any} status
+ * @param {{role:string}|null} [viewer]
+ */
+export function publicAccount(acc, config, status, viewer = null) {
   const px = acc.waha?.proxy;
+  const hide = viewer?.role === 'agent';
   return {
     id: acc.id,
     name: acc.name,
     channel: acc.channel,
     createdAt: acc.createdAt,
-    autoReply: acc.autoReply,
+    replyMode: acc.replyMode,
+    // 兼容旧前端：只有 auto 算开着自动回复
+    autoReply: acc.replyMode === 'auto',
     persona: acc.persona,
     scope: acc.scope,
     allowlist: [...acc.allowlist],
@@ -93,15 +110,15 @@ export function publicAccount(acc, config, status) {
       ? {
           phoneNumberId: acc.meta.phoneNumberId,
           apiVersion: acc.meta.apiVersion,
-          verifyToken: acc.meta.verifyToken,
+          verifyToken: hide ? null : acc.meta.verifyToken,
           accessTokenSet: !!acc.meta.accessToken,
           appSecretSet: !!acc.meta.appSecret,
           webhookUrl: `${config.publicBaseUrl}/webhooks/meta/${acc.id}`,
         }
       : null,
     notify: {
-      email: { enabled: acc.notify.email.enabled, to: [...acc.notify.email.to] },
-      whatsapp: { enabled: acc.notify.whatsapp.enabled, number: acc.notify.whatsapp.number },
+      email: { enabled: acc.notify.email.enabled, to: hide ? [] : [...acc.notify.email.to] },
+      whatsapp: { enabled: acc.notify.whatsapp.enabled, number: hide ? '' : acc.notify.whatsapp.number },
     },
     status: status || { state: 'not_configured', me: null, error: null, lastWebhookAt: null },
   };
@@ -109,7 +126,7 @@ export function publicAccount(acc, config, status) {
 
 function storedConfig(acc) {
   return JSON.stringify({
-    autoReply: acc.autoReply,
+    replyMode: acc.replyMode,
     persona: acc.persona,
     scope: acc.scope,
     allowlist: acc.allowlist,
@@ -151,7 +168,9 @@ function applyProxyPatch(px, q) {
 const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
 
 /**
- * 号的部分更新。admin 专属字段：name、waha.proxy、meta.*；其余（自动回复、persona、范围、名单、通知）分到这个号的 agent 也能改。
+ * 号的部分更新。接口层面整个 PUT 只有 admin 能调（agent 一律 403，见 routes/accounts.js）；
+ * isAdmin=false 时 name、waha.proxy、meta.* 仍然拒绝，留作第二道防线。
+ * 回复方式：replyMode（off / suggest / auto）；也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
  * @param {any} current 内部对象
  * @param {any} patch
  * @param {{isAdmin:boolean, emailReady:boolean}} o
@@ -171,7 +190,12 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady }) {
     if (!v) throw badRequest('name 不能为空');
     a.name = v;
   }
-  if (patch.autoReply !== undefined) a.autoReply = boolField(patch.autoReply, 'autoReply');
+  if (patch.replyMode !== undefined) {
+    if (!REPLY_MODES.includes(patch.replyMode)) throw badRequest('replyMode 只能是 off、suggest 或 auto');
+    a.replyMode = patch.replyMode;
+  } else if (patch.autoReply !== undefined) {
+    a.replyMode = replyModeOfLegacy(boolField(patch.autoReply, 'autoReply'));
+  }
   if (patch.persona !== undefined) a.persona = str(patch.persona, 'persona', 4000);
   if (patch.scope !== undefined) {
     if (!['all', 'allowlist'].includes(patch.scope)) throw badRequest('scope 只能是 all 或 allowlist');
@@ -246,7 +270,7 @@ export function exportAccount(acc) {
   return {
     name: acc.name,
     channel: acc.channel,
-    autoReply: acc.autoReply,
+    replyMode: acc.replyMode,
     persona: acc.persona,
     scope: acc.scope,
     allowlist: [...acc.allowlist],
@@ -282,6 +306,7 @@ export function exportAccount(acc) {
 /**
  * 校验导入文件。全部合法才返回要新建的号；有一个不合法就抛 400（说明第几个号、哪个字段），一个都不建。
  * 每个号的校验和新建、更新共用（applyAccountPatch），缺的字段按新建号的默认值。
+ * 回复方式：有 replyMode 用 replyMode；升级前导出的文件只有 autoReply，按 true → auto、false → off 换算；两个都没有按默认（suggest）。
  * 唯一的例外是邮件通知：号里开了邮件通知、但这里还没配发信方式时不报错，
  * 而是把它关掉（收件人 to 保留），并在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON
@@ -463,7 +488,7 @@ export function migrateLegacy(db, accounts, log, config) {
       // 沿用第一期的 session 名，已扫码的登录态不用重扫
       sessionName: ch.type === 'waha' ? ch.waha?.sessionName || config?.legacyWahaSession || 'default' : undefined,
       config: {
-        autoReply: !!r.autoReply,
+        replyMode: replyModeOfLegacy(!!r.autoReply),
         scope: r.scope === 'allowlist' ? 'allowlist' : 'all',
         allowlist: Array.isArray(r.allowlist) ? r.allowlist : [],
         blocklist: Array.isArray(r.blocklist) ? r.blocklist : [],

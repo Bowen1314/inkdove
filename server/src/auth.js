@@ -82,6 +82,14 @@ export function rowToUser(r) {
   };
 }
 
+/** 个人话术最长多少字符 */
+export const MAX_STYLE_PROMPT = 2000;
+
+/** 自己看自己（GET /api/auth/me 等）：比 rowToUser 多个人话术 stylePrompt，成员列表里不带 */
+export function selfUser(r) {
+  return { ...rowToUser(r), stylePrompt: r.style_prompt ?? '' };
+}
+
 export const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
 
 /** 这个用户能不能操作这个号：admin 能看所有号，agent 只能看分配给自己的 */
@@ -284,6 +292,20 @@ export function createAuth(ctx) {
       req.user = s.user;
       req.sessionToken = s.token;
       next();
+    },
+
+    /** GET /api/auth/me：当前用户，带个人话术 */
+    me(req, res) {
+      res.json({ user: selfUser(getUserRow(req.user.id)) });
+    },
+
+    /** PUT /api/auth/me/style-prompt {stylePrompt}：改自己的个人话术（推荐回复用），返回更新后的 user */
+    setStylePrompt(req, res) {
+      const v = req.body?.stylePrompt;
+      if (typeof v !== 'string') throw badRequest('stylePrompt 必须是字符串');
+      if (v.length > MAX_STYLE_PROMPT) throw badRequest(`stylePrompt 太长，最多 ${MAX_STYLE_PROMPT} 个字符`);
+      db.prepare('UPDATE users SET style_prompt = ? WHERE id = ?').run(v, req.user.id);
+      res.json({ user: selfUser(getUserRow(req.user.id)) });
     },
 
     /** 中间件：仅 admin */

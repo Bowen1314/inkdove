@@ -59,12 +59,13 @@ describe('F2 知识库闭环 + F14 草稿', () => {
   });
 
   describe('F2a 转人工时备好草稿', () => {
-    it('handoff 时起草（不发给客户），存成 {text, fileIds, createdAt}；先起草再通知，通知里带草稿；草稿调用计入 LLM 次数', async () => {
+    it('handoff 时起草（不发给客户），存成 {kind: handoff, text, fileIds, createdAt}；先起草再通知，通知里带草稿；草稿调用计入 LLM 次数', async () => {
       const before = notices().length;
       const { chat, conv } = await customer('保温杯 A100 能便宜点吗，给个折扣', '周先生');
       assert.equal(conv.needsHuman, true);
       assert.ok(conv.draft, '应该有草稿');
-      assert.deepEqual(Object.keys(conv.draft).sort(), ['createdAt', 'fileIds', 'text']);
+      assert.deepEqual(Object.keys(conv.draft).sort(), ['createdAt', 'fileIds', 'kind', 'text']);
+      assert.equal(conv.draft.kind, 'handoff');
       assert.match(conv.draft.text, /【待你确认：/);
       assert.deepEqual(conv.draft.fileIds, []);
       assert.equal(fake.sentTo(chat).length, 0, '草稿不会自动发给客户');
@@ -156,10 +157,10 @@ describe('F2 知识库闭环 + F14 草稿', () => {
       }
     });
 
-    it('A 段格式的旧草稿 {text, createdAt} 读出来 fileIds 为 []', async () => {
+    it('A 段格式的旧草稿 {text, createdAt} 读出来 fileIds 为 []、kind 为 handoff', async () => {
       const { chat } = await customer('你好');
       t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify({ text: '旧草稿', createdAt: '2026-01-01T00:00:00.000Z' }), cid(chat));
-      assert.deepEqual((await getConv(t, cid(chat))).draft, { text: '旧草稿', fileIds: [], createdAt: '2026-01-01T00:00:00.000Z' });
+      assert.deepEqual((await getConv(t, cid(chat))).draft, { kind: 'handoff', text: '旧草稿', fileIds: [], createdAt: '2026-01-01T00:00:00.000Z' });
     });
   });
 

@@ -216,7 +216,8 @@ export function createApp(config, options = {}) {
 
   api.use(auth.requireAuth);
   api.post('/auth/logout', auth.logout);
-  api.get('/auth/me', (req, res) => res.json({ user: req.user }));
+  api.get('/auth/me', auth.me);
+  api.put('/auth/me/style-prompt', auth.setStylePrompt);
   api.post('/auth/password', auth.changePassword);
   api.use('/users', usersRouter(ctx, auth));
   api.use('/accounts', accountsRouter(ctx, auth));

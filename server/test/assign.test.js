@@ -409,7 +409,7 @@ describe('按客户分配：权限和接口', () => {
     assert.equal((await assign(c1, g.user.id)).body.code, 'assignee_no_account_access');
   });
 
-  it('线索跟着负责人：agent 只看、改、导出自己负责的会话的线索；转交后跟着走', async () => {
+  it('线索跟着负责人：agent 只看、改自己负责的会话的线索（导出只有 admin）；转交后跟着走', async () => {
     const l1 = await member('线索甲', [A.id]);
     const l2 = await member('线索乙', [A.id]);
     const c = await newConv(A);
@@ -428,9 +428,9 @@ describe('按客户分配：权限和接口', () => {
     assert.ok((await leadIds(l1)).includes(leadId));
     assert.equal((await as(l1, 'GET', `/api/leads/${leadId}`)).status, 200);
     assert.equal((await as(l1, 'PUT', `/api/leads/${leadId}`, { company: '分配贸易' })).status, 200);
-    assert.ok((await as(l1, 'GET', '/api/leads/export.csv')).body.includes('分配线索客户'));
+    assert.equal((await as(l1, 'GET', '/api/leads/export.csv')).status, 403);
+    assert.ok((await t.req('GET', '/api/leads/export.csv')).body.includes('分配线索客户'));
     assert.ok(!(await leadIds(l2)).includes(leadId));
-    assert.ok(!(await as(l2, 'GET', '/api/leads/export.csv')).body.includes('分配线索客户'));
 
     await t.req('POST', `/api/users/${l1.user.id}/transfer`, { body: { toUserId: l2.user.id } });
     assert.ok(!(await leadIds(l1)).includes(leadId));

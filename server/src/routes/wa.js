@@ -82,6 +82,11 @@ export function waRouter(ctx) {
     const c = loadConv(req);
     res.json(await translateForConversation(ctx, c, req.body?.text));
   });
+  // 推荐回复：手动要一条（「推荐回复」「换一条」），权限同手动回复；号不在推荐回复模式也可以。同步返回 {draft}
+  router.post('/conversations/:id/suggest', async (req, res) => {
+    const c = loadConv(req);
+    res.json(await wa.suggestReply(c.id, req.user));
+  });
   // F2b：人工回复改写成知识条目（不落库），只有 admin
   router.post('/conversations/:id/messages/:messageId/kb-draft', async (req, res) => {
     if (req.user.role !== 'admin') throw forbidden();

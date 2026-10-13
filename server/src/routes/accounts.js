@@ -1,5 +1,6 @@
-// F7 号码接口。新建、删除、改名、IP 代理、Meta 凭证、配置导出导入只有 admin 能做；其余（扫码连接和登出、自动回复、persona、
-// 回复范围、名单、通知）分到这个号的 agent 也能做。所有判断都在服务端。
+// F7 号码接口。agent 只能看分给自己的号（GET 列表和详情，看不到 Meta 的 verifyToken 和通知收件人）；
+// 其余一律只有 admin：新建、删除、改设置（整个 PUT，含回复方式、persona、范围、名单、通知、改名、IP 代理、Meta 凭证）、
+// 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入。所有判断都在服务端。
 import express from 'express';
 import multer from 'multer';
 import {
@@ -36,11 +37,12 @@ export function accountsRouter(ctx, auth) {
     return acc;
   }
 
-  const view = async (acc, opts) => publicAccount(acc, ctx.config, await wa.getStatus(acc, opts));
+  /** viewer：看的人，agent 看不到 verifyToken 和通知收件人 */
+  const view = async (acc, opts, viewer = null) => publicAccount(acc, ctx.config, await wa.getStatus(acc, opts), viewer);
 
   router.get('/', async (req, res) => {
     const list = accounts.list().filter((a) => canAccessAccount(req.user, a.id));
-    res.json(await Promise.all(list.map((a) => view(a, { maxAgeMs: 5000, timeoutMs: 2000 }))));
+    res.json(await Promise.all(list.map((a) => view(a, { maxAgeMs: 5000, timeoutMs: 2000 }, req.user))));
   });
 
   router.post('/', auth.requireAdmin, async (req, res) => {
@@ -108,9 +110,9 @@ export function accountsRouter(ctx, auth) {
     },
   );
 
-  router.get('/:id', async (req, res) => res.json(await view(load(req))));
+  router.get('/:id', async (req, res) => res.json(await view(load(req), undefined, req.user)));
 
-  router.put('/:id', async (req, res) => {
+  router.put('/:id', auth.requireAdmin, async (req, res) => {
     const cur = load(req);
     const next = applyAccountPatch(cur, req.body, {
       isAdmin: req.user.role === 'admin',
@@ -136,14 +138,15 @@ export function accountsRouter(ctx, auth) {
     res.json({ ok: true });
   });
 
-  router.post('/:id/waha/start', async (req, res) => res.json(await wa.wahaStart(load(req))));
-  router.get('/:id/waha/qr', async (req, res) => {
+  // 扫码连接、取二维码、登出、配对码只有 admin
+  router.post('/:id/waha/start', auth.requireAdmin, async (req, res) => res.json(await wa.wahaStart(load(req))));
+  router.get('/:id/waha/qr', auth.requireAdmin, async (req, res) => {
     const png = await wa.wahaQr(load(req));
     res.set('cache-control', 'no-store').type('image/png').send(png);
   });
-  router.post('/:id/waha/logout', async (req, res) => res.json(await wa.wahaLogout(load(req))));
+  router.post('/:id/waha/logout', auth.requireAdmin, async (req, res) => res.json(await wa.wahaLogout(load(req))));
   // 手机号配对码（规格外新增）：{phoneNumber} → {code}，权限同扫码
-  router.post('/:id/waha/request-code', async (req, res) => {
+  router.post('/:id/waha/request-code', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
     if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
     res.json(await wa.wahaRequestCode(acc, req.body.phoneNumber));
@@ -158,7 +161,7 @@ export function accountsRouter(ctx, auth) {
     res.json(await testProxy(px, { url: ctx.proxyTestUrl }));
   });
 
-  router.post('/:id/notify/test', async (req, res) => res.json(await wa.notifier.test(load(req))));
+  router.post('/:id/notify/test', auth.requireAdmin, async (req, res) => res.json(await wa.notifier.test(load(req))));
 
   return router;
 }

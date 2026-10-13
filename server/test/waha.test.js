@@ -514,18 +514,17 @@ describe('手机号配对码', () => {
     assert.equal(r.body.code, 'wrong_channel');
   });
 
-  it('agent：别人的号 403（不论存不存在），自己的号可以申请', async () => {
+  it('agent：别人的号、自己的号都 403（配对码只有 admin），不找 WAHA', async () => {
     const mine = await newAcc();
     const other = await newAcc();
     const agent = await t.addMember({ email: 'pair-agent@example.com', accountIds: [mine.id] });
-    for (const acc of [other, { id: 'no-such-account' }]) {
+    for (const acc of [other, { id: 'no-such-account' }, mine]) {
       const r = await reqCode(acc, PHONE, { cookie: agent.cookie });
       assert.equal(r.status, 403);
       assert.equal(r.body.code, 'forbidden');
     }
     assert.deepEqual(ops(other), []);
-    const ok = await reqCode(mine, PHONE, { cookie: agent.cookie });
-    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepEqual(ops(mine), []);
   });
 
   it('同一个号 20 秒内重复申请：429 too_frequent，第二次不找 WAHA；别的号不受影响', async () => {
