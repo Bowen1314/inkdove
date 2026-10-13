@@ -182,6 +182,8 @@ export const api = {
   getProfile: (o) => get('/api/kb/profile', o),
   putProfile: (patch) => put('/api/kb/profile', patch),
   listEntries: ({ q, type, status } = {}, o) => get('/api/kb/entries', { ...o, query: { q, type, status } }),
+  /** 按 id 取几条条目（最多 50 个）→ Entry[]，顺序同 ids，不存在的跳过，停用的照样返回 */
+  entriesByIds: (ids, o) => get('/api/kb/entries/by-ids', { ...o, query: { ids: ids.join(',') } }),
   /** entry 可带 origin:"manual"|"conversation" 和 sourceRefs（F2b） */
   createEntry: (entry) => post('/api/kb/entries', entry),
   updateEntry: (id, patch) => put(`/api/kb/entries/${enc(id)}`, patch),

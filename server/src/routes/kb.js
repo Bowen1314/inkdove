@@ -4,6 +4,9 @@ import { ENTRY_STATUSES, ENTRY_TYPES, GAP_STATUSES, normalizeTags } from '../kb/
 import { decideReply } from '../reply/engine.js';
 import { llmConfigured } from '../settings.js';
 
+/** GET /entries/by-ids 一次最多取几条 */
+export const MAX_BY_IDS = 50;
+
 /** 校验条目写入字段；partial=true 时只校验传入的字段 */
 function validateEntryInput(body, partial) {
   if (!isPlainObject(body)) throw badRequest('请求体必须是对象');
@@ -44,6 +47,16 @@ export function kbRouter(ctx, auth) {
     if (type && !ENTRY_TYPES.includes(String(type))) throw badRequest('type 不正确');
     if (status && !ENTRY_STATUSES.includes(String(status))) throw badRequest('status 不正确');
     res.json(kb.listEntries({ q: q ? String(q) : '', type: type ? String(type) : '', status: status ? String(status) : '' }));
+  });
+
+  // 按 id 取几条条目（会话里显示引用的条目用，不用为了几个标题把整个知识库拉下来），权限同 GET /entries。
+  // ids 逗号分隔（也认重复的 ids=），去重后最多 MAX_BY_IDS 个；顺序和 ids 一样，不存在的跳过，停用的照样返回（看 status）
+  router.get('/entries/by-ids', (req, res) => {
+    const raw = req.query.ids;
+    const parts = (Array.isArray(raw) ? raw : [raw ?? '']).flatMap((v) => (typeof v === 'string' ? v.split(',') : []));
+    const ids = [...new Set(parts.map((s) => s.trim()).filter(Boolean))];
+    if (ids.length > MAX_BY_IDS) throw badRequest(`ids 最多 ${MAX_BY_IDS} 个`, 'too_many_ids');
+    res.json(ids.length ? kb.entriesByIds(ids, { status: null }) : []);
   });
 
   // F2b：origin 可选 manual（默认）或 conversation；conversation 时可带 sourceRefs（会话名 + 人工回复摘录）

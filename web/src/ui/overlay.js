@@ -73,7 +73,8 @@ export function useDialogFocus(open, onClose) {
 
 /**
  * 浮层定位：贴着 anchor 放，默认在下方左对齐；下方放不下就翻到上方，横向不超出视口。
- * placement: 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end' | 'top' | 'bottom'
+ * placement: 'bottom-start' | 'bottom-end' | 'top-start' | 'top-end' | 'top' | 'bottom' | 'right-start'
+ * right-start（列表项旁边的预览用，不盖住下面的项）：放在右边、上沿对齐；右边放不下放左边，两边都放不下（窄屏）放到下方。
  */
 export function useAnchoredPosition(open, anchorRef, floatRef, placement = 'bottom-start', offset = 6) {
   const [pos, setPos] = useState(null);
@@ -93,6 +94,23 @@ export function useAnchoredPosition(open, anchorRef, floatRef, placement = 'bott
       const vw = window.innerWidth;
       const vh = window.innerHeight;
       const [side, align] = placement.split('-');
+      if (side === 'right') {
+        let left = r.right + offset;
+        let top = r.top;
+        if (left + fw > vw - 8) {
+          if (r.left - fw - offset >= 8) {
+            left = r.left - fw - offset;
+          } else {
+            left = r.left;
+            top = r.bottom + offset;
+            if (top + fh > vh - 8 && r.top - fh - offset > 8) top = r.top - fh - offset;
+          }
+        }
+        top = Math.max(8, Math.min(top, vh - fh - 8));
+        left = Math.max(8, Math.min(left, vw - fw - 8));
+        setPos({ top: Math.round(top), left: Math.round(left) });
+        return;
+      }
       let top = side === 'top' ? r.top - fh - offset : r.bottom + offset;
       if (side !== 'top' && top + fh > vh - 8 && r.top - fh - offset > 8) top = r.top - fh - offset;
       if (side === 'top' && top < 8) top = r.bottom + offset;
@@ -106,16 +124,20 @@ export function useAnchoredPosition(open, anchorRef, floatRef, placement = 'bott
     update();
     window.addEventListener('resize', update);
     window.addEventListener('scroll', update, true);
+    // 浮层内容晚到（预览里的条目、图片加载完）会变大小，跟着重新定位
+    const ro = typeof ResizeObserver !== 'undefined' && floatRef.current ? new ResizeObserver(update) : null;
+    ro?.observe(floatRef.current);
     return () => {
       window.removeEventListener('resize', update);
       window.removeEventListener('scroll', update, true);
+      ro?.disconnect();
     };
   }, [open, placement, offset, anchorRef, floatRef]);
 
   return pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 };
 }
 
-/** 点外面或按 Esc 关闭（弹出菜单、弹出层用） */
+/** 点外面或按 Esc 关闭（弹出菜单、弹出层用）。onClose 收到原因：'outside' 或 'escape' */
 export function useDismiss(open, refs, onClose) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -123,12 +145,12 @@ export function useDismiss(open, refs, onClose) {
     if (!open) return undefined;
     const inside = (target) => refs.some((r) => r.current && r.current.contains(target));
     const onDown = (e) => {
-      if (!inside(e.target)) closeRef.current?.();
+      if (!inside(e.target)) closeRef.current?.('outside');
     };
     const onKey = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        closeRef.current?.();
+        closeRef.current?.('escape');
       }
     };
     document.addEventListener('mousedown', onDown);

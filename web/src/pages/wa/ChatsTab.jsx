@@ -45,7 +45,8 @@ import {
 } from '../../lib/labels.js';
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
-import { AttachmentCard, DraftFiles, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
+import { AttachmentCard, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
+import { DraftBasis } from './DraftBasis.jsx';
 import { MEDIA_ICON, MessageMedia, hasMediaBlock, isBareMediaLabel } from './ChatMedia.jsx';
 import {
   AssigneeMark,
@@ -561,12 +562,14 @@ function nextTodoRange(text, from = 0) {
  * 草稿：输入框上方显示，"填入输入框"后由人工修改再发。kind 是 suggest 的是推荐回复，handoff（老数据没有 kind）是转人工时起草的。
  * 「换一条」调 POST suggest 让 AI 换个写法（转人工草稿也可以换，换出来的是推荐回复）。
  * F15：草稿可以只带文件（text 为空、fileIds 有值），文件列在文字下面，旁边"发送这些文件"按顺序逐个发。
+ * 文字下面一行「依据」：起草依据的知识条目（entryIds）和要发的文件，鼠标停上去看内容（DraftBasis）。
  * kept：草稿已经关掉（填入输入框后、或被自己发的消息清掉），只剩前端记住的文件建议；这时不显示文字。
  * 左上角的 × 关掉：草稿时关掉整张卡片（onClose），只剩文件时关掉文件（onDismissKept）。
  */
 function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onClose, onDismissKept, onRegenerate, regenerating }) {
   const text = !kept && draft?.text?.trim() ? draft.text : '';
   const fileIds = kept ? kept.fileIds : Array.isArray(draft?.fileIds) ? draft.fileIds : [];
+  const entryIds = !kept && Array.isArray(draft?.entryIds) ? draft.entryIds : [];
   if (!text && !fileIds.length) return null;
   const isSuggest = !kept && draft?.kind === 'suggest';
   const title = kept ? '草稿建议发送的文件（还没发）' : isSuggest ? '推荐回复' : '建议回复（草稿，未发送）';
@@ -609,7 +612,7 @@ function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onClose, onD
           <TodoText text={text} />
         </div>
       )}
-      {fileIds.length > 0 && <DraftFiles fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} />}
+      <DraftBasis entryIds={entryIds} fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} showLabel={!kept} />
     </div>
   );
 }

@@ -8,7 +8,7 @@ import { internalFileUrl } from '../files/signed.js';
 import { MAX_FILES_PER_REPLY } from '../files/store.js';
 import { ENTRY_TYPES, normalizeTags } from '../kb/store.js';
 import { llmScope } from '../records.js';
-import { buildReplyContext, decideReply, normalizeFileIds } from '../reply/engine.js';
+import { buildReplyContext, decideReply, normalizeEntryIds, normalizeFileIds } from '../reply/engine.js';
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse, sleep } from '../util.js';
 import { assignCampaignConversation } from './assign.js';
@@ -57,6 +57,8 @@ export const WAHA_INLINE_MAX_BYTES = 15 * 1024 * 1024;
 const META_MEDIA_CACHE_MS = 25 * 24 * 3600 * 1000;
 const META_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_DRAFT_TEXT = 4000;
+/** 草稿（推荐回复、转人工草稿）最多记几条依据的知识条目 */
+export const MAX_DRAFT_ENTRIES = 10;
 /** 推荐回复：「客户这次的消息」最多合并最近几条 */
 const MAX_SUGGEST_MESSAGES = 20;
 /** 推荐回复跟进时：客户最后那段消息之后我方发的消息，最多单独列出（并参与检索）最近几条 */
@@ -307,8 +309,9 @@ export function parsePairingPhone(raw) {
 export const maskPhone = (digits) => `***${String(digits).slice(-4)}`;
 
 /**
- * 会话草稿 {kind, text, fileIds, createdAt}（F2a / F15 / 推荐回复）。kind：handoff 是转人工时起草的，suggest 是推荐回复；
+ * 会话草稿 {kind, text, fileIds, entryIds, createdAt}（F2a / F15 / 推荐回复）。kind：handoff 是转人工时起草的，suggest 是推荐回复；
  * 老数据没有 kind，当 handoff。A 段存的 {text, createdAt} 也认，fileIds 记 []；文字和文件都没有时视为没有草稿。
+ * entryIds 是起草所依据的知识条目（模型给的、这次确实放进了提示词的），会话页的草稿卡片下面列出来；老数据没有，记 []。
  * 库里还可能有两个只在服务端用的字段，这里不往外给：
  * - agentUserId：草稿用了谁的「我的资料」（转人工草稿是负责人的，推荐回复是点按钮那个人的）。负责人换成别人时作废
  *   （assign.js 的 writeAssignee），这个人被停用、删除时也作废（routes/users.js）；
@@ -320,7 +323,26 @@ export const parseDraft = (raw) => {
   const text = typeof d.text === 'string' ? d.text : '';
   const fileIds = normalizeFileIds(d.fileIds).slice(0, MAX_FILES_PER_REPLY);
   if (!text.trim() && !fileIds.length) return null;
-  return { kind: d.kind === 'suggest' ? 'suggest' : 'handoff', text, fileIds, createdAt: typeof d.createdAt === 'string' ? d.createdAt : null };
+  return {
+    kind: d.kind === 'suggest' ? 'suggest' : 'handoff',
+    text,
+    fileIds,
+    entryIds: normalizeEntryIds(d.entryIds).slice(0, MAX_DRAFT_ENTRIES),
+    createdAt: typeof d.createdAt === 'string' ? d.createdAt : null,
+  };
+};
+
+/**
+ * 起草结果里的依据条目：模型给的 used_entry_ids 去掉抄来的 "id:" 前缀和方括号、去重，只留这次确实放进提示词的条目
+ * （entries，buildReplyContext 挑的），别的直接丢掉、不报错；最多 MAX_DRAFT_ENTRIES 条
+ * @param {unknown} raw
+ * @param {{id:string}[]} entries
+ */
+export const draftEntryIds = (raw, entries) => {
+  const inPrompt = new Set(entries.map((e) => e.id));
+  return normalizeEntryIds(raw)
+    .filter((id) => inPrompt.has(id))
+    .slice(0, MAX_DRAFT_ENTRIES);
 };
 
 /**
@@ -1600,7 +1622,8 @@ export function createWaService(ctx, opts = {}) {
       .slice(0, MAX_FILES_PER_REPLY);
     const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
     if (!text && !fileIds.length) throw new Error('推荐回复是空的');
-    return { draft: { kind: 'suggest', text, fileIds, createdAt: nowIso() }, startSeq };
+    const entryIds = draftEntryIds(out?.entryIds, c.entries);
+    return { draft: { kind: 'suggest', text, fileIds, entryIds, createdAt: nowIso() }, startSeq };
   }
 
   /** 从 startSeq 之后我方有没有发过消息（后台、手机、机器人、外联都算；发送失败的也算，见 deviations.md 第 48 条） */
@@ -1649,7 +1672,7 @@ export function createWaService(ctx, opts = {}) {
         .slice(0, MAX_FILES_PER_REPLY);
       const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
       if (!text && !fileIds.length) throw new Error('草稿是空的');
-      draft = { kind: 'handoff', text, fileIds, createdAt: nowIso() };
+      draft = { kind: 'handoff', text, fileIds, entryIds: draftEntryIds(out?.entryIds, c.entries), createdAt: nowIso() };
       // 草稿里写了负责人的名字、电话这些，记下是谁的（没用资料就不记，改派也不清）
       if (agentProfile) draft.agentUserId = before.assignee_id;
     } catch (err) {

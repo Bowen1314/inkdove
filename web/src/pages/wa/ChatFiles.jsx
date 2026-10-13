@@ -8,9 +8,9 @@ import { Tooltip } from '../../ui/Popover.jsx';
 import { EmptyState, ErrorState, SkeletonRows, Spinner } from '../../ui/common.jsx';
 import { useAuth } from '../../lib/auth.jsx';
 import { fmtSize } from '../../lib/format.js';
-import { fileErrorText, fileIcon, fileTypeLabel, getFileMap } from '../../lib/files.js';
+import { fileErrorText, fileIcon, fileTypeLabel } from '../../lib/files.js';
 
-// 会话页里和产品资料库（F15）有关的部分：消息里的文件卡片、草稿附带的文件、"发送文件"按钮和选择弹窗。
+// 会话页里和产品资料库（F15）有关的部分：消息里的文件卡片、"发送文件"按钮和选择弹窗。草稿附带的文件在 DraftBasis.jsx。
 
 const metaLine = (f) => [fileTypeLabel(f), fmtSize(f.size)].filter(Boolean).join(' · ');
 
@@ -33,67 +33,6 @@ export function AttachmentCard({ attachment }) {
       </span>
       <Download className="msg__file-dl" aria-hidden="true" />
     </a>
-  );
-}
-
-/**
- * 草稿附带的文件（draft.fileIds）：只有 id，名字从文件列表里查；点一下可以下载看看。
- * 给了 onSend 时旁边加"发送这些文件"按钮，点了把其中能发的（没删、没停用）按顺序交给 onSend。
- */
-export function DraftFiles({ fileIds, onSend, sending = false }) {
-  const [map, setMap] = useState(null);
-  const key = fileIds.join(',');
-
-  useEffect(() => {
-    let alive = true;
-    getFileMap()
-      .then((m) => alive && setMap(m))
-      .catch(() => alive && setMap(new Map()));
-    return () => {
-      alive = false;
-    };
-  }, [key]);
-
-  const list = (
-    <ul className="draft__files" aria-label="草稿附带的文件">
-      {fileIds.map((id) => {
-        const f = map?.get(id);
-        if (!f) {
-          return (
-            <li key={id} className="draft__file is-missing">
-              {map ? '文件已删除' : <Spinner />}
-            </li>
-          );
-        }
-        const Icon = fileIcon(f);
-        return (
-          <li key={id}>
-            <a
-              className="draft__file"
-              href={api.fileDownloadUrl(f.id)}
-              download={f.filename}
-              title={f.description || f.filename}
-              aria-label={`下载文件 ${f.name}`}
-            >
-              <Icon aria-hidden="true" />
-              <span className="draft__file-name">{f.name}</span>
-              <span className="draft__file-meta">{f.status === 'active' ? metaLine(f) : '已停用'}</span>
-            </a>
-          </li>
-        );
-      })}
-    </ul>
-  );
-  if (!onSend) return list;
-  const sendable = map ? fileIds.map((id) => map.get(id)).filter((f) => f && f.status === 'active') : [];
-  return (
-    <div className="draft__files-row">
-      {list}
-      <button type="button" className="btn btn--sm" onClick={() => onSend(sendable)} disabled={sending || !sendable.length}>
-        {sending ? <Spinner /> : <SendHorizontal />}
-        发送这些文件
-      </button>
-    </div>
   );
 }
 

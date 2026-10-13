@@ -206,7 +206,10 @@ export function createRealAi(getSettings, opts = {}) {
       return { verdict: data.verdict.trim().toLowerCase(), reason: typeof data.reason === 'string' ? data.reason : '' };
     },
 
-    /** F2a：给人工起草回复（agentProfile 是会话负责人的「我的资料」，没有就不带）。返回 {text, fileIds}；解析不了时抛错 */
+    /**
+     * F2a：给人工起草回复（agentProfile 是会话负责人的「我的资料」，没有就不带）。返回 {text, fileIds, entryIds}
+     * （entryIds 是模型给的 used_entry_ids 原样，调用方再规整、只留这次放进提示词的条目）；解析不了时抛错
+     */
     async draft({ message, history, entries, files = [], filesTruncated = false, profile, persona, agentProfile = null, reason }) {
       const { text } = await call(
         'draft',
@@ -215,13 +218,13 @@ export function createRealAi(getSettings, opts = {}) {
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('草稿输出无法解析');
-      return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids) };
+      return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids), entryIds: strList(data.used_entry_ids) };
     },
 
     /**
      * 推荐回复：草稿的提示词骨架，加公司话术、个人话术和点按钮那个人的「我的资料」（agentProfile）；previous 是「换一条」时的
      * 上一条推荐；followUp / ourMessages 是跟进（我方说的是最后一条）时的说法和我方后来发的消息。
-     * 返回 {text, fileIds}；解析不了时抛错
+     * 返回 {text, fileIds, entryIds}（同 draft）；解析不了时抛错
      */
     async suggest({
       message,
@@ -245,7 +248,7 @@ export function createRealAi(getSettings, opts = {}) {
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('推荐回复输出无法解析');
-      return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids) };
+      return { text: typeof data.text === 'string' ? data.text : '', fileIds: strList(data.file_ids), entryIds: strList(data.used_entry_ids) };
     },
 
     /** F2b：把人工回复改写成知识条目 {type, title, content, tags} */

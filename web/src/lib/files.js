@@ -77,7 +77,7 @@ export function fileErrorText(err) {
   return fromServer || ERROR_TEXT[err.code] || err.message || '操作失败，请重试';
 }
 
-// 没有"按 id 批量取"的接口：草稿里的文件要显示名字时，拉一次全量列表并短暂缓存（同 entryCache）
+// 没有"按 id 批量取"的接口：草稿里的文件要显示名字时，拉一次全量列表并短暂缓存（条目是按 id 取的，见 entryCache.js）
 let cache = null;
 let cachedAt = 0;
 let inflight = null;

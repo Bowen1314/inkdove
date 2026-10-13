@@ -331,7 +331,7 @@ describe('我的资料：AI 用谁的（推荐回复用点按钮的人的，转�
       const d = await handoffDraft(chat, '还是要人工', 2);
       assert.deepEqual(d.agentProfile, LINA);
       assert.equal(rawDraft(convId).agentUserId, agent.user.id, '用了负责人的资料：记下是谁');
-      assert.deepEqual(Object.keys(await shown()).sort(), ['createdAt', 'fileIds', 'kind', 'text'], '接口里的草稿不带 agentUserId');
+      assert.deepEqual(Object.keys(await shown()).sort(), ['createdAt', 'entryIds', 'fileIds', 'kind', 'text'], '接口里的草稿不带 agentUserId');
       assert.equal((await assign(convId, agent.user.id)).status, 200);
       assert.equal(rawDraft(convId)?.agentUserId, agent.user.id, '负责人没变：不动');
       assert.equal((await assign(convId, quiet.user.id)).status, 200);

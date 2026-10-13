@@ -381,7 +381,7 @@ describe('推荐回复（只能手动要）', () => {
       const r = await manual(convId);
       assert.equal(r.status, 200, JSON.stringify(r.body));
       assert.deepEqual(Object.keys(r.body), ['draft']);
-      assert.deepEqual(Object.keys(r.body.draft).sort(), ['createdAt', 'fileIds', 'kind', 'text']);
+      assert.deepEqual(Object.keys(r.body.draft).sort(), ['createdAt', 'entryIds', 'fileIds', 'kind', 'text']);
       assert.equal(r.body.draft.kind, 'suggest');
       assert.match(r.body.draft.text, /59 元/);
       assert.match(r.body.draft.text, /【待你确认：/);
@@ -671,7 +671,7 @@ describe('推荐回复（只能手动要）', () => {
 
     it('跟进推荐库里记 followUp（接口不带）；客户实时发来新消息就清掉，文字、媒体都算；不是跟进的推荐、转人工草稿不清', async () => {
       const rawDraft = (convId) => JSON.parse(convRow(convId).draft ?? 'null');
-      const KEYS = ['createdAt', 'fileIds', 'kind', 'text'];
+      const KEYS = ['createdAt', 'entryIds', 'fileIds', 'kind', 'text'];
       const chat = newChat();
       const convId = await says(manualAcc, chat, '保温杯 A100 有黑色吗', 1);
       const plain = await manual(convId);
@@ -727,7 +727,7 @@ describe('推荐回复（只能手动要）', () => {
       const base = { kind: 'suggest', text: '跟进：目录发您了吗', fileIds: [], createdAt: new Date().toISOString() };
       setDraft(base);
       await metaSays('还有别的颜色吗');
-      assert.deepEqual((await getConv(t, convId)).draft, { ...base }, '不是跟进的推荐不清');
+      assert.deepEqual((await getConv(t, convId)).draft, { ...base, entryIds: [] }, '不是跟进的推荐不清（库里没有 entryIds 的读出来是 []）');
       setDraft({ ...base, followUp: true });
       await metaSays('多少钱');
       assert.equal((await getConv(t, convId)).draft, null, '跟进推荐清掉');
@@ -807,7 +807,7 @@ describe('推荐回复（只能手动要）', () => {
       const handoff = { kind: 'handoff', text: '转人工时起草的', fileIds: [], createdAt: new Date().toISOString() };
       t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(handoff), convId);
       await ownerSays(manualAcc, chat, '手机上又回了一句');
-      assert.deepEqual((await getConv(t, convId)).draft, handoff);
+      assert.deepEqual((await getConv(t, convId)).draft, { ...handoff, entryIds: [] });
     });
 
     it('自动回复模式下机器人发出回复也清掉推荐', async () => {

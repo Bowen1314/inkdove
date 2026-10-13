@@ -173,7 +173,10 @@ export function createMockAi(opts = {}) {
       return { verdict: 'ok', reason: 'mock 审核通过' };
     },
 
-    /** F2a mock 草稿：命中条目就照条目写；涉及价格、折扣、下单的加【待你确认：…】；文件按 F15 的关键词规则挑 */
+    /**
+     * F2a mock 草稿：命中条目就照条目写（entryIds 就是这几条）；涉及价格、折扣、下单的加【待你确认：…】；
+     * 文件按 F15 的关键词规则挑
+     */
     async draft({ message, entries, files = [], signal }) {
       await wait(signal);
       const hits = bm25Rank(message, entries, entrySearchText).slice(0, 2);
@@ -181,7 +184,7 @@ export function createMockAi(opts = {}) {
       if (hits.length) parts.push(hits.map((h) => h.doc.content).join('\n'));
       if (/折扣|便宜|优惠|价格|报价|discount|price|下单|付款|order/i.test(message)) parts.push('【待你确认：价格、折扣和下单条件】');
       if (!parts.length) parts.push(`这个我确认一下再回复你。【待你确认：${clip(message.replace(/\s+/g, ' '), 40)}】`);
-      return { text: parts.join('\n'), fileIds: matchFiles(message, files) };
+      return { text: parts.join('\n'), fileIds: matchFiles(message, files), entryIds: hits.map((h) => h.doc.id) };
     },
 
     /**

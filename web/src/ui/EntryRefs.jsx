@@ -4,10 +4,11 @@ import { FileText, Pencil } from 'lucide-react';
 import { Modal } from './Modal.jsx';
 import { StatusDot } from './StatusDot.jsx';
 import { Spinner } from './common.jsx';
-import { getEntryMap } from '../lib/entryCache.js';
+import { cachedEntry, getEntries, getEntry } from '../lib/entryCache.js';
 import { useAuth } from '../lib/auth.jsx';
 import { ENTRY_ORIGIN, ENTRY_STATUS, entryTypeLabel } from '../lib/labels.js';
 import { fmtTime } from '../lib/format.js';
+import { EntryPreviewBody, RefPreview } from './RefPreview.jsx';
 
 /** 查看单个条目（只读）；admin 可跳到条目页编辑，agent 没有"去编辑"按钮 */
 export function EntryPeek({ entryId, onClose }) {
@@ -19,10 +20,11 @@ export function EntryPeek({ entryId, onClose }) {
   useEffect(() => {
     if (!entryId) return undefined;
     let alive = true;
-    setEntry(undefined);
+    // 缓存里有（比如刚在预览里看过）就先显示，再按 id 取一遍
+    setEntry(cachedEntry(entryId));
     setErr(null);
-    getEntryMap()
-      .then((map) => alive && setEntry(map.get(entryId) || null))
+    getEntry(entryId)
+      .then((e) => alive && setEntry(e))
       .catch((e) => alive && setErr(e));
     return () => {
       alive = false;
@@ -108,37 +110,65 @@ export function EntryPeek({ entryId, onClose }) {
 }
 
 /**
- * 一组被引用条目的标题链接，点开查看详情。
+ * 一组被引用条目的标题链接（只按 id 取这几条），鼠标停上去在旁边浮出预览，点开查看详情。
  * 传了 onOpen(id) 就交给调用方打开（放在浮层里用时，弹窗要渲染在浮层外面）；不传就在这里渲染 EntryPeek。
  */
 export function EntryRefs({ ids, onOpen }) {
   const [map, setMap] = useState(null);
+  const [failed, setFailed] = useState(false);
   const [peek, setPeek] = useState(null);
+  const key = (ids || []).join(',');
 
   useEffect(() => {
     if (!ids?.length) return undefined;
     let alive = true;
-    getEntryMap()
+    setFailed(false);
+    getEntries(ids)
       .then((m) => alive && setMap(m))
-      .catch(() => alive && setMap(new Map()));
+      .catch(() => alive && setFailed(true));
     return () => {
       alive = false;
     };
-  }, [ids]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   if (!ids?.length) return <span className="muted">没有引用知识条目</span>;
 
+  const open = (id) => (onOpen ? onOpen(id) : setPeek(id));
   return (
     <>
       <ul className="ref-list">
         {ids.map((id) => {
-          const e = map?.get(id);
+          // undefined 加载中，null 已删除
+          const e = map?.has(id) ? map.get(id) : cachedEntry(id);
+          const off = !!e && e.status !== 'active';
           return (
             <li key={id}>
-              <button type="button" className="ref-list__item" onClick={() => (onOpen ? onOpen(id) : setPeek(id))}>
-                <FileText aria-hidden="true" />
-                <span className="ellipsis">{map ? (e ? e.title : '已删除的条目') : '加载中…'}</span>
-              </button>
+              <RefPreview
+                pin={false}
+                placement="right-start"
+                label={e ? `知识条目：${e.title}` : '知识条目'}
+                trigger={
+                  <button type="button" className="ref-list__item" onClick={() => open(id)}>
+                    <FileText aria-hidden="true" />
+                    <span className={`ellipsis${e ? '' : ' muted'}`}>
+                      {e === undefined ? (failed ? '条目加载失败' : '加载中…') : e === null ? '已删除的条目' : e.title}
+                    </span>
+                    {off && <span className="ref-list__meta">已停用</span>}
+                  </button>
+                }
+              >
+                {(close) => (
+                  <EntryPreviewBody
+                    entry={e}
+                    error={failed}
+                    onOpenFull={() => {
+                      close(true);
+                      open(id);
+                    }}
+                  />
+                )}
+              </RefPreview>
             </li>
           );
         })}

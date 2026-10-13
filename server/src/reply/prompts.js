@@ -270,7 +270,8 @@ ${STYLE_RULES}
 
 【输出要求】
 只输出一个严格的 JSON 对象，不要输出任何别的内容：
-{"text": "草稿正文", "file_ids": ["..."]}
+{"text": "草稿正文", "file_ids": ["..."], "used_entry_ids": ["..."]}
+used_entry_ids 列出起草所依据的知识条目 id（只能用【知识条目】里给出的 id，照抄 [id:...] 冒号后面那串），没用到条目时给空数组。条目 id 只写在 used_entry_ids 里，草稿正文里不写 id，也不加 [1] 这类引用标号。
 
 【语气设定】（只影响语气和称呼）
 ${persona && persona.trim() ? persona.trim() : '（未设置）'}${styleSections}${agentSection}

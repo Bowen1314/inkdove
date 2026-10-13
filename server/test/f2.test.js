@@ -64,7 +64,7 @@ describe('F2 知识库闭环 + F14 草稿', () => {
       const { chat, conv } = await customer('保温杯 A100 能便宜点吗，给个折扣', '周先生');
       assert.equal(conv.needsHuman, true);
       assert.ok(conv.draft, '应该有草稿');
-      assert.deepEqual(Object.keys(conv.draft).sort(), ['createdAt', 'fileIds', 'kind', 'text']);
+      assert.deepEqual(Object.keys(conv.draft).sort(), ['createdAt', 'entryIds', 'fileIds', 'kind', 'text']);
       assert.equal(conv.draft.kind, 'handoff');
       assert.match(conv.draft.text, /【待你确认：/);
       assert.deepEqual(conv.draft.fileIds, []);
@@ -93,7 +93,7 @@ describe('F2 知识库闭环 + F14 草稿', () => {
       const sys = buildDraftSystemPrompt({ profile: {}, persona: '', entries: [], files: [] });
       assert.ok(sys.includes(`【说话方式】\n${STYLE_RULES}\n`));
       assert.ok(sys.includes('【待你确认：…】'));
-      assert.ok(sys.includes('{"text": "草稿正文", "file_ids": ["..."]}'));
+      assert.ok(sys.includes('{"text": "草稿正文", "file_ids": ["..."], "used_entry_ids": ["..."]}'));
       assert.ok(buildReplySystemPrompt({ profile: {}, persona: '', entries: [], canary: 'x' }).includes(STYLE_RULES));
     });
 
@@ -157,10 +157,10 @@ describe('F2 知识库闭环 + F14 草稿', () => {
       }
     });
 
-    it('A 段格式的旧草稿 {text, createdAt} 读出来 fileIds 为 []、kind 为 handoff', async () => {
+    it('A 段格式的旧草稿 {text, createdAt} 读出来 fileIds、entryIds 为 []、kind 为 handoff', async () => {
       const { chat } = await customer('你好');
       t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify({ text: '旧草稿', createdAt: '2026-01-01T00:00:00.000Z' }), cid(chat));
-      assert.deepEqual((await getConv(t, cid(chat))).draft, { kind: 'handoff', text: '旧草稿', fileIds: [], createdAt: '2026-01-01T00:00:00.000Z' });
+      assert.deepEqual((await getConv(t, cid(chat))).draft, { kind: 'handoff', text: '旧草稿', fileIds: [], entryIds: [], createdAt: '2026-01-01T00:00:00.000Z' });
     });
   });
 

@@ -1859,6 +1859,127 @@
   height: 14px;
   color: var(--text-muted);
 }
+.ref-list__meta {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* 引用小标签（推荐卡片的「依据」）：条目标题或文件名，悬停、点击浮出预览（ui/RefPreview.jsx） */
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: var(--lh-sm);
+  text-align: left;
+  transition: background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.ref-chip:hover,
+.ref-chip[aria-expanded='true'] {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+.ref-chip > svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--text-muted);
+}
+.ref-chip__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ref-chip__meta {
+  flex: none;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+.ref-chip.is-muted .ref-chip__name {
+  color: var(--text-muted);
+}
+
+/* 引用的预览浮层：手机宽度下不超出视口，太高时整体滚动，正文在自己的框里滚动 */
+.ref-preview {
+  position: fixed;
+  z-index: var(--z-menu);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  max-height: min(480px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: var(--shadow-overlay);
+  animation: fade-in var(--dur-fast) ease;
+}
+.ref-preview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ref-preview__title {
+  font-size: var(--fs-h3);
+  line-height: var(--lh-h3);
+  font-weight: 600;
+  word-break: break-word;
+}
+.ref-preview__sub {
+  margin-top: calc(var(--sp-1) * -1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  word-break: break-all;
+}
+.ref-preview__body {
+  max-height: 160px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ref-preview__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.ref-preview__img {
+  display: block;
+  max-width: 100%;
+  max-height: 160px;
+  margin: 0 auto;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  object-fit: contain;
+}
+.ref-preview__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border);
+}
+.ref-preview__state {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-muted);
+}
 
 .peek,
 .peek__ref {
