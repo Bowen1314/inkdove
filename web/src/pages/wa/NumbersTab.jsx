@@ -180,7 +180,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
   );
 }
 
-// 号码配置导出 / 导入（admin）。文件格式见 README「偏离规格」，服务端还会完整校验一遍
+// 号码配置导出 / 导入（admin）。文件格式见 docs/deviations.md 第 35 条，服务端还会完整校验一遍
 const EXPORT_FORMAT = 'inkdove-accounts';
 const EXPORT_VERSION = 1;
 

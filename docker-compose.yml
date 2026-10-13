@@ -52,7 +52,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # 更新助手：网页上点「立即更新」时，inkdove 先备份数据库，再让它拉新镜像、重建 inkdove 容器（见 README「在线更新」）。
+  # 更新助手：网页上点「立即更新」时，inkdove 先备份数据库，再让它拉新镜像、重建 inkdove 容器（见 docs/online-update.md）。
   # 它挂了宿主机的 docker.sock，能操作宿主机上所有容器：不映射任何端口，只在 compose 内网里给 inkdove 调，口令要够长。
   # 不想要就把这一段整个删掉（.env 里的 INKDOVE_UPDATER_TOKEN 也留空），网页上会改为显示更新命令。
   # 原版 containrrr/watchtower 已归档、和 Docker 29 不兼容，这里用维护中的 fork，锁版本

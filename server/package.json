@@ -4,7 +4,7 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",
-  "description": "墨鸽后端：知识库蒸馏 + WhatsApp 自动回复",
+  "description": "墨鸽后端：外贸团队的 WhatsApp 工作台（知识库、推荐回复、按客户分配）",
   "main": "src/index.js",
   "engines": {
     "node": ">=20.18.1"

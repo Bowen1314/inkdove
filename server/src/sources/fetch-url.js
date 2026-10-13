@@ -132,7 +132,7 @@ async function readLimited(res, max) {
 
 /**
  * 安全抓取单个页面：每一跳重定向都重新校验地址。
- * 注：DNS 解析与实际连接之间存在极短的 rebinding 窗口（见 README 偏离规格）。
+ * 注：DNS 解析与实际连接之间存在极短的 rebinding 窗口（见 docs/deviations.md 第 20 条）。
  * @param {string} url
  * @returns {Promise<{url: string, contentType: string, body: Buffer}>}
  */

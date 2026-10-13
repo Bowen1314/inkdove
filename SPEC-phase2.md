@@ -107,7 +107,7 @@ User：
   - 422 和 4xx 的错误信息要可读，比如 from 的域名没在 Resend 验证过；
   - 429 重试 1 次；
   - 实现前先查 resend.com 官方文档核实；
-  - 地址可以用仅测试用的 `INKDOVE_RESEND_API_URL` 覆盖，写进 README「偏离规格」。
+  - 地址可以用仅测试用的 `INKDOVE_RESEND_API_URL` 覆盖，写进「偏离规格」（[docs/deviations.md](docs/deviations.md)）。
 - 两种发信方式实现同一个 `sendEmail({to, subject, text, html?})` 接口。通知、测试邮件都只调这个接口。
 - `POST /api/settings/email/test` `{to}`（admin）：发一封测试邮件，返回 `{ok:true}` 或 `{ok:false, error}`，HTTP 状态都是 200。
 - SPEC.md 第一期里全局的 `notify.email` 和 `/api/settings/notify/test` 由这一节加上 F7 的号级 `notify` 取代。

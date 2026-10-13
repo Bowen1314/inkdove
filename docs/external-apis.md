@@ -1,0 +1,62 @@
+# 已核实的外部接口
+
+代码里用到的 WAHA、Meta、Resend、SMTP 和三种 LLM 接口，这里记下依据的文档和实测结果。
+
+- **WAHA**：
+  - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
+  - webhook 的 events 和 HMAC（`X-Webhook-Hmac`，sha512，对原始 body 计算），见 [events](https://waha.devlike.pro/docs/how-to/events/)；
+  - `message.any`：别人发的和自己发的都推，payload 和 `message` 一样；`source` 字段经 WAHA API 发出的是 `api`，否则是 `app`。见 [events](https://waha.devlike.pro/docs/how-to/events/)；
+  - GOWS 的消息结构，按 core 分支源码 [session.gows.core.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/core/engines/gows/session.gows.core.ts) 的 `toWAMessage`（这是最新源码，没对到 2026.9.2 这个版本）：
+    - `from` 是原始消息的 `Info.Chat`（自己发的也是），`to` 私聊是 null、群里是发送人；`_data` 是原始消息；
+    - id 是 `<IsFromMe>_<chat>_<ID>`，群里再接 `_<participant>`，所以按最后一段匹配 id 的做法成立；
+    - `source`：发送设备和 WAHA 自己的设备是同一个时是 `api`，否则 `app`（枚举见 [responses.dto.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/structures/responses.dto.ts)）；
+    - `message` 只推别人发的，`message.any` 推全部；
+    - 注意：下面「读已有聊天」实测 fromMe 的 `from` 是机主自己的号，和这份源码不一致。代码先取 `_data.Info.Chat`，两种都兼容；
+  - sendText、标已读 `POST /api/sendSeen {session, chatId, messageIds}`（GOWS 支持 messageIds），见 [send-messages](https://waha.devlike.pro/docs/how-to/send-messages/)；
+  - 正在输入 `POST /api/{session}/presence {chatId, presence: "typing" | "paused"}`，WAHA 不会自动发，见 [presence](https://waha.devlike.pro/docs/how-to/presence/)；
+  - 入站消息的 `replyTo`（`id` 不带前缀），见 [message.dto.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/structures/message.dto.ts)；
+  - `X-Api-Key`，见 [security](https://waha.devlike.pro/docs/how-to/security/)；
+  - GOWS 镜像，见 [engines](https://waha.devlike.pro/docs/how-to/engines/)；
+  - 会话存储，见 [storages](https://waha.devlike.pro/docs/how-to/storages/)；
+  - lid 转手机号，见 [contacts](https://waha.devlike.pro/docs/how-to/contacts/)；
+  - 代理，见 [proxy](https://waha.devlike.pro/docs/how-to/proxy/)；
+  - 手机号配对码：`POST /api/{session}/auth/request-code`，体 `{phoneNumber: "<纯数字国际号码>"}`（`method` 可省），返回 `{code: "LDYW-LWV8"}`。GOWS 支持，见镜像 `devlikeapro/waha:gows` 2026.9.2 里 `dist/core/engines/gows/session.gows.core.js` 的 `requestCode`：只能在会话状态为 `SCAN_QR_CODE` 时调用，`STARTING` 时最多等 2 秒，否则返回 422 `Can request code only in SCAN_QR_CODE status. The current status is X`。配对码只在这一轮等待扫码期间有效：没人扫码或输码时，WAHA 两分多钟后把会话停掉（FAILED），码随之作废。申请过配对码却没输入，会话里会留下半截登录凭证，之后再 start 或 restart，会话直接去"登录"然后 FAILED（`Connection Failure`），不再回到 `SCAN_QR_CODE`，要先 `POST /api/sessions/{name}/logout` 清掉凭证再 start 才能重新出码。这一条是在 NOWEB 引擎上实测的，GOWS 按同样的情况防；
+  - 对已经在跑的会话再 `POST /api/sessions/{name}/start`（10-12 实测，GOWS 2026.9.2，会话在 `SCAN_QR_CODE`）：不报 422，正常返回会话 JSON，状态不变。所以"开始扫码连接"对等待关联中的号重复点不会出错，也不会让二维码重来；
+  - `POST /api/sessions/{name}/logout`（10-12 实测，GOWS 2026.9.2）：返回 201，会话自己重启，1 秒内进入 `SCAN_QR_CODE` 并一直停在那里等关联，不用再 start。这里登出后照样补一次 start：会话已经到 SCAN_QR_CODE 时按上一条是无害的；还在 STARTING 时 start 的结果没实测，代码容忍 422；
+  - 发文件和图片：`POST /api/sendFile`、`POST /api/sendImage`，体是 `{session, chatId, file: {mimetype, filename, data} | {mimetype, filename, url}, caption?}`。data 是不带 `data:` 前缀的 base64，返回体顶层有 `id`。见 [send-messages](https://waha.devlike.pro/docs/how-to/send-messages/) 和 [files.dto.ts](https://github.com/devlikeapro/waha/blob/core/src/structures/files.dto.ts)；
+  - GOWS 支持 sendImage 和 sendFile，见 [engines](https://waha.devlike.pro/docs/how-to/engines/) 和 [session.gows.core.ts](https://raw.githubusercontent.com/devlikeapro/waha/core/src/core/engines/gows/session.gows.core.ts)。按 [changelog](https://waha.devlike.pro/docs/overview/changelog/) 和 [waha-plus](https://waha.devlike.pro/docs/how-to/waha-plus/)，从 2026.6.1 起原来 Plus 的功能并入了 Core；
+  - 读已有聊天（2026-10-12 实测，GOWS 2026.9.2，Core）：
+    - `GET /api/{session}/chats?limit=N` 返回 `[{id, name, conversationTimestamp}]`；
+    - `GET /api/{session}/chats/overview?limit=N` 返回 `[{id, name, picture, lastMessage, _chat: {id, name, conversationTimestamp}}]`，顶层 `name` 实测是 null，名字在 `_chat.name`。导入用的是上一个接口；
+    - `GET /api/{session}/chats/{chatId}/messages?limit=N&downloadMedia=false` 返回消息数组，字段 `id, timestamp(秒), from, fromMe, source, body, to, participant, hasMedia, media, ack, ackName, replyTo, location, vCards, _data`。`to` 实测是 null（fromMe 的也是），`media` 是 null，所以聊天对象只能从 chat id 取；
+    - chat id 实测是 `<号码>@c.us`（私聊）和 `<id>@g.us`（群），NOWEB 引擎还见过 `@s.whatsapp.net` 和 `@lid`；
+    - 新关联的设备，WhatsApp 每个聊天只同步最后 1 条消息（实测 26 个聊天，每个 1 条，最早的是 2022 年的，不少是本人发的）。这些历史消息不会触发 webhook 的 `message` 事件；
+  - 收媒体：入站消息带 `hasMedia` 和 `media: {url, mimetype, filename, error}`。url 指向 WAHA 的 `/api/files/...`，主机名按 `WAHA_BASE_URL` 拼，下载要带 `X-Api-Key`。`WAHA_EVENTS_DOWNLOAD_MEDIA` 默认是 true，文件默认保留 180 秒（`WHATSAPP_FILES_LIFETIME`）。见 [receive-messages](https://waha.devlike.pro/docs/how-to/receive-messages/) 和 [config](https://waha.devlike.pro/docs/how-to/config/)。
+  - 查号（F11，**按文档写的，还没在真机上核实**）：`GET /api/contacts/check-exists?phone=<纯数字国际号码>&session=<session>`，返回 `{numberExists: boolean, chatId}`，有的话 `chatId` 是发消息要用的 chat id（文档说可能是 `@lid`，`@s.whatsapp.net` 的这里统一成 `@c.us`）。见 [contacts](https://waha.devlike.pro/docs/how-to/contacts/)。文档的引擎支持表里 WEBJS、WPP、NOWEB、GOWS 都支持这个接口。要真机确认的：GOWS 下的返回结构、没有 WhatsApp 的号码返回 `numberExists: false` 而不是报错、返回的 chatId 能直接用 sendText 发；返回体里没有布尔的 `numberExists` 时代码当成出错（计入连续失败）。
+- **Meta**：
+  - webhook 校验和签名，见 [getting started](https://developers.facebook.com/docs/graph-api/webhooks/getting-started)；
+  - 消息结构和 `context`，见 [payload examples](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/payload-examples)、[text messages webhook](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/text)；
+  - 发文本消息，见 [text messages](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/text-messages)；
+  - 标已读 `{messaging_product, status: "read", message_id}`，见 [mark as read](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/mark-message-as-read)；
+  - 正在输入：在标已读的请求里加 `typing_indicator: {type: "text"}`，回复后或 25 秒后消失，没有停止接口，见 [typing indicators](https://developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators)；
+  - 版本，见 [versions](https://developers.facebook.com/docs/graph-api/changelog/versions)；
+  - 上传媒体：`POST /{ver}/{phone-number-id}/media`，multipart 带 `messaging_product=whatsapp`、`type`、`file`，返回 `{id}`，上传的媒体 30 天有效。下载媒体：`GET /{ver}/{media-id}` 返回 `{url, mime_type, file_size}`，再带同一个 Bearer token GET 这个 url，url 5 分钟有效。大小限制：jpeg 和 png 图片 5MB；txt、xls、xlsx、doc、docx、ppt、pptx、pdf 这些文档 100MB；webp 只能当贴纸。见 [media](https://developers.facebook.com/docs/whatsapp/cloud-api/reference/media)；
+  - 发文档 `{type: "document", document: {id, filename}}`、发图片 `{type: "image", image: {id}}`，见 [document messages](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/document-messages)、[image messages](https://developers.facebook.com/docs/whatsapp/cloud-api/messages/image-messages)；
+  - 入站图片和语音的 webhook 结构，见 [image](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/image)、[audio](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/audio)；视频（`video`）、文件（`document`，多一个 `filename`）、贴纸（`sticker`）也是 `{id, mime_type, …}`，下载方式同上；
+  - 模板消息（F11，按文档写的，还没真机发过）：`POST /{ver}/{phone-number-id}/messages`，体 `{messaging_product: "whatsapp", recipient_type: "individual", to, type: "template", template: {name, language: {code}}}`，返回 `messages[0].id`。主动发起会话（24 小时窗口外）只能用审核通过的模板。见 [send message templates](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates)。
+- **Resend**：
+  - `POST https://api.resend.com/emails`，`Authorization: Bearer <key>`，体 `{from, to[], subject, text, html?}`，返回 `{id}`，见 [send email](https://resend.com/docs/api-reference/emails/send-email)；
+  - 错误（422 参数错误、403 域名未验证）和限流（429，带 `retry-after`，这里重试 1 次），见 [errors](https://resend.com/docs/api-reference/errors)、[rate limit](https://resend.com/docs/api-reference/rate-limit)。
+- **SMTP**：nodemailer，`secure=true` 走 SMTPS（通常 465），否则强制 STARTTLS（通常 587），见 [nodemailer SMTP](https://nodemailer.com/smtp/)。
+- **LLM**：
+  - Anthropic，见 [Messages](https://platform.claude.com/docs/en/api/messages)、[versioning](https://platform.claude.com/docs/en/api/versioning)、[errors](https://platform.claude.com/docs/en/api/errors)；
+  - Gemini，见 [generateContent](https://ai.google.dev/api/generate-content)、[thinking](https://ai.google.dev/gemini-api/docs/generate-content/thinking)、[API versions](https://ai.google.dev/gemini-api/docs/api-versions)；
+  - OpenAI，见 [chat completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)；
+  - token 用量（F12）：
+    - OpenAI 是 `usage.prompt_tokens`、`usage.completion_tokens`，见 [chat completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)；
+    - Anthropic 是 `usage.input_tokens`、`cache_creation_input_tokens`、`cache_read_input_tokens`、`output_tokens`，其中 `input_tokens` 不含缓存部分，见 [Messages](https://platform.claude.com/docs/en/api/messages) 和 [prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)；
+    - Gemini 是 `usageMetadata.promptTokenCount`、`candidatesTokenCount`、`thoughtsTokenCount`，见 [generateContent](https://ai.google.dev/api/generate-content)；
+  - 识图和语音：
+    - OpenAI：图片用 `image_url` 传 data URL，见 [images-vision](https://developers.openai.com/api/docs/guides/images-vision)。语音用 `POST /audio/transcriptions`，multipart 带 `file` 和 `model`，返回 `{text}`，上限 25MB，见 [speech-to-text](https://developers.openai.com/api/docs/guides/speech-to-text) 和 [transcriptions](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)。ogg 的支持两份官方文档说法不一致：指南页没列 ogg，[Python reference](https://developers.openai.com/api/reference/python/resources/audio/subresources/transcriptions/methods/create) 列了。WhatsApp 的 ogg/opus 语音要用真样本试一次；
+    - Anthropic：图片用 `{type: "image", source: {type: "base64", media_type, data}}`，每张不超过 10MB，不支持音频，见 [vision](https://platform.claude.com/docs/en/build-with-claude/vision)；
+    - Gemini：图片和音频都放进 parts 的 `inlineData: {mimeType, data}`，整个请求 20MB 以内，见 [image understanding](https://ai.google.dev/gemini-api/docs/image-understanding)、[audio](https://ai.google.dev/gemini-api/docs/audio)。

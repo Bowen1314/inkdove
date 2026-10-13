@@ -5,7 +5,7 @@
 1. **知识库**：主 agent 把企业上传的资料（文件 / 网址 / 粘贴文本）蒸馏成「企业画像 + 结构化知识条目 + 缺口清单」，管理员可编辑。
 2. **WhatsApp**：接入 WhatsApp，客户来消息时只依据知识库自动回复；拿不准的不回复，改为通知管理员（SMTP 邮件或指定的 WhatsApp 号），人工可在后台接管和手动回复。
 
-后端和前端由两个人并行开发，**本文件是唯一契约**：路由、字段名、枚举值必须一字不差。有歧义按"最简单、能跑通"处理，并在各自 README 的「偏离规格」一节写明。
+后端和前端由两个人并行开发，**本文件是唯一契约**：路由、字段名、枚举值必须一字不差。有歧义按"最简单、能跑通"处理，并在各自 README 的「偏离规格」一节写明（后端的这一节已挪到 [docs/deviations.md](docs/deviations.md)，前端的仍在 web/README.md）。
 
 ---
 
@@ -308,7 +308,7 @@ Gap：
 
 - 启用时，`POST /api/wa/waha/start` 把代理写进 WAHA session 的配置（字段格式以 WAHA 文档为准，一般是 `config.proxy`，含 server、username、password）。
 - 代理设置在 session 已存在时被改动（包括开关），`PUT /api/settings` 之后要把新配置更新到 WAHA session 并重启它，尽量不丢登录态，具体以文档为准。做不到不丢登录态的话，前端要提示"修改代理需要重新扫码"。
-- 要去 WAHA 文档核实 GOWS 引擎支持哪些代理协议。不支持的协议，PUT 时返回 400 `code:"proxy_protocol_unsupported"`，error 里写明支持哪些。如果 GOWS 只支持一部分，在 README「偏离规格」里写清楚。
+- 要去 WAHA 文档核实 GOWS 引擎支持哪些代理协议。不支持的协议，PUT 时返回 400 `code:"proxy_protocol_unsupported"`，error 里写明支持哪些。如果 GOWS 只支持一部分，在「偏离规格」（[docs/deviations.md](docs/deviations.md)）里写清楚。
 - 代理测试：http/https 用 undici 的 ProxyAgent，socks4/socks5 用 socks-proxy-agent 一类成熟库。
 - docker-compose 给 inkdove 和 waha 两个容器都加上 `extra_hosts: ["host.docker.internal:host-gateway"]`。容器里的 127.0.0.1 指的是容器自己，要用宿主机上的代理，就填 `host.docker.internal`。
 - 代理密码按密钥处理：不回传，不写日志。

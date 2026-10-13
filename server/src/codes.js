@@ -1,5 +1,5 @@
 // 枚举值 → 中文标签（SPEC-phase2 F12）。看板按 code 分组统计，通知和看板共用这里的文案。
-// 枚举值本身和规格一字不差；F15 在 F12 的表外新增了 blocked 的 bad_file 和 handoff 的 file_limit（README 偏离规格第 23 条）。
+// 枚举值本身和规格一字不差；F15 在 F12 的表外新增了 blocked 的 bad_file 和 handoff 的 file_limit（docs/deviations.md 第 23 条）。
 
 /** 处理结果（decisions.decision）。skipped 不写进 decisions 表，这里只为显示 */
 export const DECISION_LABELS = {
