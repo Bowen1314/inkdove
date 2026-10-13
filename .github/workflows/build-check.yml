@@ -1,0 +1,65 @@
+# 手动触发的构建检查：和发版一样用 qemu 建 amd64、arm64 两个镜像，但不推镜像、不建 Release。
+# 每个架构的镜像建好后跑起来看：mihomo 能运行、经 mihomo 能出网，墨鸽能启动、/api/health 正常、版本号对。
+# 用法：GitHub → Actions → 构建检查 → Run workflow，或者 gh workflow run build-check.yml --ref main
+name: 构建检查
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          tags: inkdove:check
+          cache-from: type=gha,scope=check-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=check-${{ matrix.arch }}
+
+      - name: mihomo 能运行
+        run: |
+          docker run --rm --platform linux/${{ matrix.arch }} --entrypoint mihomo inkdove:check -v
+          docker run --rm --platform linux/${{ matrix.arch }} --entrypoint sh inkdove:check -c 'ls -l /usr/local/share/doc/mihomo/ && cat /usr/local/share/doc/mihomo/NOTICE'
+
+      - name: 经 mihomo 能出网
+        run: |
+          mkdir -p "$RUNNER_TEMP/mihomo"
+          printf '%s\n' 'mixed-port: 7890' 'allow-lan: true' 'bind-address: "*"' 'mode: rule' 'log-level: info' 'rules:' '  - MATCH,DIRECT' > "$RUNNER_TEMP/mihomo/config.yaml"
+          docker run -d --name mihomo --platform linux/${{ matrix.arch }} -p 17890:7890 -v "$RUNNER_TEMP/mihomo:/conf" --entrypoint mihomo inkdove:check -d /conf
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null -w '%{http_code}\n' -x http://127.0.0.1:17890 https://www.gstatic.com/generate_204; then ok=1; break; fi
+            sleep 2
+          done
+          docker logs mihomo
+          [ "${ok:-}" = 1 ] || { echo "::error::经 mihomo 访问外网失败"; exit 1; }
+          docker rm -f mihomo
+
+      - name: 墨鸽能启动
+        run: |
+          docker run -d --name inkdove --platform linux/${{ matrix.arch }} -p 8794:8794 inkdove:check
+          want=$(node -p "require('./server/package.json').version")
+          for i in $(seq 1 90); do
+            body=$(curl -fsS http://127.0.0.1:8794/api/health 2>/dev/null) && break
+            sleep 2
+          done
+          docker logs inkdove
+          echo "$body"
+          [ -n "${body:-}" ] || { echo "::error::/api/health 没有响应"; exit 1; }
+          echo "$body" | node -e 'const b = JSON.parse(require("node:fs").readFileSync(0, "utf8")); if (!b.ok || b.version !== process.argv[1]) { console.error(`版本不对：${b.version}，应为 ${process.argv[1]}`); process.exit(1); }' "$want"
+          docker rm -f inkdove

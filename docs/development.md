@@ -42,6 +42,8 @@ npm test           # 全部跑在 mock LLM 和临时数据目录上，不访问�
 
 ## 发新版
 
+改了 Dockerfile 或者镜像里的东西（比如 mihomo）时，发版前先手动跑一次「构建检查」（[.github/workflows/build-check.yml](../.github/workflows/build-check.yml)）：`gh workflow run build-check.yml --ref main`。它建 amd64 和 arm64 两个镜像，跑起来查 mihomo 能不能用、墨鸽能不能启动，不推镜像、不建 Release。
+
 把 `server/package.json` 和 `web/package.json` 的 version 改成新版本号并提交，然后 `git tag v0.2.0 && git push origin v0.2.0`。
 
 推了 `vX.Y.Z` 标签后，GitHub Actions（[.github/workflows/release.yml](../.github/workflows/release.yml)）会：
