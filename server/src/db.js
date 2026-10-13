@@ -422,6 +422,31 @@ CREATE INDEX IF NOT EXISTS conversation_assignments_conv ON conversation_assignm
   db.exec(`${ENTRIES_FTS_DDL}
 CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
 `);
+
+  // ---- 可选的向量检索（后台计算和检索见 kb/vectors.js） ----
+  // 每个条目按 kb/vectors.js 的 entrySegments 分成一段或几段，每段一行（chunk 从 0 起）。kind 现在只有 entry。
+  // model_key：格式 + 接口地址 + 模型名的哈希（ai/embed.js 的 embedModelKey），只用和当前设置一样的行；换了模型，新的算完一行
+  //   就覆盖一行（主键不含 model_key），全部算完后把剩下的旧行删掉。
+  // text_hash：分段后文字的哈希，文字没变就不重算；source_updated_at：算的时候条目的 updated_at，和条目一样就不用再比哈希。
+  // quant：vec 的存法，现在只有 int8：vec 是 dims 个 int8 字节，原值 ≈ int8 × scale（scale = 归一化后最大绝对值 / 127），
+  //   和内存里检索用的是同一份，读出来不用再量化。以后换存法时旧格式的行当作没算过（kb/vectors.js 的 QUANT）。
+  // 条目删除时在同一个事务里删掉（kb/store.js）；停用的留着，重新启用不用重算。
+  db.exec(`CREATE TABLE IF NOT EXISTS embeddings (
+  kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  chunk INTEGER NOT NULL,
+  model_key TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  source_updated_at TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  quant TEXT NOT NULL,
+  scale REAL NOT NULL,
+  vec BLOB NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (kind, ref_id, chunk)
+);
+CREATE INDEX IF NOT EXISTS embeddings_model ON embeddings(model_key, kind);
+`);
 }
 
 /**

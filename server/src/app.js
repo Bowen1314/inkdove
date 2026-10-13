@@ -15,6 +15,7 @@ import { createDistillRunner } from './distill/runner.js';
 import { verifyFileToken } from './files/signed.js';
 import { createFileStore } from './files/store.js';
 import { createKbStore } from './kb/store.js';
+import { createVectorIndexer, VECTOR_DEBOUNCE_MS } from './kb/vectors.js';
 import { createLeadStore, LEADS_SCAN_INTERVAL_MS } from './leads/store.js';
 import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
 import { createRecords, withLlmCallLog } from './records.js';
@@ -64,6 +65,8 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
  *   leadsScanIntervalMs?: number,
+ *   vectorDebounceMs?: number,
+ *   vectorNow?: () => number,
  *   outreachNow?: () => number,
  *   outreachIntervalMs?: () => number,
  *   outreachTickMs?: number,
@@ -98,6 +101,8 @@ export function createApp(config, options = {}) {
     setSettings(next) {
       saveSettings(db, next);
       settings = next;
+      // 向量检索的配置变了：清掉之前的错误重新算，换了模型就全部重算
+      ctx.vectors?.onSettingsChanged();
     },
     updateSettings(fn) {
       const next = structuredClone(settings);
@@ -114,6 +119,7 @@ export function createApp(config, options = {}) {
     // F13：中继只在 compose 内网监听（容器里绑 0.0.0.0，不映射到宿主机端口）
     relays: createRelayManager({ bindHost: options.relayBindHost || '0.0.0.0', log }),
     ai: null,
+    vectors: null,
     distill: null,
     wa: null,
     files: null,
@@ -131,6 +137,10 @@ export function createApp(config, options = {}) {
   const baseAi = config.llmMock ? createMockAi({ delayMs: options.mockDelayMs }) : createRealAi(ctx.getSettings, options.realAiOptions);
   // F12：每次模型调用写一行 llm_calls。包在测试钩子外面，钩子替换的方法也照样记
   ctx.ai = withLlmCallLog({ ...baseAi, ...(options.aiOverrides || {}) }, { mock: config.llmMock, record: (row) => ctx.records.llmCall(row) });
+  // 向量检索（可选）：开着时后台把条目算成向量，回复检索时按意思搜（kb/vectors.js）。条目改动后等 vectorDebounceMs 再算，
+  // 为 0 时不起任何定时器（测试里手动调 ctx.vectors.run()）；vectorNow 是测试用的时钟（算退避）
+  ctx.vectors = createVectorIndexer(ctx, { debounceMs: options.vectorDebounceMs ?? VECTOR_DEBOUNCE_MS, now: options.vectorNow });
+  ctx.vectors.start();
   ctx.distill = createDistillRunner(ctx);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
@@ -283,6 +293,7 @@ export function createApp(config, options = {}) {
     /** 代理中继都拉起来之后 resolve（测试用） */
     ready,
     async close() {
+      await ctx.vectors.close();
       ctx.leads.stop();
       await ctx.outreach.stop();
       ctx.files.close();

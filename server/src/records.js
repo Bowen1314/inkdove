@@ -53,6 +53,8 @@ export const AI_METHOD_PURPOSE = {
   translate: 'translate',
   // 知识库大、命中不足时把客户的话改写成知识库语言的检索词（kb/retrieve.js），在会话里时计入会话每日模型次数
   searchTerms: 'kb_search',
+  // 可选的向量检索（kb/vectors.js）：后台算条目的一批、检索时算查询向量都记，不计入会话每日模型次数
+  embed: 'embedding',
   test: 'test',
 };
 

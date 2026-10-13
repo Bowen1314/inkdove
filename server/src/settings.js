@@ -1,10 +1,15 @@
-// 全局设置（第二期）：只剩 llm、reply、media、leads、email、branding、pricing、outreach、suggest。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
 import { kvGet, kvSet } from './db.js';
 import { badRequest, isPlainObject } from './util.js';
 
 export const DEFAULT_META_API_VERSION = 'v26.0';
 export const LLM_FORMATS = ['openai', 'anthropic', 'gemini'];
 export const EMAIL_PROVIDERS = [null, 'smtp', 'resend'];
+/** 向量检索用哪个服务：llm 是和回复模型同一个（格式、地址、密钥都用回复模型的），custom 是单独配置 */
+export const EMBEDDING_SOURCES = ['llm', 'custom'];
+/** 向量接口的格式（Anthropic 没有向量接口） */
+export const EMBEDDING_FORMATS = ['openai', 'gemini'];
+export const EMBEDDING_DEFAULTS = Object.freeze({ enabled: false, source: 'llm', format: 'openai', baseUrl: '', apiKey: '', model: '' });
 
 /** @param {import('./config.js').Config} config */
 function defaults(config) {
@@ -16,6 +21,8 @@ function defaults(config) {
       model: config.llmInit.model,
       distillModel: config.llmInit.distillModel,
     },
+    // 可选的向量检索（按意思搜，kb/vectors.js），默认关
+    embedding: { ...EMBEDDING_DEFAULTS },
     reply: {
       persona: '',
       debounceSeconds: 4,
@@ -182,6 +189,12 @@ export function loadSettings(db, config) {
     s.outreach = { ...OUTREACH_DEFAULTS };
   }
   if (typeof s.suggest.companyPrompt !== 'string') s.suggest.companyPrompt = '';
+  // 存坏了的向量检索设置：字段逐个回到默认值
+  const em = s.embedding;
+  if (typeof em.enabled !== 'boolean') em.enabled = false;
+  if (!EMBEDDING_SOURCES.includes(em.source)) em.source = EMBEDDING_DEFAULTS.source;
+  if (!EMBEDDING_FORMATS.includes(em.format)) em.format = EMBEDDING_DEFAULTS.format;
+  for (const k of ['baseUrl', 'apiKey', 'model']) if (typeof em[k] !== 'string') em[k] = '';
   return s;
 }
 
@@ -232,6 +245,15 @@ export function publicSettings(s, config) {
       apiKeySet: !!key,
       apiKeyLast4: last4(key),
     },
+    embedding: {
+      enabled: s.embedding.enabled,
+      source: s.embedding.source,
+      format: s.embedding.format,
+      baseUrl: s.embedding.baseUrl,
+      model: s.embedding.model,
+      apiKeySet: !!s.embedding.apiKey,
+      apiKeyLast4: last4(s.embedding.apiKey),
+    },
     reply: {
       persona: s.reply.persona,
       debounceSeconds: s.reply.debounceSeconds,
@@ -276,11 +298,64 @@ export function checkLlmFormat(v) {
   return v;
 }
 
-/** 接口地址校验：去掉首尾空白；非空时必须是 http(s)（设置保存和获取模型列表共用） */
-export function checkLlmBaseUrl(v) {
-  const s = str(v, 'llm.baseUrl', 500).trim();
-  if (s && !/^https?:\/\//i.test(s)) throw badRequest('llm.baseUrl 必须以 http:// 或 https:// 开头');
+/** 接口地址校验：去掉首尾空白；非空时必须是 http(s)。错误信息以 field 开头 */
+export function checkBaseUrl(v, field) {
+  const s = str(v, field, 500).trim();
+  if (s && !/^https?:\/\//i.test(s)) throw badRequest(`${field} 必须以 http:// 或 https:// 开头`);
   return s;
+}
+
+/** 回复模型的接口地址（设置保存和获取模型列表共用） */
+export const checkLlmBaseUrl = (v) => checkBaseUrl(v, 'llm.baseUrl');
+
+/**
+ * 向量检索设置的字段校验（不做「开着时必须填什么」的交叉检查，那个在 applySettingsPatch 里）。设置保存和测试接口共用。
+ * 错误信息以 embedding.<字段> 开头，前端靠它把错误放到对应字段下面。
+ * @param {any} current 现在的 embedding 设置
+ * @param {any} p 要改的字段
+ * @returns 改好的完整 embedding 设置（不改动入参）
+ */
+export function checkEmbeddingPatch(current, p) {
+  if (!isPlainObject(p)) throw badRequest('embedding 必须是对象');
+  const e = { ...current };
+  if (p.enabled !== undefined) e.enabled = boolField(p.enabled, 'embedding.enabled');
+  if (p.source !== undefined) {
+    if (!EMBEDDING_SOURCES.includes(p.source)) throw badRequest('embedding.source 只能是 llm（和回复模型同一个）或 custom（单独配置）');
+    e.source = p.source;
+  }
+  if (p.format !== undefined) {
+    if (!EMBEDDING_FORMATS.includes(p.format)) throw badRequest('embedding.format 只能是 openai 或 gemini');
+    e.format = p.format;
+  }
+  if (p.baseUrl !== undefined) e.baseUrl = checkBaseUrl(p.baseUrl, 'embedding.baseUrl');
+  if (p.model !== undefined) e.model = str(p.model, 'embedding.model', 200).trim();
+  if (p.apiKey !== undefined) e.apiKey = str(p.apiKey, 'embedding.apiKey', 1000).trim();
+  return e;
+}
+
+/**
+ * 向量检索实际用的接口。source=llm 时格式、地址、密钥用回复模型的（回复模型是 Anthropic 时用不了），模型都用 embedding.model。
+ * 不管开没开都算，开关由调用方看。
+ * @param {{llm:any, embedding:any}} s
+ * @returns {{ok:true, format:string, baseUrl:string, apiKey:string, model:string} | {ok:false, error:string, field:string}}
+ *   field：哪个字段的问题（前端放错误用）
+ */
+export function resolveEmbeddingConfig(s) {
+  const e = s.embedding;
+  const model = String(e.model || '').trim();
+  let cfg;
+  if (e.source === 'custom') {
+    cfg = { format: e.format, baseUrl: String(e.baseUrl || '').trim(), apiKey: e.apiKey || '' };
+    if (!cfg.baseUrl) return { ok: false, error: '还没有填写向量接口的地址', field: 'baseUrl' };
+  } else {
+    if (!EMBEDDING_FORMATS.includes(s.llm.format)) {
+      return { ok: false, error: '回复模型是 Anthropic 格式，Anthropic 没有向量接口，请选「单独配置」', field: 'source' };
+    }
+    cfg = { format: s.llm.format, baseUrl: String(s.llm.baseUrl || '').trim(), apiKey: s.llm.apiKey || '' };
+    if (!cfg.baseUrl) return { ok: false, error: '回复模型还没有填接口地址，请先填好或选「单独配置」', field: 'source' };
+  }
+  if (!model) return { ok: false, error: '还没有填写向量模型', field: 'model' };
+  return { ok: true, ...cfg, model };
 }
 
 export const BRAND_TITLE_MAX = 40;
@@ -309,6 +384,24 @@ export function applySettingsPatch(current, patch) {
     if (p.model !== undefined) s.llm.model = str(p.model, 'llm.model', 200).trim();
     if (p.distillModel !== undefined) s.llm.distillModel = str(p.distillModel, 'llm.distillModel', 200).trim();
     if (p.apiKey !== undefined) s.llm.apiKey = str(p.apiKey, 'llm.apiKey', 1000).trim();
+  }
+
+  if (patch.embedding !== undefined) s.embedding = checkEmbeddingPatch(s.embedding, patch.embedding);
+  // 向量检索开着时：用回复模型的服务就不能是 Anthropic（改回复模型的接口格式时也查），单独配置要有地址，都要有模型名。
+  // 只在这次改动涉及 embedding 或回复模型的接口格式时检查（不影响只改别的设置）
+  if ((patch.embedding !== undefined || patch.llm?.format !== undefined) && s.embedding.enabled) {
+    if (s.embedding.source === 'llm' && !EMBEDDING_FORMATS.includes(s.llm.format)) {
+      throw badRequest(
+        patch.embedding !== undefined
+          ? '回复模型是 Anthropic 格式，Anthropic 没有向量接口：向量检索请选「单独配置」'
+          : '向量检索在用回复模型的服务，Anthropic 没有向量接口：请先把向量检索改成「单独配置」或关掉，再换接口格式',
+        'embedding_unsupported_for_format',
+      );
+    }
+    if (s.embedding.source === 'custom' && !s.embedding.baseUrl) {
+      throw badRequest('embedding.baseUrl 开启向量检索并单独配置时必须填写接口地址', 'embedding_base_url_required');
+    }
+    if (!s.embedding.model) throw badRequest('embedding.model 开启向量检索时必须填写向量模型', 'embedding_model_required');
   }
 
   if (patch.reply !== undefined) {

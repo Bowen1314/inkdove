@@ -77,6 +77,19 @@ export function kbRouter(ctx, auth) {
 
   router.get('/stats', (_req, res) => res.json(kb.stats()));
 
+  // 向量检索（可选，kb/vectors.js）：进度和状态、全部清掉重算、出错停下后马上再试。只有 admin（和设置页一样）
+  router.get('/vectors', admin, (_req, res) => res.json(ctx.vectors.status()));
+  router.post('/vectors/rebuild', admin, (_req, res) => {
+    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索没有开启', 'embedding_disabled');
+    ctx.vectors.rebuild();
+    res.json(ctx.vectors.status());
+  });
+  router.post('/vectors/retry', admin, (_req, res) => {
+    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索没有开启', 'embedding_disabled');
+    ctx.vectors.retry();
+    res.json(ctx.vectors.status());
+  });
+
   router.get('/gaps', admin, (req, res) => {
     const status = req.query.status ? String(req.query.status) : '';
     if (status && !GAP_STATUSES.includes(status)) throw badRequest('status 不正确');

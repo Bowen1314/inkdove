@@ -17,6 +17,8 @@ export const MAX_CUSTOMER_MESSAGE = 2000;
 export const MAX_BUSINESS_REPLY = 1000;
 export const MAX_SMALLTALK_REPLY = 150;
 export const CATEGORIES = ['business', 'smalltalk', 'offtopic', 'handoff', 'declined'];
+/** 用上按意思搜时，挑文件的查询里加进前几个条目的标题 */
+const FILE_QUERY_TITLES = 5;
 
 /** F2c handoff_type → F12 的 handoff code：六个值同名对应，其余记 other */
 export const handoffCodeOf = (type) => (HANDOFF_TYPES.includes(type) ? type : 'other');
@@ -41,7 +43,8 @@ export function normalizeFileIds(ids) {
  * 发的消息，一起参与检索（比如"我来讲一下怎么注册"能找到注册的条目），裁剪后作为 extra 返回；自动回复和转人工草稿不传，检索不变。
  * 检索词的优先级：message 和 extraQuery 最先，再是最近的客户消息（越近越先）。
  * searchRewrite：知识库大、命中不足时允不允许调一次模型改写检索词（跨语言），调了的话 searchCalls 是 1，调用方要计入会话的
- * 每日模型次数；改写出来的词（searchTerms）也用来挑文件。
+ * 每日模型次数；改写出来的词（searchTerms）也用来挑文件。用上了按意思搜（向量检索）时，排在最前的几个条目的标题也加进
+ * 挑文件的查询（不改写时靠它把客户的外语问题和知识库语言的文件名对上）。
  * @param {any} ctx
  * @param {{message:string, history?:{role:'customer'|'bot', text:string}[], extraQuery?:string[], searchRewrite?:boolean}} input
  */
@@ -51,7 +54,8 @@ export async function buildReplyContext(ctx, { message, history = [], extraQuery
   const recentCustomer = hist.filter((h) => h.role === 'customer').slice(-3).map((h) => h.text);
   const extra = extraQuery.map((s) => clip(s, MAX_CUSTOMER_MESSAGE));
   const found = await selectEntries(ctx, { texts: [[msg, ...extra].join('\n'), ...[...recentCustomer].reverse()], rewrite: searchRewrite });
-  const query = [...recentCustomer, msg, ...extra, ...found.rewriteTerms].join('\n');
+  const bridge = found.vector ? found.entries.slice(0, FILE_QUERY_TITLES).map((e) => e.title) : [];
+  const query = [...recentCustomer, msg, ...extra, ...found.rewriteTerms, ...bridge].join('\n');
   const activeFiles = ctx.files ? ctx.files.activeFiles() : [];
   const { files, truncated } = selectContextFiles(activeFiles, query);
   return {

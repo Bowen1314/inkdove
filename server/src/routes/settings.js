@@ -1,23 +1,30 @@
-// 全局设置（仅 admin）：LLM、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）。
+// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import multer from 'multer';
 import { listModels, MOCK_MODELS, normalizeModels, redactKey } from '../ai/models.js';
+import { llmScope } from '../records.js';
 import {
   applySettingsPatch,
+  checkEmbeddingPatch,
   checkLlmBaseUrl,
   checkLlmFormat,
   emailConfigured,
   llmConfigured,
   logoMeta,
   publicSettings,
+  resolveEmbeddingConfig,
   str,
 } from '../settings.js';
 import { badRequest, HttpError, isPlainObject, notFound } from '../util.js';
 
 const MAX_LOGO_BYTES = 512 * 1024;
+/** 测试向量接口时算的那段话 */
+const EMBED_TEST_TEXT = '你好，请问这款产品的价格和交货期是多少？ Hello, what is the price and lead time?';
+/** 测试向量接口最多等多久 */
+const EMBED_TEST_TIMEOUT_MS = 20_000;
 const LOGO_TYPE_MESSAGE = '只支持 PNG、JPG、WebP 或 SVG 图片';
 
 /** logo 文件所在目录 */
@@ -157,6 +164,40 @@ export function settingsRouter(ctx) {
     } catch (err) {
       // listModels 已经抹过密钥，这里再兜一次底
       res.json({ ok: false, error: redactKey(err?.message || err, apiKey) });
+    }
+  });
+
+  // 向量检索：用设置页表单里当前（可能还没保存）的值试算一个向量，回维度和耗时。没传、null 或空着的字段用已保存的值
+  // （密钥通常不传）。字段不合法回 400；其余成功失败都回 200，失败时 kind 说是哪类问题（config、network、timeout、auth、
+  // not_found、rate_limit、server、bad_request、bad_response），错误信息里不带密钥。llm_calls 记成「测试连接」
+  router.post('/embedding/test', async (req, res) => {
+    const b = isPlainObject(req.body) ? req.body : {};
+    const s = ctx.getSettings();
+    const draft = {};
+    for (const f of ['source', 'format', 'baseUrl', 'model', 'apiKey']) {
+      const v = b[f];
+      if (v === undefined || v === null || (typeof v === 'string' && !v.trim() && f === 'apiKey')) continue;
+      draft[f] = v;
+    }
+    const embedding = checkEmbeddingPatch(s.embedding, draft);
+    const cfg = ctx.config.llmMock
+      ? { ok: true, format: 'mock', baseUrl: '', apiKey: '', model: embedding.model || 'mock' }
+      : resolveEmbeddingConfig({ llm: s.llm, embedding });
+    if (!cfg.ok) {
+      res.json({ ok: false, error: cfg.error, kind: 'config', field: cfg.field });
+      return;
+    }
+    const started = Date.now();
+    try {
+      const r = await llmScope({ accountId: null, conversationId: null, purpose: 'test' }, () =>
+        ctx.ai.embed({ texts: [EMBED_TEST_TEXT], task: 'query', config: cfg, timeoutMs: EMBED_TEST_TIMEOUT_MS }),
+      );
+      const dims = r?.vectors?.[0]?.length || r?.dims || 0;
+      if (!dims) throw Object.assign(new Error('向量接口没有返回向量'), { kind: 'bad_response' });
+      res.json({ ok: true, dims, model: cfg.model, latencyMs: Date.now() - started });
+    } catch (err) {
+      // embed.js 已经抹过密钥，这里再兜一次底
+      res.json({ ok: false, error: redactKey(err?.message || err, cfg.apiKey), kind: typeof err?.kind === 'string' ? err.kind : 'error' });
     }
   });
 

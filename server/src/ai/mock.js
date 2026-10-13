@@ -1,5 +1,5 @@
 // INKDOVE_LLM_MOCK=1 时使用的确定性假实现。不发任何网络请求。
-import { bm25Rank, entrySearchText, normKey } from '../kb/search.js';
+import { bm25Rank, entrySearchText, normKey, tokenize } from '../kb/search.js';
 import { CLICHE_TERMS, findTerms } from '../reply/redlines.js';
 import { clip, sleep } from '../util.js';
 
@@ -215,6 +215,11 @@ export function createMockAi(opts = {}) {
       return { terms };
     },
 
+    /** 向量 mock：每段文字按 mockEmbedding 算一个 256 维的假向量，不发网络请求 */
+    async embed({ texts = [] }) {
+      return { vectors: texts.map(mockEmbedding), dims: MOCK_EMBED_DIMS, inputTokens: null, model: 'mock' };
+    },
+
     /** 一键翻译 mock：按客户消息里的字符判断语言（见 mockLanguage）；和原文同一种语言时原样返回，否则返回"[译成 X] 原文" */
     async translate({ text, customerMessages = [] }) {
       await wait();
@@ -250,6 +255,34 @@ export function createMockAi(opts = {}) {
     },
   };
   return ai;
+}
+
+/** 演示模式的向量维度 */
+export const MOCK_EMBED_DIMS = 256;
+
+/**
+ * 演示模式的确定性假向量：按 kb/search.js 的 tokenize 切词，每个词用 FNV-1a 哈希到 256 维里的一维（另一位哈希定正负），
+ * 再归一化。共用的词越多越接近，相当于一个很粗的词袋，只为让流程跑通。
+ * @param {string} text
+ * @returns {Float32Array}
+ */
+export function mockEmbedding(text) {
+  const v = new Float32Array(MOCK_EMBED_DIMS);
+  for (const t of tokenize(text)) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < t.length; i++) {
+      h ^= t.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    v[h % MOCK_EMBED_DIMS] += (h >>> 16) & 1 ? 1 : -1;
+  }
+  let sum = 0;
+  for (const x of v) sum += x * x;
+  if (sum) {
+    const inv = 1 / Math.sqrt(sum);
+    for (let i = 0; i < v.length; i++) v[i] *= inv;
+  }
+  return v;
 }
 
 /** 检索改写 mock 的词表：[外语词（小写、去掉重音符号）, 中文检索词] */

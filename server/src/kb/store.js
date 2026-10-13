@@ -121,11 +121,25 @@ export function ensureEntryIndex(db, log) {
 
 /**
  * 创建时总是先做一次全文索引自检（ensureEntryIndex），对不上就重建。
+ * 条目变了（增、改、删、整理资料时批量删）会在事务提交之后通知 onChange 登记的回调（向量检索的后台计算用）：
+ * {type:'insert'|'update', entry} / {type:'delete', id} / {type:'bulk_delete'}。
  * @param {import('better-sqlite3').Database} db
  * @param {{log?: {info: Function, warn: Function}}} [opts] log：自检重建、检索出错时写日志，不传就不写
  */
 export function createKbStore(db, { log } = {}) {
   ensureEntryIndex(db, log);
+  /** @type {Set<(ev:any) => void>} */
+  const listeners = new Set();
+  const emit = (ev) => {
+    for (const fn of listeners) {
+      try {
+        fn(ev);
+      } catch (err) {
+        log?.warn?.(`[kb] 条目变动的回调出错：${err?.message || err}`);
+      }
+    }
+  };
+  const deleteVectors = db.prepare("DELETE FROM embeddings WHERE kind = 'entry' AND ref_id = ?");
   const getEntryRow = db.prepare('SELECT * FROM entries WHERE id = ?');
   const rowidOf = db.prepare('SELECT rowid FROM entries WHERE id = ?').pluck();
   const ftsDelete = db.prepare('DELETE FROM entries_fts WHERE rowid = ?');
@@ -146,6 +160,15 @@ export function createKbStore(db, { log } = {}) {
   const countActive = db.prepare("SELECT COUNT(*) FROM entries WHERE status = 'active'").pluck();
 
   const store = {
+    /**
+     * 登记条目变动的回调，返回取消登记的函数。回调在写库的事务提交之后同步调用，出错只记日志
+     * @param {(ev:any) => void} fn
+     */
+    onChange(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+
     getEntry(id) {
       const r = getEntryRow.get(id);
       return r ? rowToEntry(r) : null;
@@ -175,6 +198,25 @@ export function createKbStore(db, { log } = {}) {
 
     activeEntries() {
       return activeInOrder.all().map(rowToEntry);
+    },
+
+    /** active 条目有几条 */
+    countActive() {
+      return countActive.get();
+    },
+
+    /**
+     * 按 id 取条目，顺序和 ids 一样，不存在的（或状态不对的）跳过
+     * @param {string[]} ids
+     * @param {{status?:string|null}} [o] status：只要这个状态的，null 是不管状态
+     */
+    entriesByIds(ids, { status = 'active' } = {}) {
+      if (!ids.length) return [];
+      const rows = db
+        .prepare(`SELECT * FROM entries WHERE id IN (SELECT value FROM json_each(?))${status ? ' AND status = ?' : ''}`)
+        .all(...(status ? [JSON.stringify(ids), status] : [JSON.stringify(ids)]));
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      return ids.map((id) => byId.get(id)).filter(Boolean).map(rowToEntry);
     },
 
     /**
@@ -309,6 +351,7 @@ export function createKbStore(db, { log } = {}) {
           );
         indexEntry(lastInsertRowid, entry);
       })();
+      emit({ type: 'insert', entry });
       return entry;
     },
 
@@ -332,26 +375,34 @@ export function createKbStore(db, { log } = {}) {
         );
         indexEntry(rowidOf.get(id), next);
       })();
+      emit({ type: 'update', entry: next });
       return next;
     },
 
+    /** 删条目，连同全文索引和向量 */
     deleteEntry(id) {
-      return db.transaction(() => {
+      const ok = db.transaction(() => {
         const rowid = rowidOf.get(id);
         if (rowid === undefined) return false;
         ftsDelete.run(rowid);
         stateDelete.run(rowid);
+        deleteVectors.run(id);
         return db.prepare('DELETE FROM entries WHERE rowid = ?').run(rowid).changes > 0;
       })();
+      if (ok) emit({ type: 'delete', id });
+      return ok;
     },
 
-    /** 全部重建前删掉所有蒸馏出来的条目（连同索引），返回删了几条 */
+    /** 全部重建前删掉所有蒸馏出来的条目（连同索引和向量），返回删了几条 */
     deleteDistillEntries() {
-      return db.transaction(() => {
+      const n = db.transaction(() => {
         db.prepare("DELETE FROM entries_fts WHERE rowid IN (SELECT rowid FROM entries WHERE origin = 'distill')").run();
         db.prepare("DELETE FROM entries_fts_state WHERE entry_rowid IN (SELECT rowid FROM entries WHERE origin = 'distill')").run();
+        db.prepare("DELETE FROM embeddings WHERE kind = 'entry' AND ref_id IN (SELECT id FROM entries WHERE origin = 'distill')").run();
         return db.prepare("DELETE FROM entries WHERE origin = 'distill'").run().changes;
       })();
+      if (n) emit({ type: 'bulk_delete' });
+      return n;
     },
 
     stats() {

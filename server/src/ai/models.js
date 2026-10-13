@@ -13,8 +13,8 @@ export const MOCK_MODELS = [
 const GEMINI_MAX_PAGES = 5;
 const ERROR_MAX_CHARS = 200;
 
-// 连不上时常见的错误码 → 中文说明
-const CONNECT_ERRORS = {
+// 连不上时常见的错误码 → 中文说明（向量接口 ai/embed.js 也用）
+export const CONNECT_ERRORS = {
   ECONNREFUSED: '连接被拒绝',
   ENOTFOUND: '域名解析失败',
   EAI_AGAIN: '域名解析失败',
@@ -52,7 +52,7 @@ export function normalizeModels(list) {
 }
 
 /** 从服务商的错误响应里取可读信息（JSON 的 error.message / error / message，否则原文） */
-function providerMessage(text, statusText) {
+export function providerMessage(text, statusText) {
   let msg = '';
   try {
     const j = JSON.parse(text);

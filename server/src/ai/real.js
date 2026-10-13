@@ -1,4 +1,6 @@
+import { embedTexts, EmbedError } from './embed.js';
 import { chat, extractJson, LlmError, transcribe } from './llm.js';
+import { resolveEmbeddingConfig } from '../settings.js';
 import { formatEntryForContext } from '../kb/search.js';
 import { reportLlmCall } from '../records.js';
 import {
@@ -27,6 +29,9 @@ const DISTILL_TIMEOUT = 180_000;
 const MEDIA_TIMEOUT = 120_000;
 /** 检索改写挡在生成回复前面，等太久不如不改写 */
 const SEARCH_TIMEOUT = 20_000;
+/** 向量：后台算条目的一批（几十段）最多等 60 秒；检索时的查询向量挡在生成回复前面，最多等 8 秒 */
+const EMBED_DOC_TIMEOUT = 60_000;
+const EMBED_QUERY_TIMEOUT = 8_000;
 
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' || typeof x === 'number').map(String) : []);
 const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
@@ -259,6 +264,25 @@ export function createRealAi(getSettings, opts = {}) {
       const list = Array.isArray(data) ? data : data?.terms;
       if (!Array.isArray(list)) throw new LlmError('检索词改写结果无法解析');
       return { terms: strList(list) };
+    },
+
+    /**
+     * 向量（可选的向量检索，kb/vectors.js）：用设置里的向量接口（或 config 指定的，测试接口用）算一批文字的向量，只发一次请求不重试。
+     * 返回 {vectors（已归一化的 Float32Array）, dims, inputTokens, model}；错误都是 EmbedError（带 kind）。
+     * llm_calls 记 embedding：格式和模型是向量接口的，token 只有输入（Gemini 的旧版本或代理没给用量时记 null）。
+     * @param {{texts:string[], task?:'document'|'query', signal?:AbortSignal, timeoutMs?:number, config?:any}} o
+     */
+    async embed({ texts, task = 'document', signal, timeoutMs, config }) {
+      const cfg = config || resolveEmbeddingConfig(getSettings());
+      if (!cfg.ok) throw new EmbedError(cfg.error, 'config');
+      reportLlmCall({ format: cfg.format, model: cfg.model });
+      const r = await embedTexts(cfg, texts, {
+        task,
+        signal,
+        timeoutMs: timeoutMs ?? (task === 'query' ? EMBED_QUERY_TIMEOUT : EMBED_DOC_TIMEOUT),
+      });
+      reportLlmCall({ inputTokens: r.inputTokens, outputTokens: null });
+      return r;
     },
 
     /** 会话输入框的一键翻译（用回复模型）：按客户最近的文字消息判断语言，直译业务员写的话。返回 {language, translation} */

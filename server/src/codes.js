@@ -79,7 +79,8 @@ export const NOTIFY_REASONS = {
 /**
  * 模型调用的用途（llm_calls.purpose）。规格的列表外新增的：file_describe 是 F15 给产品资料写描述；
  * translate 是会话输入框的一键翻译（后台人工把要发的文字翻成客户的语言），不计入会话每日模型次数；
- * kb_search 是知识库大、命中不足时把客户的话改写成知识库语言的检索词（kb/retrieve.js）。
+ * kb_search 是知识库大、命中不足时把客户的话改写成知识库语言的检索词（kb/retrieve.js）；
+ * embedding 是可选的向量检索调向量接口（后台算条目、检索时算查询向量，kb/vectors.js），不计入会话每日模型次数。
  */
 export const LLM_PURPOSES = {
   reply: '生成回复',
@@ -94,6 +95,7 @@ export const LLM_PURPOSES = {
   redteam: '红线体检',
   translate: '翻译',
   kb_search: '知识库检索改写',
+  embedding: '向量检索',
   test: '测试连接',
 };
 export const purposeLabel = (p) => LLM_PURPOSES[p] ?? p;

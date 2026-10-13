@@ -57,6 +57,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     // F11：外联不启动定时检查（要测时手动调 ctx.outreach.tick()），两条之间不等
     outreachTickMs: 0,
     outreachIntervalMs: () => 0,
+    // 向量检索：不自动跑后台计算（要测时手动调 ctx.vectors.run()）
+    vectorDebounceMs: 0,
     // 在线更新：不启动定时检查，GitHub 指向连不上的端口，绝不访问外网
     updateCheckIntervalMs: 0,
     githubApiUrl: 'http://127.0.0.1:9',
@@ -540,7 +542,7 @@ export async function startFakeMeta() {
  * 可替换的 AI 钩子：默认走 mock，测试里给 hooks.generate / hooks.review / hooks.draft … 赋值来控制输出，
  * 并统计调用次数（hooks.calls.<名字>），hooks.args.<名字> 记最后一次的参数。
  */
-const HOOKED = ['generate', 'review', 'draft', 'suggest', 'kbDraft', 'describeImage', 'transcribe', 'describeFile', 'searchTerms'];
+const HOOKED = ['generate', 'review', 'draft', 'suggest', 'kbDraft', 'describeImage', 'transcribe', 'describeFile', 'searchTerms', 'embed'];
 export async function aiHooks() {
   const { createMockAi } = await import('../src/ai/mock.js');
   const mock = createMockAi({ delayMs: 0 });

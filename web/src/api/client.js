@@ -135,6 +135,8 @@ export const api = {
   getSettings: (o) => get('/api/settings', o),
   putSettings: (patch, o) => put('/api/settings', patch, o),
   testLlm: () => post('/api/settings/llm/test', {}),
+  /** 向量检索：用表单里当前（可能没保存）的值试算一个向量 → {ok, dims, model, latencyMs} 或 {ok:false, error, kind} */
+  testEmbedding: (body) => post('/api/settings/embedding/test', body),
   testEmail: (to) => post('/api/settings/email/test', { to }),
 
   // 资料
@@ -185,6 +187,12 @@ export const api = {
   updateEntry: (id, patch) => put(`/api/kb/entries/${enc(id)}`, patch),
   deleteEntry: (id) => del(`/api/kb/entries/${enc(id)}`),
   kbStats: (o) => get('/api/kb/stats', o),
+  /** 向量检索的进度和状态（admin）→ {enabled, state, running, activeEntries, embeddedEntries, lastError, …} */
+  getVectorStatus: (o) => get('/api/kb/vectors', o),
+  /** 全部清掉重算（admin），返回新的状态 */
+  rebuildVectors: () => post('/api/kb/vectors/rebuild', {}),
+  /** 停下或等待重试时马上再试（admin），返回新的状态 */
+  retryVectors: () => post('/api/kb/vectors/retry', {}),
   listGaps: (status = 'open', o) => get('/api/kb/gaps', { ...o, query: { status } }),
   answerGap: (id, answer) => post(`/api/kb/gaps/${enc(id)}/answer`, { answer }),
   dismissGap: (id) => post(`/api/kb/gaps/${enc(id)}/dismiss`, {}),
