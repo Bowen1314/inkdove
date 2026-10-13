@@ -1748,6 +1748,8 @@
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   font-size: 11px;
+  /* 不继承全站 20px 行高：圆圈去掉边框只剩 18px，行高比它高时数字会被挤得偏下 */
+  line-height: 1;
   font-variant-numeric: tabular-nums;
 }
 .steps__item.is-done .steps__index {
