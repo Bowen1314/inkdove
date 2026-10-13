@@ -61,6 +61,14 @@
   border: 1px solid var(--border);
 }
 
+/* 长文本框下面的字数（推荐回复的公司话术），靠右 */
+.settings-page__count {
+  align-self: flex-end;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+
 /* 标签下面说明里的第二行（不支持的原因等） */
 .settings-page__note {
   margin-top: var(--sp-1);

@@ -4,7 +4,7 @@ import { Download, MoreHorizontal, Plus, Smartphone, Upload } from 'lucide-react
 import { api } from '../../api/client.js';
 import { toast } from '../../ui/toastBus.js';
 import { Modal, useConfirm } from '../../ui/Modal.jsx';
-import { Callout, EmptyState, ErrorState, Field, fieldProps, PageHeader, Spinner, Switch } from '../../ui/common.jsx';
+import { Callout, EmptyState, ErrorState, Field, fieldProps, PageHeader, Spinner } from '../../ui/common.jsx';
 import { CellText, DataTable, TableToolbar } from '../../ui/DataTable.jsx';
 import { Select } from '../../ui/Select.jsx';
 import { Menu, Tooltip } from '../../ui/Popover.jsx';
@@ -12,7 +12,7 @@ import { StatusDot } from '../../ui/StatusDot.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAuth } from '../../lib/auth.jsx';
 import { invalidateAccounts, isConnected, patchAccountCache, useAccounts } from '../../lib/accounts.js';
-import { CHANNEL_LABEL, waState } from '../../lib/labels.js';
+import { CHANNEL_LABEL, REPLY_MODES, replyModeLabel, replyModeOf, waState } from '../../lib/labels.js';
 import { fmtDay, fmtHm } from '../../lib/format.js';
 
 export const CHANNEL_OPTIONS = [
@@ -343,18 +343,25 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
   );
 }
 
-/** 行内的自动回复开关：直接调接口，结束后以服务端返回为准 */
-function AutoReplySwitch({ account }) {
-  const [pending, setPending] = useState(null);
-  const toggling = pending !== null;
-  const on = toggling ? pending : !!account.autoReply;
+const MODE_OPTIONS = REPLY_MODES.map(({ value, label }) => ({ value, label }));
+const modeOrder = (a) => REPLY_MODES.findIndex((m) => m.value === replyModeOf(a));
 
-  const toggle = async (next) => {
+/**
+ * 回复方式列。admin：行内下拉（和原来的自动回复开关一样即时生效，以服务端返回为准）；agent：只显示文字（改号的设置是 403）。
+ * 下拉的选项浮层挂在 body 上，React 事件仍会冒泡到表格行，这里拦住，免得选完就打开了号详情。
+ */
+function ReplyModeCell({ account, editable }) {
+  const [pending, setPending] = useState(null);
+  const saved = replyModeOf(account);
+  if (!editable) return <span className="nowrap">{replyModeLabel(saved)}</span>;
+
+  const change = async (next) => {
+    if (next === saved || pending) return;
     setPending(next);
     try {
-      const res = await api.putAccount(account.id, { autoReply: next });
-      patchAccountCache(res && res.id ? res : { id: account.id, autoReply: next });
-      toast.success(next ? `「${account.name}」自动回复已开启` : `「${account.name}」自动回复已关闭`);
+      const res = await api.putAccount(account.id, { replyMode: next });
+      patchAccountCache(res && res.id ? res : { id: account.id, replyMode: next, autoReply: next === 'auto' });
+      toast.success(`「${account.name}」的回复方式已改为「${replyModeLabel(next)}」`);
     } catch {
       // 已提示
     } finally {
@@ -363,9 +370,18 @@ function AutoReplySwitch({ account }) {
   };
 
   return (
-    <span className="numbers-table__switch">
-      <Switch checked={on} onChange={toggle} disabled={toggling} label={`「${account.name}」自动回复`} />
-      {toggling && <Spinner />}
+    <span className="numbers-table__mode" onClick={(e) => e.stopPropagation()}>
+      <Select
+        size="sm"
+        className="select--auto"
+        value={pending ?? saved}
+        onChange={change}
+        options={MODE_OPTIONS}
+        placeholder="—"
+        disabled={pending !== null}
+        aria-label={`「${account.name}」的回复方式`}
+      />
+      {pending !== null && <Spinner />}
     </span>
   );
 }
@@ -455,11 +471,11 @@ export default function NumbersTab() {
       },
     },
     {
-      key: 'autoReply',
-      header: '自动回复',
+      key: 'replyMode',
+      header: '回复方式',
       shrink: true,
-      sortValue: (a) => (a.autoReply ? 1 : 0),
-      render: (a) => <AutoReplySwitch account={a} />,
+      sortValue: modeOrder,
+      render: (a) => <ReplyModeCell account={a} editable={isAdmin} />,
     },
     isAdmin && {
       key: 'agents',
@@ -578,7 +594,7 @@ export default function NumbersTab() {
         title={isAdmin ? '还没有添加号码' : '还没有分配给你的号码'}
         desc={
           isAdmin
-            ? '添加一个 WhatsApp 号，扫码或接入 Meta 官方接口后，机器人就能开始回复客户。一个企业可以接多个号，共用同一个知识库。'
+            ? '添加一个 WhatsApp 号，扫码或接入 Meta 官方接口后，AI 就能帮你推荐回复或自动回复客户。一个企业可以接多个号，共用同一个知识库。'
             : '请联系管理员把号码分配给你。'
         }
         action={addButton}

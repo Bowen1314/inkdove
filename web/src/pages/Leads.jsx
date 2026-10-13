@@ -519,10 +519,13 @@ export default function Leads() {
           searchPlaceholder="搜索名字、公司、号码"
           count={leads && !error ? leads.length : undefined}
           end={
-            <a className="btn btn--sm" href={api.leadsExportUrl({ q: q.trim(), stage, accountId })} download>
-              <Download />
-              导出 CSV
-            </a>
+            // 导出客户线索只有管理员能做（客户归公司），业务员不显示
+            isAdmin && (
+              <a className="btn btn--sm" href={api.leadsExportUrl({ q: q.trim(), stage, accountId })} download>
+                <Download />
+                导出 CSV
+              </a>
+            )
           }
         >
           <Select

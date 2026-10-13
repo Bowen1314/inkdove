@@ -35,7 +35,10 @@ export function Modal({ open, title, onClose, children, footer, width = 560, cla
 
 const ConfirmCtx = createContext(null);
 
-/** 用法：const confirm = useConfirm(); if (await confirm({title, message, danger, confirmText})) {...} */
+/**
+ * 用法：const confirm = useConfirm(); if (await confirm({title, message, danger, confirmText, cancelText})) {...}
+ * focusCancel：默认焦点放在取消按钮上（比如按 Enter 发消息时弹出的确认，免得连按 Enter 直接确认）
+ */
 export function ConfirmProvider({ children }) {
   const [state, setState] = useState(null);
   const resolverRef = useRef(null);
@@ -65,14 +68,14 @@ export function ConfirmProvider({ children }) {
         onClose={() => close(false)}
         footer={
           <>
-            <button type="button" className="btn" onClick={() => close(false)}>
+            <button type="button" className="btn" onClick={() => close(false)} autoFocus={!!state?.focusCancel}>
               {state?.cancelText || '取消'}
             </button>
             <button
               type="button"
               className={`btn ${state?.danger ? 'btn--danger-solid' : 'btn--primary'}`}
               onClick={() => close(true)}
-              autoFocus
+              autoFocus={!state?.focusCancel}
             >
               {state?.confirmText || '确定'}
             </button>

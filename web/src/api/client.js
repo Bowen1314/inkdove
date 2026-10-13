@@ -108,6 +108,8 @@ export const api = {
   me: () => get('/api/auth/me', { silent: true }),
   changePassword: (currentPassword, newPassword) =>
     post('/api/auth/password', { currentPassword, newPassword }, { silent: true }),
+  /** 改自己的个人话术（推荐回复用，最多 2000 字）→ {user}（同 /api/auth/me，带 stylePrompt） */
+  putStylePrompt: (stylePrompt, o) => put('/api/auth/me/style-prompt', { stylePrompt }, { silent: true, ...o }),
   health: (o) => get('/api/health', o),
 
   // 邀请和重置（不需要登录）
@@ -214,6 +216,7 @@ export const api = {
   listAccounts: (o) => get('/api/accounts', o),
   createAccount: ({ name, channel }) => post('/api/accounts', { name, channel }),
   getAccount: (id, o) => get(`/api/accounts/${enc(id)}`, o),
+  /** 改号的设置（只有 admin，agent 一律 403）。回复方式用 replyMode: 'off' | 'suggest' | 'auto' */
   putAccount: (id, patch, o) => put(`/api/accounts/${enc(id)}`, patch, o),
   deleteAccount: (id) => del(`/api/accounts/${enc(id)}`),
   /** 号码配置导出（admin）→ {format, version, exportedAt, accounts}，含密钥明文 */
@@ -224,6 +227,7 @@ export const api = {
     form.append('file', file, file.name);
     return request('POST', '/api/accounts/import', { ...o, form });
   },
+  // 扫码连接、二维码、登出、配对码、测试代理、测试通知：只有 admin
   wahaStart: (id) => post(`/api/accounts/${enc(id)}/waha/start`, {}),
   wahaLogout: (id) => post(`/api/accounts/${enc(id)}/waha/logout`, {}),
   wahaQrUrl: (id, t = Date.now()) => `/api/accounts/${enc(id)}/waha/qr?t=${t}`,
@@ -253,7 +257,7 @@ export const api = {
   deleteLead: (id) => del(`/api/leads/${enc(id)}`),
   /** 立即重新提取（要调模型，可能要几秒）→ Lead */
   refreshLead: (id, o) => post(`/api/leads/${enc(id)}/refresh`, {}, o),
-  /** 导出 CSV 的下载地址，带上当前筛选；后端带 Content-Disposition，直接给 <a href download> 用 */
+  /** 导出 CSV 的下载地址（只有 admin），带上当前筛选；后端带 Content-Disposition，直接给 <a href download> 用 */
   leadsExportUrl: ({ q, stage, accountId } = {}) => buildUrl('/api/leads/export.csv', { q, stage, accountId }),
 
   // 主动外联（F11）：agent 只看得到、只能操作自己建的任务，服务端按权限过滤
@@ -297,6 +301,11 @@ export const api = {
   sendFile: (id, fileId, caption, o) =>
     post(`/api/wa/conversations/${enc(id)}/send-file`, caption ? { fileId, caption } : { fileId }, o),
   setBotPaused: (id, paused) => post(`/api/wa/conversations/${enc(id)}/bot`, { paused }),
+  /**
+   * 手动要一条推荐回复（「推荐回复」「换一条」），号是什么回复方式都能用 → {draft: {kind, text, fileIds, createdAt}}。
+   * 生成期间我方已经发了消息时照样返回，但不存进会话。错误码见 lib/labels.js 的 SUGGEST_ERROR；默认不弹 toast，由调用方提示
+   */
+  suggestReply: (id, o) => post(`/api/wa/conversations/${enc(id)}/suggest`, {}, { silent: true, ...o }),
   /** 输入框一键翻译成客户的语言（只翻译，不发送、不改会话）→ {text, language}，language 是中文语言名 */
   translateText: (id, text, o) => post(`/api/wa/conversations/${enc(id)}/translate`, { text }, o),
   /** F2b：人工消息改写成条目草稿，不落库 → {type, title, content, tags} */

@@ -5,6 +5,7 @@ import { ErrorState, PageHeader, SkeletonRows } from '../../ui/common.jsx';
 import { SettingsLayout } from '../../ui/Settings.jsx';
 import LlmSection from './LlmSection.jsx';
 import ReplySettingsSection from './ReplySettingsSection.jsx';
+import SuggestSection from './SuggestSection.jsx';
 import MediaSection from './MediaSection.jsx';
 import LeadsSection from './LeadsSection.jsx';
 import EmailSection from './EmailSection.jsx';
@@ -17,6 +18,7 @@ import VersionSection from './VersionSection.jsx';
 const NAV = [
   { to: '/settings/llm', label: 'AI 模型' },
   { to: '/settings/reply', label: '回复' },
+  { to: '/settings/suggest', label: '推荐回复' },
   { to: '/settings/media', label: '语音和图片' },
   { to: '/settings/leads', label: '客户线索' },
   { to: '/settings/email', label: '发信方式' },
@@ -26,7 +28,7 @@ const NAV = [
   { to: '/settings/version', label: '版本' },
 ];
 
-const GROUPS = ['llm', 'reply', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
+const GROUPS = ['llm', 'reply', 'suggest', 'media', 'leads', 'email', 'outreach', 'pricing', 'brand', 'version'];
 
 /** /settings 进来时去第一组；兼容旧的锚点写法 /settings#email */
 function SettingsIndex() {
@@ -84,6 +86,7 @@ export default function SettingsPage() {
         <Route index element={<SettingsIndex />} />
         <Route path="llm" element={<LlmSection {...props} health={health} refreshHealth={refreshHealth} />} />
         <Route path="reply" element={<ReplySettingsSection {...props} />} />
+        <Route path="suggest" element={<SuggestSection {...props} />} />
         <Route path="media" element={<MediaSection {...props} />} />
         <Route path="leads" element={<LeadsSection {...props} />} />
         <Route path="email" element={<EmailSection {...props} />} />

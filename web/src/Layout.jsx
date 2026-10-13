@@ -11,6 +11,7 @@ import {
   KeyRound,
   LogOut,
   Megaphone,
+  MessageSquareQuote,
   Menu as MenuIcon,
   MessagesSquare,
   Settings,
@@ -27,6 +28,7 @@ import { setPendingCount, usePendingCount } from './lib/inboxCount.js';
 import { loadUpdateStatus, openUpdateModal, useUpdateState } from './lib/update.js';
 import { usePolling } from './hooks/usePolling.js';
 import { ChangePasswordModal } from './ui/ChangePasswordModal.jsx';
+import { StylePromptModal } from './ui/StylePromptModal.jsx';
 import { Avatar } from './ui/Avatar.jsx';
 import { BrandMark } from './ui/BrandMark.jsx';
 import { Menu, Tooltip } from './ui/Popover.jsx';
@@ -62,7 +64,7 @@ const NAV = [
   },
 ];
 
-function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePassword, onOpenUpdate }) {
+function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePassword, onEditStyle, onOpenUpdate }) {
   const pending = usePendingCount();
   const { status: update } = useUpdateState();
   const { displayTitle } = useBranding();
@@ -130,6 +132,7 @@ function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePasswo
           }
           items={[
             user?.email && { heading: user.email },
+            { label: '我的话术', icon: MessageSquareQuote, onClick: onEditStyle },
             { label: '修改密码', icon: KeyRound, onClick: onChangePassword },
             'sep',
             { label: '退出登录', icon: LogOut, onClick: onLogout },
@@ -161,6 +164,7 @@ export function Layout() {
   const { user, isAdmin } = useAuth();
   const { displayTitle } = useBranding();
   const [pwdOpen, setPwdOpen] = useState(false);
+  const [styleOpen, setStyleOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [mock, setMock] = useState(false);
   const [company, setCompany] = useState('');
@@ -210,6 +214,7 @@ export function Layout() {
     mock,
     onLogout: logout,
     onChangePassword: () => setPwdOpen(true),
+    onEditStyle: () => setStyleOpen(true),
     onOpenUpdate: () => {
       setNavOpen(false);
       openUpdateModal();
@@ -239,6 +244,7 @@ export function Layout() {
         <SidebarContent {...sidebarProps} />
       </MobileNav>
       <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
+      <StylePromptModal open={styleOpen} onClose={() => setStyleOpen(false)} />
       {isAdmin && <UpdateModal />}
     </div>
   );

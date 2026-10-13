@@ -1,11 +1,6 @@
 /* 号码（列表和详情）页。见 DESIGN.md 第 6、7 节 */
 
 /* ============ 列表 ============ */
-.numbers-table__switch {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-}
 .numbers-table__time {
   white-space: nowrap;
   color: var(--text-muted);
@@ -191,9 +186,28 @@
   white-space: normal;
 }
 
-/* 自动回复行的提示随状态变化；没连接时琥珀色 */
+/* 回复方式：Segmented 保持自身宽度（控件列是纵向 flex，会被拉宽），保存中的转圈跟在右边 */
+.numbers-reply__mode {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* 回复方式的说明随选中项变化；没连接时琥珀色 */
 .numbers-reply__warn {
   color: var(--warning);
+}
+
+/* 业务员看到的只读值：和输入框里的文字对齐 */
+.numbers-readonly {
+  padding-top: 6px;
+  word-break: break-word;
+}
+
+/* 号码列表的回复方式列：管理员是行内下拉，保存中的转圈跟在右边 */
+.numbers-table__mode {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
 }
 
 /* 白名单、黑名单下面的计数和提醒 */

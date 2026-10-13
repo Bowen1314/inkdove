@@ -7,7 +7,7 @@ import { CellText, DataTable } from '../ui/DataTable.jsx';
 import { StatusDot } from '../ui/StatusDot.jsx';
 import { Avatar } from '../ui/Avatar.jsx';
 import { Tooltip } from '../ui/Popover.jsx';
-import { ENTRY_TYPES, waState, CHANNEL_LABEL } from '../lib/labels.js';
+import { ENTRY_TYPES, waState, CHANNEL_LABEL, replyModeLabel, replyModeOf } from '../lib/labels.js';
 import { fmtNum, fmtShortTime, fmtTime } from '../lib/format.js';
 import { useAuth } from '../lib/auth.jsx';
 import { isConnected, useAccounts } from '../lib/accounts.js';
@@ -145,15 +145,16 @@ function PendingCard({ convs, error, onRetry }) {
   );
 }
 
-/** 号码列表：圆点状态、名字、自动回复开或关 */
+/** 号码列表：圆点状态、名字、回复方式 */
 function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) {
-  // 号码列表优先用 /api/accounts（带 autoReply）；拿不到时退回 health 里的 accounts
+  // 号码列表优先用 /api/accounts（带 replyMode）；拿不到时退回 health 里的 accounts（不知道回复方式）
   const list =
     accounts ||
     (healthAccounts
-      ? healthAccounts.map((a) => ({ id: a.id, name: a.name, channel: a.channel, status: { state: a.state }, autoReply: undefined }))
+      ? healthAccounts.map((a) => ({ id: a.id, name: a.name, channel: a.channel, status: { state: a.state }, replyMode: undefined }))
       : null);
-  const idleConnected = (list || []).filter((a) => isConnected(a) && a.autoReply === false);
+  // 回复方式只有管理员能改，提醒也只给管理员
+  const idleConnected = isAdmin ? (list || []).filter((a) => isConnected(a) && replyModeOf(a) === 'off') : [];
 
   let body;
   if (!list && loading) {
@@ -192,9 +193,7 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
                   <span className="muted text-sm ellipsis">· {CHANNEL_LABEL[a.channel] || a.channel}</span>
                 </div>
               </div>
-              {a.autoReply !== undefined && (
-                <span className="muted text-sm nowrap">自动回复{a.autoReply ? '开' : '关'}</span>
-              )}
+              {replyModeOf(a) && <span className="muted text-sm nowrap">{replyModeLabel(replyModeOf(a))}</span>}
             </li>
           );
         })}
@@ -215,7 +214,7 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
       {body}
       {idleConnected.length > 0 && (
         <p className="ov-numbers__warn text-sm text-warning">
-          {idleConnected.map((a) => a.name).join('、')} 已连接，但自动回复还没开启，客户消息不会自动回复。
+          {idleConnected.map((a) => a.name).join('、')} 已连接，但回复方式是「关闭」，客户消息不会自动回复，也不会起草推荐回复。
         </p>
       )}
     </section>

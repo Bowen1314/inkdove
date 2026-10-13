@@ -77,6 +77,36 @@ export const AUTHOR_LABEL = {
   owner: '手机回复',
 };
 
+// 号的回复方式（replyMode）。新建的号默认 suggest；desc 是号详情里选中时下面那句说明
+export const REPLY_MODES = [
+  { value: 'off', label: '关闭', desc: '只保存客户消息，不自动回复，也不起草推荐回复。' },
+  {
+    value: 'suggest',
+    label: '推荐回复',
+    desc: 'AI 读上下文起草一条推荐回复放在会话页，业务员改好、确认后自己发。机器人不直接回客户。',
+  },
+  { value: 'auto', label: '自动回复', desc: '机器人根据知识库直接回复客户，拿不准的问题不回，转给人工并通知。' },
+];
+/** 号对象 → replyMode；老接口只有 autoReply 时按 true → auto、false → off 换算 */
+export const replyModeOf = (a) =>
+  REPLY_MODES.some((m) => m.value === a?.replyMode) ? a.replyMode : a?.autoReply === true ? 'auto' : a?.autoReply === false ? 'off' : null;
+export const replyModeLabel = (m) => REPLY_MODES.find((x) => x.value === m)?.label || '—';
+
+// 推荐回复接口（POST /api/wa/conversations/:id/suggest）的错误码 → 提示；其他错误用接口自带的说明
+export const SUGGEST_ERROR = {
+  llm_not_configured: { admin: '还没有配置 AI 模型，请先到「设置 → AI 模型」填写', agent: '还没有配置 AI 模型，请联系管理员' },
+  no_customer_message: '客户还没发过消息，暂时没法推荐回复',
+  llm_daily_limit: '这个会话今天的 AI 次数用完了，明天再试',
+  account_deleted: '这个会话所属的号已删除，不能再推荐回复',
+  llm_error: 'AI 生成失败，请稍后再试',
+};
+export function suggestErrorText(e, isAdmin) {
+  const m = SUGGEST_ERROR[e?.code];
+  if (m) return typeof m === 'string' ? m : isAdmin ? m.admin : m.agent;
+  if (e?.status === 404) return '这个会话不存在或已删除';
+  return e?.message || '推荐回复生成失败，请稍后再试';
+}
+
 // 自动回复范围（reply.scope）
 export const REPLY_SCOPES = [
   { value: 'all', label: '所有私聊（黑名单除外）', desc: '任何人发来私聊都会自动回复，黑名单里的号码除外。' },
@@ -98,6 +128,7 @@ export const BOT_DECISION_NOTE = {
   blocked: '已拦截·转人工',
   skipped: '未处理',
   declined: '客户拒绝·已停止',
+  suggested: '已生成推荐回复',
 };
 
 // F8 角色和成员状态
@@ -200,6 +231,7 @@ export const DECISION_LABELS = {
   blocked: '已拦截',
   offtopic: '离题',
   declined: '客户拒绝',
+  suggested: '已生成推荐回复',
   skipped: '未处理',
 };
 
@@ -261,6 +293,7 @@ export const LLM_PURPOSES = {
   leads: '客户线索',
   redteam: '红线体检',
   translate: '翻译',
+  suggest: '推荐回复',
   test: '测试连接',
 };
 export const purposeLabel = (p) => LLM_PURPOSES[p] ?? p ?? '—';

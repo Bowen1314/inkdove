@@ -31,6 +31,10 @@
 .inbox__list-head--search > .input-group {
   flex: 1;
 }
+/* 「全部 / 待回复」切换：紧贴在搜索框下面 */
+.inbox__list-head--view {
+  padding-top: 0;
+}
 
 /* 批量分配栏（多选模式下在搜索框上面） */
 .bulk-assign {
@@ -152,6 +156,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 预览一行：右边是「待回复」 */
+.conv__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+.conv__row > .conv__preview {
+  flex: 1;
+  min-width: 0;
+}
+.conv__waiting {
+  flex: none;
 }
 .conv__meta {
   display: flex;
@@ -482,6 +500,7 @@ a.msg__file:hover {
 }
 .draft__head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--sp-2);
   color: var(--text-muted);
@@ -492,8 +511,26 @@ a.msg__file:hover {
   width: 14px;
   height: 14px;
 }
-.draft__head > .btn {
+.draft__title {
+  min-width: 0;
+}
+/* 换一条、填入输入框：靠右，放不下时整组折到下一行 */
+.draft__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
   margin-left: auto;
+}
+.draft[aria-busy='true'] .draft__text {
+  opacity: 0.5;
+}
+/* 推荐回复里要人拍板的【待你确认：…】 */
+.draft__todo {
+  padding: 0 2px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-weight: 500;
 }
 .draft__text {
   margin-top: 6px;
@@ -683,6 +720,19 @@ a.draft__file:hover {
 .composer__hint--status {
   color: var(--success);
 }
+/* 输入框里还有【待你确认】：点一下选中下一处 */
+.composer__hint--todo {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--warning);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+.composer__hint--todo:hover {
+  text-decoration: underline;
+}
 
 /* ---- 客户信息 ---- */
 .inbox__info {
@@ -801,7 +851,8 @@ a.draft__file:hover {
   .composer__hint {
     display: none;
   }
-  .composer__hint--status {
+  .composer__hint--status,
+  .composer__hint--todo {
     display: block;
   }
   .composer__bar {

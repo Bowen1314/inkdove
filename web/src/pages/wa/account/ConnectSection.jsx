@@ -343,7 +343,8 @@ const LINK_MODES = [
 // 服务端的 FAILED / 通行密钥提示以「重新连接」结尾（扫码模式的按钮名）；配对码模式下对应的是「重新获取配对码」
 const codeModeError = (msg) => msg.replace(/重新连接$/, '重新获取配对码');
 
-function WahaPanel({ account, setAccount, isAdmin }) {
+/** 扫码号的连接（admin）：扫码 / 配对码、登出、IP 代理 */
+function WahaPanel({ account, setAccount }) {
   const confirm = useConfirm();
   const [busy, setBusy] = useState(null); // 'start' | 'logout' | 'code'
   const [qrTs, setQrTs] = useState(() => Date.now());
@@ -634,8 +635,40 @@ function WahaPanel({ account, setAccount, isAdmin }) {
         </SettingsRow>
       )}
 
-      {isAdmin && (
-        <ProxySection account={account} setAccount={setAccount} connected={state === 'working'} onApplied={onProxyApplied} />
+      <ProxySection account={account} setAccount={setAccount} connected={state === 'working'} onApplied={onProxyApplied} />
+    </SettingsSection>
+  );
+}
+
+/**
+ * 业务员看到的扫码号「连接」：只显示状态和已登录的账号。扫码、二维码、配对码、登出都只有管理员能做（agent 调会 403），
+ * 这里一个都不渲染，二维码图片也不请求。
+ */
+function WahaReadOnly({ account }) {
+  const status = account.status || {};
+  const state = status.state || 'not_configured';
+  return (
+    <SettingsSection title="连接">
+      <StatusRow label="连接状态" account={account} />
+      {state === 'working' ? (
+        <SettingsRow label="已登录账号">
+          <div className="numbers-me">
+            <Avatar name={status.me?.pushName || status.me?.id} />
+            <div className="numbers-me__text">
+              <span className="text-strong ellipsis">{status.me?.pushName || '已登录账号'}</span>
+              <span className="muted text-sm mono ellipsis">{status.me?.id || ''}</span>
+            </div>
+          </div>
+        </SettingsRow>
+      ) : (
+        <>
+          {status.error && (
+            <div className="numbers-block">
+              <Callout tone="danger">{status.error}</Callout>
+            </div>
+          )}
+          <div className="numbers-block muted">这个号还没连上。扫码连接由管理员操作，有问题请联系管理员。</div>
+        </>
       )}
     </SettingsSection>
   );
@@ -825,11 +858,9 @@ function MetaPanel({ account, setAccount, isAdmin }) {
   );
 }
 
-/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号显示凭证 */
+/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号显示凭证；业务员只看状态 */
 export default function ConnectSection({ account, setAccount, isAdmin }) {
-  return account.channel === 'meta' ? (
-    <MetaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />
-  ) : (
-    <WahaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />
-  );
+  if (account.channel === 'meta') return <MetaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
+  if (!isAdmin) return <WahaReadOnly account={account} />;
+  return <WahaPanel account={account} setAccount={setAccount} />;
 }

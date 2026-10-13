@@ -670,8 +670,14 @@
   white-space: nowrap;
   transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease;
 }
-.segmented__item:hover {
+.segmented__item:hover:not(:disabled) {
   color: var(--text);
+}
+.segmented__item:disabled {
+  cursor: not-allowed;
+}
+.segmented__item:disabled:not([aria-selected='true']) {
+  opacity: 0.6;
 }
 .segmented__item[aria-selected='true'] {
   background: var(--bg);

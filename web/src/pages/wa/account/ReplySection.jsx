@@ -3,10 +3,10 @@ import { Link } from 'react-router-dom';
 import { Send } from 'lucide-react';
 import { api } from '../../../api/client.js';
 import { toast } from '../../../ui/toastBus.js';
-import { Callout, Spinner, Switch } from '../../../ui/common.jsx';
+import { Callout, Segmented, Spinner, Switch } from '../../../ui/common.jsx';
 import { SaveBar, SettingsRow, SettingsSection } from '../../../ui/Settings.jsx';
 import { StatusDot } from '../../../ui/StatusDot.jsx';
-import { REPLY_SCOPES } from '../../../lib/labels.js';
+import { REPLY_MODES, REPLY_SCOPES, replyModeLabel, replyModeOf } from '../../../lib/labels.js';
 import { isConnected, patchAccountCache } from '../../../lib/accounts.js';
 
 /** 每行一个号码 → 数组（规范化交给后端） */
@@ -48,7 +48,7 @@ function RestoreButton({ onClick, disabled }) {
 
 /* ================= 回复 ================= */
 
-// SPEC 默认值：persona 留空（用全局）、回复所有私聊、黑白名单为空。自动回复开关是即时生效的，不在这里
+// SPEC 默认值：persona 留空（用全局）、回复所有私聊、黑白名单为空。回复方式是即时生效的，不在这里
 const REPLY_DEFAULTS = { persona: '', scope: 'all', allowlist: '', blocklist: '' };
 
 function replyDraft(a) {
@@ -60,38 +60,85 @@ function replyDraft(a) {
   };
 }
 
+const MODE_OPTIONS = REPLY_MODES.map(({ value, label }) => ({ value, label }));
+const modeDesc = (m) => REPLY_MODES.find((x) => x.value === m)?.desc || '';
+const scopeLabel = (s) => REPLY_SCOPES.find((x) => x.value === (s === 'allowlist' ? 'allowlist' : 'all'))?.label;
+
 /**
- * 号详情的「回复」分组：自动回复开关（即时生效）、persona、回复范围、黑白名单（走保存栏）。
+ * 号详情的「回复」分组。admin：回复方式（Segmented，即时生效）、persona、回复范围、黑白名单（走保存栏）；
+ * agent：同样几项只读展示（PUT /api/accounts/:id 对 agent 一律 403）。
+ * 回复范围和名单对三种回复方式都生效（范围外的消息不保存），persona 自动回复和推荐回复都用，所以一直显示。
  * globalSettings：admin 才拿得到，用来在 persona 占位里显示全局设置。
  */
-export default function ReplySection({ account, setAccount, globalSettings }) {
+export default function ReplySection({ account, setAccount, globalSettings, isAdmin }) {
+  if (!isAdmin) return <ReplyReadOnly account={account} />;
+  return <ReplyForm account={account} setAccount={setAccount} globalSettings={globalSettings} />;
+}
+
+/** 业务员看到的只读版：号的设置只有管理员能改 */
+function ReplyReadOnly({ account }) {
+  const mode = replyModeOf(account);
+  const allowCount = Array.isArray(account.allowlist) ? account.allowlist.length : 0;
+  const blockCount = Array.isArray(account.blocklist) ? account.blocklist.length : 0;
+  return (
+    <SettingsSection title="回复" desc="号的设置只有管理员能修改">
+      <SettingsRow inline label="回复方式" hint={modeDesc(mode)}>
+        <span className="text-strong nowrap">{replyModeLabel(mode)}</span>
+      </SettingsRow>
+      <SettingsRow label="身份和语气">
+        {account.persona ? (
+          <div className="pre-wrap numbers-readonly">{account.persona}</div>
+        ) : (
+          <div className="muted numbers-readonly">使用全局设置</div>
+        )}
+      </SettingsRow>
+      <SettingsRow inline label="回复范围">
+        <span>{scopeLabel(account.scope)}</span>
+      </SettingsRow>
+      {account.scope === 'allowlist' && (
+        <SettingsRow inline label="白名单">
+          <span className="num">{allowCount} 个号码</span>
+        </SettingsRow>
+      )}
+      <SettingsRow inline label="黑名单">
+        <span className="num">{blockCount} 个号码</span>
+      </SettingsRow>
+    </SettingsSection>
+  );
+}
+
+function ReplyForm({ account, setAccount, globalSettings }) {
   const [draft, setDraft] = useState(() => replyDraft(account));
   const [saving, setSaving] = useState(false);
-  const [toggling, setToggling] = useState(false);
+  const [pendingMode, setPendingMode] = useState(null); // 正在切换到的回复方式
   const applyAccount = makeApplyAccount(setAccount);
 
   const base = useMemo(() => replyDraft(account), [account]);
   const dirty = !sameDraft(base, draft);
   const set = (k, v) => setDraft((d) => ({ ...d, [k]: v }));
-  const on = !!account.autoReply;
+  const savedMode = replyModeOf(account) || 'off';
+  const mode = pendingMode ?? savedMode;
   const allowCount = splitLines(draft.allowlist).length;
   const blockCount = splitLines(draft.blocklist).length;
   const globalPersona = globalSettings?.reply?.persona || '';
   const connectPath = `/whatsapp/numbers/${encodeURIComponent(account.id)}/connect`;
 
-  const toggleAuto = async (next) => {
-    setToggling(true);
+  // 回复方式和原来的自动回复开关一样即时生效；接口没回完整的号时，replyMode 和兼容的 autoReply 一起改
+  const changeMode = async (next) => {
+    if (next === savedMode || pendingMode) return;
+    setPendingMode(next);
     try {
-      const res = await api.putAccount(account.id, { autoReply: next });
+      const res = await api.putAccount(account.id, { replyMode: next });
       if (!applyAccount(res)) {
-        setAccount((prev) => ({ ...prev, autoReply: next }));
-        patchAccountCache({ id: account.id, autoReply: next });
+        const patch = { replyMode: next, autoReply: next === 'auto' };
+        setAccount((prev) => ({ ...prev, ...patch }));
+        patchAccountCache({ id: account.id, ...patch });
       }
-      toast.success(next ? '自动回复已开启' : '自动回复已关闭');
+      toast.success(`回复方式已改为「${replyModeLabel(next)}」`);
     } catch {
       // 已提示
     } finally {
-      setToggling(false);
+      setPendingMode(null);
     }
   };
 
@@ -118,22 +165,6 @@ export default function ReplySection({ account, setAccount, globalSettings }) {
     }
   };
 
-  const autoHint = (
-    <>
-      {on
-        ? '机器人会根据知识库自动回复这个号的客户。拿不准的问题不会回复，会通知你来处理。'
-        : '机器人不会自动回复，客户消息仍会出现在「会话」里，可以手动回复。'}
-      {on && !isConnected(account) && (
-        <div className="numbers-reply__warn">
-          这个号还没连接，自动回复暂时不会生效。
-          <Link to={connectPath} className="link">
-            去连接
-          </Link>
-        </div>
-      )}
-    </>
-  );
-
   return (
     <SettingsSection
       as="form"
@@ -141,15 +172,38 @@ export default function ReplySection({ account, setAccount, globalSettings }) {
       onSubmit={save}
       actions={<RestoreButton onClick={() => setDraft(REPLY_DEFAULTS)} disabled={saving || sameDraft(draft, REPLY_DEFAULTS)} />}
     >
-      <SettingsRow inline label="自动回复" hint={autoHint}>
-        {toggling && <Spinner />}
-        <Switch checked={on} onChange={toggleAuto} disabled={toggling} label="自动回复开关" />
+      <SettingsRow label="回复方式">
+        <div className="numbers-reply__mode">
+          <Segmented label="回复方式" options={MODE_OPTIONS} value={mode} onChange={changeMode} disabled={!!pendingMode} />
+          {pendingMode && <Spinner />}
+        </div>
+        <div className="field__hint">
+          {modeDesc(mode)}
+          {mode === 'suggest' && (
+            <>
+              {' '}
+              公司话术在
+              <Link to="/settings/suggest" className="link">
+                设置 → 推荐回复
+              </Link>
+              里写。
+            </>
+          )}
+        </div>
+        {mode !== 'off' && !isConnected(account) && (
+          <div className="field__hint numbers-reply__warn">
+            这个号还没连接，{replyModeLabel(mode)}暂时不会生效。
+            <Link to={connectPath} className="link">
+              去连接
+            </Link>
+          </div>
+        )}
       </SettingsRow>
 
       <SettingsRow
         label="身份和语气"
         htmlFor="rp-persona"
-        hint="留空就用全局设置。例如：你是某某公司的销售小王，语气热情、专业，称呼客户为“您”。"
+        hint="自动回复和推荐回复都按这里的身份和语气写，留空就用全局设置。例如：你是某某公司的销售小王，语气热情、专业，称呼客户为“您”。"
       >
         <textarea
           id="rp-persona"
@@ -208,7 +262,7 @@ export default function ReplySection({ account, setAccount, globalSettings }) {
       <SettingsRow
         label="黑名单"
         htmlFor="rp-block"
-        hint="每行一个号码。这些号码永远不会收到自动回复，消息也不会保存到后台，适合填家人、朋友。"
+        hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复或起草推荐回复，适合填家人、朋友。"
       >
         <textarea
           id="rp-block"
@@ -266,14 +320,40 @@ function TestLine({ label, result }) {
   );
 }
 
-const EMAIL_NOT_CONFIGURED = '请管理员先在设置里配置发信方式';
+const EMAIL_NOT_CONFIGURED = '还没有配置发信方式，先到设置里配置才能发邮件通知';
+
+const NOTIFY_DESC = '自动回复模式下，机器人拿不准的问题不会回复客户，会通知你来处理';
 
 /**
- * 号详情的「通知」分组：邮件通知（开关和收件人，发信方式在设置页统一配置，F10）、WhatsApp 通知、发送测试通知。
- * globalSettings：admin 才拿得到。拿到时在全局没配发信方式时把邮件通知开关置灰；
- * agent 侧靠保存时的 400 email_not_configured 提示。
+ * 号详情的「通知」分组。admin 能改；agent 只看开关状态（收件邮箱、号码接口不给 agent，改和测试通知都是 403）。
  */
 export function NotifySection({ account, setAccount, globalSettings, isAdmin }) {
+  if (!isAdmin) return <NotifyReadOnly account={account} />;
+  return <NotifyForm account={account} setAccount={setAccount} globalSettings={globalSettings} />;
+}
+
+function OnOff({ on }) {
+  return <StatusDot tone={on ? 'success' : 'neutral'}>{on ? '已开启' : '未开启'}</StatusDot>;
+}
+
+function NotifyReadOnly({ account }) {
+  return (
+    <SettingsSection title="通知" desc={`${NOTIFY_DESC}。收件人只有管理员能看和修改。`}>
+      <SettingsRow inline label="邮件通知">
+        <OnOff on={!!account.notify?.email?.enabled} />
+      </SettingsRow>
+      <SettingsRow inline label="WhatsApp 通知">
+        <OnOff on={!!account.notify?.whatsapp?.enabled} />
+      </SettingsRow>
+    </SettingsSection>
+  );
+}
+
+/**
+ * 「通知」的编辑表单（admin）：邮件通知（开关和收件人，发信方式在设置页统一配置，F10）、WhatsApp 通知、发送测试通知。
+ * globalSettings：admin 才拿得到。拿到时在全局没配发信方式时把邮件通知开关置灰，否则靠保存时的 400 email_not_configured 提示。
+ */
+function NotifyForm({ account, setAccount, globalSettings }) {
   const [draft, setDraft] = useState(() => notifyDraft(account));
   const [saving, setSaving] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
@@ -290,7 +370,7 @@ export function NotifySection({ account, setAccount, globalSettings, isAdmin }) 
   const savedEmailOn = !!account.notify?.email?.enabled;
   const savedWaOn = !!account.notify?.whatsapp?.enabled;
   const anyNotify = draft.emailEnabled || draft.waEnabled;
-  // null = 不知道（agent 拿不到全局设置）
+  // null = 不知道（全局设置还没拿到）
   const emailConfigured = globalSettings ? !!globalSettings.email?.provider : emailBlocked ? false : null;
   const emailSwitchDisabled = emailConfigured === false && !draft.emailEnabled;
 
@@ -360,7 +440,7 @@ export function NotifySection({ account, setAccount, globalSettings, isAdmin }) 
     <SettingsSection
       as="form"
       title="通知"
-      desc="机器人拿不准的问题不会回复客户，会通知你来处理"
+      desc={NOTIFY_DESC}
       onSubmit={onSubmit}
       actions={<RestoreButton onClick={() => setDraft(NOTIFY_DEFAULTS)} disabled={saving || sameDraft(draft, NOTIFY_DEFAULTS)} />}
     >
@@ -378,11 +458,9 @@ export function NotifySection({ account, setAccount, globalSettings, isAdmin }) 
           <Callout
             tone="warning"
             action={
-              isAdmin && (
-                <Link to="/settings/email" className="btn btn--sm">
-                  去设置
-                </Link>
-              )
+              <Link to="/settings/email" className="btn btn--sm">
+                去设置
+              </Link>
             }
           >
             {EMAIL_NOT_CONFIGURED}

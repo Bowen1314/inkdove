@@ -60,8 +60,8 @@ export function Tabs({ tabs }) {
 /** 兼容旧名 */
 export const TabBar = Tabs;
 
-/** 分段切换（同一份数据换视图或范围）。options: [{value, label, icon}] */
-export function Segmented({ options, value, onChange, label }) {
+/** 分段切换（同一份数据换视图或范围）。options: [{value, label, icon}]；disabled 时整组不能点（比如正在保存） */
+export function Segmented({ options, value, onChange, label, disabled = false }) {
   return (
     <div className="segmented" role="tablist" aria-label={label}>
       {options.map((o) => (
@@ -71,6 +71,7 @@ export function Segmented({ options, value, onChange, label }) {
           role="tab"
           aria-selected={value === o.value}
           className="segmented__item"
+          disabled={disabled}
           onClick={() => onChange(o.value)}
         >
           {o.icon && <o.icon />}

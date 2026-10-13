@@ -13,25 +13,36 @@ import {
   PanelRight,
   Pause,
   Play,
+  RefreshCw,
   Search,
   SendHorizontal,
   Sparkles,
   X,
 } from 'lucide-react';
 import { api } from '../../api/client.js';
-import { EmptyState, ErrorState, PageHeader, SkeletonRows, Spinner } from '../../ui/common.jsx';
+import { EmptyState, ErrorState, PageHeader, Segmented, SkeletonRows, Spinner } from '../../ui/common.jsx';
 import { StatusDot } from '../../ui/StatusDot.jsx';
 import { Avatar } from '../../ui/Avatar.jsx';
 import { Select } from '../../ui/Select.jsx';
 import { Drawer } from '../../ui/Drawer.jsx';
 import { Popover, Tooltip } from '../../ui/Popover.jsx';
+import { useConfirm } from '../../ui/Modal.jsx';
+import { toast } from '../../ui/toastBus.js';
 import { EntryPeek, EntryRefs } from '../../ui/EntryRefs.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useMediaQuery } from '../../hooks/useMediaQuery.js';
 import { useAuth } from '../../lib/auth.jsx';
 import { isConnected, useAccounts } from '../../lib/accounts.js';
 import { setPendingCount } from '../../lib/inboxCount.js';
-import { AUTHOR_LABEL, BOT_DECISION_NOTE, LEAD_STAGES, MEDIA_LABEL, leadStageLabel } from '../../lib/labels.js';
+import {
+  AUTHOR_LABEL,
+  BOT_DECISION_NOTE,
+  LEAD_STAGES,
+  MEDIA_LABEL,
+  leadStageLabel,
+  replyModeOf,
+  suggestErrorText,
+} from '../../lib/labels.js';
 import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
 import { AttachmentCard, DraftFiles, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
@@ -88,14 +99,22 @@ function fmtMuteUntil(d) {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
-function ConvState({ conv, size = 'sm', showActive = false }) {
+/**
+ * 会话状态。showActive（会话头部）时，没有别的状态也显示一句：自动回复的号是"机器人接待中"，
+ * 推荐回复的号是"AI 推荐回复"，关闭的号不显示。replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
+ */
+function ConvState({ conv, size = 'sm', showActive = false, replyMode = null }) {
   if (conv.needsHuman) return <StatusDot tone="danger" tinted size={size}>待你处理</StatusDot>;
   if (conv.botPaused) return <StatusDot tone="warning" tinted size={size}>人工接管中</StatusDot>;
   const mute = activeMute(conv);
   if (mute) return <StatusDot tone="neutral" muted size={size}>反复离题，静默到 {fmtMuteUntil(mute)}</StatusDot>;
-  if (showActive) return <StatusDot tone="success" muted size={size}>机器人接待中</StatusDot>;
-  return null;
+  if (!showActive || replyMode === 'off') return null;
+  if (replyMode === 'suggest') return <StatusDot tone="info" muted size={size}>AI 推荐回复</StatusDot>;
+  return <StatusDot tone="success" muted size={size}>机器人接待中</StatusDot>;
 }
+
+/** 待回复：最后一条消息是客户发的（纯前端判断，导入的历史消息也算） */
+export const isWaiting = (c) => c?.lastMessage?.direction === 'in';
 
 /* ---------- 会话列表 ---------- */
 
@@ -107,17 +126,36 @@ function emptyTitle({ isAdmin, accountFilter, assigneeFilter }) {
   return accountFilter ? '这个号还没有会话' : '还没有会话';
 }
 
-function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accountFilter, assigneeFilter, isAdmin, users, onBulkAssigned }) {
+const VIEW_OPTIONS = (waitingCount) => [
+  { value: '', label: '全部' },
+  { value: 'waiting', label: waitingCount > 0 ? `待回复 ${waitingCount}` : '待回复' },
+];
+
+function ConvList({
+  convs,
+  selectedId,
+  onSelect,
+  pollFailed,
+  noConnected,
+  accountFilter,
+  assigneeFilter,
+  view,
+  onView,
+  isAdmin,
+  users,
+  onBulkAssigned,
+}) {
   const [filter, setFilter] = useState('');
   const [selecting, setSelecting] = useState(false); // admin 批量分配的多选模式
   const [checked, setChecked] = useState(() => new Set());
   const sorted = useMemo(() => sortConvs(convs), [convs]);
+  const waitingCount = sorted.filter(isWaiting).length;
   const f = filter.trim().toLowerCase();
-  const shown = f
-    ? sorted.filter((c) =>
-        [c.contactName, c.contactNumber, c.id, c.accountName].some((v) => String(v || '').toLowerCase().includes(f)),
-      )
-    : sorted;
+  const shown = sorted.filter(
+    (c) =>
+      (view !== 'waiting' || isWaiting(c)) &&
+      (!f || [c.contactName, c.contactNumber, c.id, c.accountName].some((v) => String(v || '').toLowerCase().includes(f))),
+  );
 
   // 只算还在列表里的（轮询后消失的会话不再算进去）
   const checkedIds = sorted.filter((c) => checked.has(c.id)).map((c) => c.id);
@@ -191,6 +229,10 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
         )}
       </div>
 
+      <div className="inbox__list-head inbox__list-head--view">
+        <Segmented label="按回复状态筛选" options={VIEW_OPTIONS(waitingCount)} value={view} onChange={onView} />
+      </div>
+
       {pollFailed && (
         <div className="inbox__notice">
           <StatusDot tone="warning" size="sm">连接中断，正在重试…</StatusDot>
@@ -219,7 +261,7 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
             }
           />
         ) : shown.length === 0 ? (
-          <EmptyState compact title="没有匹配的会话" />
+          <EmptyState compact title={view === 'waiting' && !f ? '没有待回复的会话' : '没有匹配的会话'} />
         ) : (
           shown.map((c) => {
             const last = c.lastMessage;
@@ -245,14 +287,21 @@ function ConvList({ convs, selectedId, onSelect, pollFailed, noConnected, accoun
                     <span className="conv__name">{convName(c)}</span>
                     <span className="conv__time">{fmtShortTime(last?.ts || c.updatedAt)}</span>
                   </span>
-                  <span className="conv__preview">
-                    {last ? (
-                      <>
-                        {last.direction === 'out' && <span className="muted">你：</span>}
-                        {last.text}
-                      </>
-                    ) : (
-                      <span className="muted">暂无消息</span>
+                  <span className="conv__row">
+                    <span className="conv__preview">
+                      {last ? (
+                        <>
+                          {last.direction === 'out' && <span className="muted">你：</span>}
+                          {last.text}
+                        </>
+                      ) : (
+                        <span className="muted">暂无消息</span>
+                      )}
+                    </span>
+                    {isWaiting(c) && (
+                      <StatusDot tone="info" tinted size="sm" className="conv__waiting">
+                        待回复
+                      </StatusDot>
                     )}
                   </span>
                   <span className="conv__meta">
@@ -374,7 +423,7 @@ function MessageBubble({ msg, canSaveToKb, onSaveToKb }) {
         {kind === 'customer' && note && (
           <span className={`msg__note${NOTE_TONE[msg.botDecision] ? ` msg__note--${NOTE_TONE[msg.botDecision]}` : ''}`}>
             {note}
-            {msg.decisionReason ? ` · ${msg.decisionReason}` : ''}
+            {msg.decisionReason && msg.decisionReason !== note ? ` · ${msg.decisionReason}` : ''}
           </span>
         )}
         <Tooltip content={fmtTime(msg.ts)}>
@@ -456,52 +505,100 @@ function MessageStream({ messages, convId, canSaveToKb, onSaveToKb }) {
   );
 }
 
+/** 推荐回复和草稿里要人拍板的占位：【待你确认：…】 */
+const TODO_RE = /【待你确认[^】]*】/g;
+const countTodos = (t) => (String(t || '').match(TODO_RE) || []).length;
+
+/** 文字里的【待你确认：…】高亮显示 */
+function TodoText({ text }) {
+  const parts = String(text || '').split(/(【待你确认[^】]*】)/);
+  return parts.map((p, i) =>
+    i % 2 ? (
+      <mark key={i} className="draft__todo">
+        {p}
+      </mark>
+    ) : (
+      p
+    ),
+  );
+}
+
+/** 输入框里光标之后的下一处【待你确认】（没有就从头找）→ [start, end] 或 null */
+function nextTodoRange(text, from = 0) {
+  const all = [...String(text || '').matchAll(TODO_RE)].map((m) => [m.index, m.index + m[0].length]);
+  if (!all.length) return null;
+  return all.find(([start]) => start >= from) || all[0];
+}
+
 /**
- * F2a 草稿：输入框上方显示，"填入输入框"后由人工修改再发。
+ * 草稿：输入框上方显示，"填入输入框"后由人工修改再发。kind 是 suggest 的是推荐回复，handoff（老数据没有 kind）是转人工时起草的。
+ * 「换一条」调 POST suggest 让 AI 换个写法（转人工草稿也可以换，换出来的是推荐回复）。
  * F15：草稿可以只带文件（text 为空、fileIds 有值），文件列在文字下面，旁边"发送这些文件"按顺序逐个发。
  * kept：草稿已被自己发的消息清掉（后端规则），只剩前端记住的文件建议；这时不显示文字，可以手动关掉。
  */
-function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss }) {
+function DraftBox({ draft, kept, onFill, onSendFiles, sendingFiles, onDismiss, onRegenerate, regenerating }) {
   const text = !kept && draft?.text?.trim() ? draft.text : '';
   const fileIds = kept ? kept.fileIds : Array.isArray(draft?.fileIds) ? draft.fileIds : [];
   if (!text && !fileIds.length) return null;
+  const isSuggest = !kept && draft?.kind === 'suggest';
+  const title = kept ? '草稿建议发送的文件（还没发）' : isSuggest ? '推荐回复' : '建议回复（草稿，未发送）';
   return (
-    <div className="draft">
+    <div className="draft" aria-busy={regenerating || undefined}>
       <div className="draft__head">
         <Sparkles aria-hidden="true" />
-        <span>{kept ? '草稿建议发送的文件（还没发）' : '建议回复（草稿，未发送）'}</span>
-        {text && (
-          <button type="button" className="btn btn--sm" onClick={() => onFill(text)}>
-            <CornerDownLeft />
-            填入输入框
-          </button>
-        )}
-        {kept && (
-          <Tooltip content="不发了，关掉">
-            <button
-              type="button"
-              className="btn btn--ghost btn--icon btn--sm"
-              onClick={onDismiss}
-              disabled={sendingFiles}
-              aria-label="关掉草稿建议的文件"
-            >
-              <X />
+        <span className="draft__title">{title}</span>
+        <span className="draft__actions">
+          {!kept && (
+            <Tooltip content="让 AI 换一种写法">
+              <button type="button" className="btn btn--ghost btn--sm" onClick={onRegenerate} disabled={regenerating}>
+                {regenerating ? <Spinner /> : <RefreshCw />}
+                换一条
+              </button>
+            </Tooltip>
+          )}
+          {text && (
+            <button type="button" className="btn btn--sm" onClick={() => onFill(text)} disabled={regenerating}>
+              <CornerDownLeft />
+              填入输入框
             </button>
-          </Tooltip>
-        )}
+          )}
+          {kept && (
+            <Tooltip content="不发了，关掉">
+              <button
+                type="button"
+                className="btn btn--ghost btn--icon btn--sm"
+                onClick={onDismiss}
+                disabled={sendingFiles}
+                aria-label="关掉草稿建议的文件"
+              >
+                <X />
+              </button>
+            </Tooltip>
+          )}
+        </span>
       </div>
-      {text && <div className="draft__text">{text}</div>}
+      {text && (
+        <div className="draft__text">
+          <TodoText text={text} />
+        </div>
+      )}
       {fileIds.length > 0 && <DraftFiles fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} />}
     </div>
   );
 }
 
-function Composer({ conv, text, setText, onSent, inputRef }) {
+/**
+ * 输入框。showSuggest：没有可填的草稿时，底栏多一个「推荐回复」按钮手动要一条。
+ * 文字里还有【待你确认：…】时底栏提示还有几处（点一下选中下一处），发送前再用确认框拦一次。
+ */
+function Composer({ conv, text, setText, onSent, inputRef, showSuggest, onSuggest, suggesting, suggestBlocked }) {
+  const confirm = useConfirm();
   const [sending, setSending] = useState(false);
   const [translating, setTranslating] = useState(false);
   const [status, setStatus] = useState(''); // 翻译完成后在底栏左侧短暂显示
   const textRef = useRef(text);
   textRef.current = text;
+  const todos = countTodos(text);
 
   useEffect(() => {
     if (!status) return undefined;
@@ -517,9 +614,33 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
     el.style.height = `${Math.min(el.scrollHeight, 6 * 22 + 12)}px`;
   }, [text, inputRef]);
 
+  /** 选中输入框里光标后面的下一处【待你确认】，直接打字就能替换掉 */
+  const selectTodo = (fromStart = false) => {
+    const el = inputRef.current;
+    if (!el) return;
+    const range = nextTodoRange(el.value, fromStart ? 0 : el.selectionEnd ?? 0);
+    el.focus();
+    if (range) el.setSelectionRange?.(range[0], range[1]);
+  };
+
   const send = async () => {
     const t = text.trim();
     if (!t || sending || translating) return;
+    const left = countTodos(t);
+    if (left > 0) {
+      const ok = await confirm({
+        title: `还有 ${left} 处【待你确认】没填`,
+        message: '消息里还留着【待你确认：…】，发出去客户会原样看到。建议先改好再发。',
+        confirmText: '照样发送',
+        cancelText: '回去修改',
+        danger: true,
+        focusCancel: true,
+      });
+      if (!ok) {
+        setTimeout(() => selectTodo(true), 0);
+        return;
+      }
+    }
     setSending(true);
     try {
       const msg = await api.sendMessage(conv.id, t);
@@ -579,9 +700,29 @@ function Composer({ conv, text, setText, onSent, inputRef }) {
         aria-label="回复内容"
       />
       <div className="composer__bar">
-        <span className={`composer__hint${status ? ' composer__hint--status' : ''}`} aria-live="polite">
-          {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
-        </span>
+        {todos > 0 && !status ? (
+          <button type="button" className="composer__hint composer__hint--todo" onClick={() => selectTodo()}>
+            还有 {todos} 处【待你确认】没填，点这里定位
+          </button>
+        ) : (
+          <span className={`composer__hint${status ? ' composer__hint--status' : ''}`} aria-live="polite">
+            {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
+          </span>
+        )}
+        {showSuggest && (
+          <Tooltip content={suggestBlocked || '让 AI 读上下文起草一条推荐回复，不会直接发出'}>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={onSuggest}
+              disabled={suggesting || !!suggestBlocked}
+              aria-label={suggestBlocked ? `推荐回复（${suggestBlocked}）` : undefined}
+            >
+              {suggesting ? <Spinner /> : <Sparkles />}
+              推荐回复
+            </button>
+          </Tooltip>
+        )}
         <SendFileButton conv={conv} onSent={onSent} disabled={sending} />
         <Tooltip content="翻译成客户的语言">
           <button
@@ -732,12 +873,17 @@ function ChatPane({
   canSaveToKb,
   isAdmin,
   users,
+  replyMode,
   onToggleInfo,
   infoShown,
 }) {
   const [toggling, setToggling] = useState(false);
   const [text, setText] = useState('');
   const [kbMsg, setKbMsg] = useState(null);
+  const [suggesting, setSuggesting] = useState(false);
+  // 手动要来的推荐回复 {draft, seen}。服务端一般会存进会话，但起草期间我方已经发了消息时只返回不存，
+  // 轮询拿到的 conv.draft 里就没有它；所以先在这里留一份，直到服务端出了更新的草稿、或者存过之后又被清掉、或者自己发了消息
+  const [manual, setManual] = useState(null);
   const inputRef = useRef(null);
   // 自己发出任何消息后端都会清空草稿（F2a），草稿里建议的文件先在这里记住：发完、手动关掉或切换会话
   // （ChatPane 按会话 key，切换即重置）前一直显示。{draftAt: 来自哪份草稿的 createdAt, fileIds}
@@ -751,7 +897,23 @@ function ChatPane({
     };
   }, []);
 
-  const liveDraft = conv?.draft || null;
+  const serverDraft = conv?.draft || null;
+  const serverAt = serverDraft?.createdAt || '';
+  const manualAt = manual?.draft?.createdAt || '';
+  // 显示哪份草稿：服务端的和手动要来的，谁新显示谁；服务端存过手动那份（seen）之后又清掉了，就不再显示
+  let liveDraft = serverDraft;
+  if (manual) {
+    if (!serverDraft) liveDraft = manual.seen ? null : manual.draft;
+    else if (serverAt !== manualAt) liveDraft = serverAt > manualAt ? serverDraft : manual.draft;
+  }
+  useEffect(() => {
+    if (!manual) return;
+    if (serverDraft && serverAt === manualAt) {
+      if (!manual.seen) setManual((m) => (m ? { ...m, seen: true } : m));
+    } else if ((serverDraft && serverAt > manualAt) || (!serverDraft && manual.seen)) {
+      setManual(null);
+    }
+  }, [manual, serverDraft, serverAt, manualAt]);
   const liveFileIds = Array.isArray(liveDraft?.fileIds) ? liveDraft.fileIds : [];
   // 服务端出了新草稿（createdAt 不同）就以新草稿为准；同一份草稿（轮询拿到旧数据）仍按已清掉显示
   const kept = keptFiles && (!liveDraft || liveDraft.createdAt === keptFiles.draftAt) ? keptFiles : null;
@@ -760,8 +922,9 @@ function ChatPane({
     if (liveDraftAt !== undefined) setKeptFiles((prev) => (prev && prev.draftAt !== liveDraftAt ? null : prev));
   }, [liveDraftAt]);
 
-  /** 自己发出消息或文件：先记住草稿里的文件建议，发出去的那个文件从里面去掉 */
+  /** 自己发出消息或文件：先记住草稿里的文件建议，发出去的那个文件从里面去掉；手动要来的推荐也作废 */
   const handleSent = (msg) => {
+    setManual(null);
     if (liveFileIds.length) {
       setKeptFiles((prev) => (prev && prev.draftAt === liveDraftAt ? prev : { draftAt: liveDraftAt, fileIds: liveFileIds }));
     }
@@ -794,6 +957,7 @@ function ChatPane({
     setToggling(true);
     try {
       const res = await api.setBotPaused(conv.id, !conv.botPaused);
+      if (conv.botPaused) setManual(null); // 恢复机器人会清掉草稿
       onConvUpdate(
         res && res.id
           ? res
@@ -809,6 +973,27 @@ function ChatPane({
       // 已提示
     } finally {
       setToggling(false);
+    }
+  };
+
+  /** 手动要一条推荐回复（「推荐回复」「换一条」）：同步等 AI 起草完，结果显示在输入框上方，不会自动发出 */
+  const requestSuggest = async () => {
+    if (!conv || suggesting) return;
+    setSuggesting(true);
+    try {
+      const res = await api.suggestReply(conv.id);
+      if (!aliveRef.current) return;
+      const d = res?.draft;
+      if (d && (d.text?.trim() || d.fileIds?.length)) {
+        setManual({ draft: { ...d, kind: d.kind || 'suggest' }, seen: false });
+        setKeptFiles(null);
+      } else {
+        toast.error('AI 这次没写出推荐回复，请再试一次');
+      }
+    } catch (e) {
+      if (e?.status !== 401) toast.error(suggestErrorText(e, isAdmin));
+    } finally {
+      if (aliveRef.current) setSuggesting(false);
     }
   };
 
@@ -834,6 +1019,8 @@ function ChatPane({
   };
 
   const name = conv ? convName(conv) : convId;
+  // 会话里一条客户消息都没有时，服务端会回 no_customer_message，按钮先置灰
+  const noCustomerMsg = Array.isArray(messages) && !messages.some((m) => m.direction === 'in');
 
   return (
     <section className="inbox__chat" aria-label={`和 ${name} 的会话`}>
@@ -848,7 +1035,7 @@ function ChatPane({
             {conv?.contactNumber && conv.contactName && <span className="num">{conv.contactNumber}</span>}
             {conv?.accountName && <span className="chat-head__acct">经 {conv.accountName}</span>}
             {conv && !isAdmin && <AssigneeText assignee={conv.assignee} />}
-            {conv && <ConvState conv={conv} showActive />}
+            {conv && <ConvState conv={conv} showActive replyMode={replyMode} />}
           </div>
         </div>
         {conv && (
@@ -889,14 +1076,26 @@ function ChatPane({
       {conv && (
         <div className="inbox__compose">
           <DraftBox
-            draft={conv.draft}
+            draft={liveDraft}
             kept={kept}
             onFill={fillDraft}
             onSendFiles={sendDraftFiles}
             sendingFiles={sendingFiles}
             onDismiss={() => setKeptFiles(null)}
+            onRegenerate={requestSuggest}
+            regenerating={suggesting}
           />
-          <Composer conv={conv} text={text} setText={setText} onSent={handleSent} inputRef={inputRef} />
+          <Composer
+            conv={conv}
+            text={text}
+            setText={setText}
+            onSent={handleSent}
+            inputRef={inputRef}
+            showSuggest={!(!kept && liveDraft?.text?.trim())}
+            onSuggest={requestSuggest}
+            suggesting={suggesting}
+            suggestBlocked={noCustomerMsg ? '客户还没发过消息' : ''}
+          />
         </div>
       )}
 
@@ -922,6 +1121,8 @@ export default function ChatsTab() {
   const { user: me, isAdmin } = useAuth();
   // 按负责人筛选只有 admin 有；agent 只看得到分给自己的会话，不带这个参数
   const assigneeFilter = isAdmin ? params.get('assignee') || '' : '';
+  // 「全部 / 待回复」：纯前端按最后一条消息是不是客户发的筛，不重新请求
+  const view = params.get('view') === 'waiting' ? 'waiting' : '';
   const { accounts } = useAccounts();
   const wide = useMediaQuery('(min-width: 1280px)');
   const [infoPinned, setInfoPinned] = useState(true); // ≥1280 时右栏是否显示
@@ -1013,6 +1214,8 @@ export default function ChatsTab() {
   // 换号筛选时关掉当前会话，避免右边显示一个列表里没有的会话
   const onFilter = (id) => setParams(withParams({ account: id, chat: null }), { replace: true });
   const onAssigneeFilter = (v) => setParams(withParams({ assignee: v, chat: null }), { replace: true });
+  // 切换「待回复」不关掉当前会话：回复完它会从待回复里消失，右边照样留着
+  const onView = (v) => setParams(withParams({ view: v }), { replace: true });
 
   // 当前会话改了负责人后可能不在这个筛选里了（比如在「未分配」里分给了别人），右边继续用最后拿到的数据
   const heldRef = useRef(null);
@@ -1113,6 +1316,8 @@ export default function ChatsTab() {
             noConnected={noConnected}
             accountFilter={accountFilter}
             assigneeFilter={assigneeFilter}
+            view={view}
+            onView={onView}
             isAdmin={isAdmin}
             users={users}
             onBulkAssigned={onBulkAssigned}
@@ -1131,6 +1336,7 @@ export default function ChatsTab() {
               canSaveToKb={isAdmin}
               isAdmin={isAdmin}
               users={users}
+              replyMode={conv ? replyModeOf(accounts?.find((a) => a.id === conv.accountId)) : null}
               onToggleInfo={toggleInfo}
               infoShown={infoShown}
             />
