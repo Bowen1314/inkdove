@@ -137,6 +137,9 @@ export function useAnchoredPosition(open, anchorRef, floatRef, placement = 'bott
   return pos ? { top: pos.top, left: pos.left } : { top: -9999, left: -9999 };
 }
 
+/** 打开着的弹出菜单、弹出层，按打开顺序；按 Esc 只关最上面那一层（比如浮层里又浮出的预览） */
+const dismissStack = [];
+
 /** 点外面或按 Esc 关闭（弹出菜单、弹出层用）。onClose 收到原因：'outside' 或 'escape' */
 export function useDismiss(open, refs, onClose) {
   const closeRef = useRef(onClose);
@@ -147,16 +150,19 @@ export function useDismiss(open, refs, onClose) {
     const onDown = (e) => {
       if (!inside(e.target)) closeRef.current?.('outside');
     };
+    const token = {};
+    dismissStack.push(token);
     const onKey = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        closeRef.current?.('escape');
-      }
+      if (e.key !== 'Escape' || dismissStack[dismissStack.length - 1] !== token) return;
+      e.preventDefault();
+      closeRef.current?.('escape');
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('touchstart', onDown);
     document.addEventListener('keydown', onKey, true);
     return () => {
+      const i = dismissStack.indexOf(token);
+      if (i >= 0) dismissStack.splice(i, 1);
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('touchstart', onDown);
       document.removeEventListener('keydown', onKey, true);

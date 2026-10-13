@@ -195,6 +195,62 @@ export function EntryPreviewBody({ entry, error = false, onOpenFull }) {
   );
 }
 
+/** 预览里直接显示的图片最大多大：再大就不在预览里加载，点「下载」看 */
+const PREVIEW_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+/** 页面里最多留几张预览图 */
+const PREVIEW_IMAGE_CACHE = 30;
+/** 文件 id + 更新时间 → Promise<object URL>。下载接口不让浏览器缓存（private, no-store），不在这里留一份的话，
+ *  每次悬停都会把整张图重新下一遍；只留在这个页面的内存里，关掉页面就没了 */
+const imageCache = new Map();
+
+function cachedImageUrl(file) {
+  const key = `${file.id}:${file.updatedAt || ''}`;
+  let p = imageCache.get(key);
+  if (!p) {
+    p = fetch(api.fileDownloadUrl(file.id), { credentials: 'same-origin' }).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.blob().then((b) => URL.createObjectURL(b));
+    });
+    p.catch(() => imageCache.delete(key));
+    imageCache.set(key, p);
+    while (imageCache.size > PREVIEW_IMAGE_CACHE) {
+      const [oldKey, oldP] = imageCache.entries().next().value;
+      imageCache.delete(oldKey);
+      oldP.then((u) => URL.revokeObjectURL(u)).catch(() => {});
+    }
+  }
+  return p;
+}
+
+/** 预览里的图片：同一张图只下一次；太大的不在预览里加载 */
+function PreviewImage({ file }) {
+  const tooBig = file.size != null && file.size > PREVIEW_IMAGE_MAX_BYTES;
+  const [url, setUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (tooBig) return undefined;
+    let alive = true;
+    setUrl(null);
+    setFailed(false);
+    cachedImageUrl(file)
+      .then((u) => alive && setUrl(u))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [file.id, file.updatedAt, tooBig]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (tooBig) return <div className="ref-preview__state">图片较大，点「下载」查看</div>;
+  if (failed) return <div className="ref-preview__state">图片加载失败</div>;
+  if (!url) {
+    return (
+      <div className="ref-preview__state">
+        <Spinner /> 图片加载中…
+      </div>
+    );
+  }
+  return <img className="ref-preview__img" src={url} alt={file.name} />;
+}
+
 /** 文件预览的内容：图片缩略图、名称、文件名、格式和大小、说明，底部「下载」。file：undefined 加载中，null 已删除 */
 export function FilePreviewBody({ file }) {
   if (file === undefined) {
@@ -208,7 +264,7 @@ export function FilePreviewBody({ file }) {
   const desc = String(file.description || '').trim();
   return (
     <>
-      {isImageMime(file.mime) && <img className="ref-preview__img" src={api.fileDownloadUrl(file.id)} alt={file.name} />}
+      {isImageMime(file.mime) && <PreviewImage file={file} />}
       <div className="ref-preview__meta">
         <span className="tag">{fileTypeLabel(file)}</span>
         {file.size != null && <span className="muted text-sm num">{fmtSize(file.size)}</span>}
