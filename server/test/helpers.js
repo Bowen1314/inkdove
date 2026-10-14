@@ -66,6 +66,8 @@ export async function startApp({ env = {}, options = {} } = {}) {
     auditCleanupIntervalMs: 0,
     // AI 发言检查：不起定时扫描（要测时手动调 ctx.conduct.run()）
     conductIntervalMs: 0,
+    // 推荐回复采纳统计：不起定时清理（要测时手动调 ctx.draftOutcomes.sweep()）
+    draftSweepIntervalMs: 0,
     ...options,
   });
   const { app, ctx, close } = created;

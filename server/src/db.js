@@ -603,6 +603,42 @@ CREATE TABLE IF NOT EXISTS assistant_usage (
   PRIMARY KEY (user_id, day)
 );
 `);
+
+  // ---- 推荐回复采纳统计（写入、判定和定时清理见 reply/draft-outcomes.js，看板的「推荐回复」读它） ----
+  // 每份存进会话的推荐回复（kind=suggest）、转人工草稿（kind=handoff）一行，存的时候写；生成了但没存进会话的不记。
+  // created_at：和 draft.createdAt 相同；follow_up：跟进推荐为 1；question：起草时「客户这次的消息」（合并后的，最多 2000 字）；
+  //   text：草稿正文；entry_ids、file_ids：依据的知识条目、建议发的文件（JSON 数组）；model：起草用的模型名（mock 模式记 mock）；
+  //   prompt_version：reply/prompt-version.js 的 DRAFT_PROMPT_VERSION；requested_by_user_id：点「推荐回复」「换一条」的人，转人工草稿为 NULL。
+  // outcome：NULL 是还没定；used 直接用、edited 改了再发、own 自己写的、dismissed 关掉、replaced 换掉了、unsent 没发。outcome_at：定下的时间。
+  // sent_message_id、sent_text、edit_ratio：拿来比较的那条人工消息、它当时的文字（最多 4000 字）和改动比例（0–1），
+  //   只有 used、edited、own 有。sent_file_ids：起草后 24 小时内人工发出的、草稿建议的文件（JSON 数组，不重复）。
+  // 每个会话最多一行没定的（存新草稿时把前一份定下来）。超过 180 天的由定时清理删掉
+  db.exec(`
+CREATE TABLE IF NOT EXISTS draft_outcomes (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL,
+  account_id TEXT,
+  kind TEXT NOT NULL,
+  follow_up INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  question TEXT NOT NULL DEFAULT '',
+  text TEXT NOT NULL,
+  entry_ids TEXT NOT NULL DEFAULT '[]',
+  file_ids TEXT NOT NULL DEFAULT '[]',
+  model TEXT,
+  prompt_version TEXT NOT NULL,
+  requested_by_user_id TEXT,
+  outcome TEXT,
+  outcome_at TEXT,
+  sent_message_id TEXT,
+  sent_text TEXT,
+  edit_ratio REAL,
+  sent_file_ids TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS draft_outcomes_created ON draft_outcomes(created_at);
+CREATE INDEX IF NOT EXISTS draft_outcomes_conv ON draft_outcomes(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS draft_outcomes_pending ON draft_outcomes(created_at) WHERE outcome IS NULL;
+`);
 }
 
 /**

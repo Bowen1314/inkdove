@@ -6,9 +6,13 @@
 // 一个桶里的记录在当地一定落在同一天、同一小时。30 天最多 2880 个桶，不在 JS 里遍历消息。
 //
 // 导入的历史消息（messages.via = 'import'）不算入站消息、不算新客户、不进热力图：时间是旧的，也不是服务期间收到的。
+//
+// 推荐回复采纳（drafts）和它的列表（GET /api/dashboard/drafts）读 draft_outcomes（reply/draft-outcomes.js 记的）。
 import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
 import { DELETED_ACCOUNT_NAME } from './accounts.js';
 import { codeLabel, LEAD_STAGES, leadStageLabel, LLM_PURPOSES, purposeLabel, RESPONDER_KINDS } from './codes.js';
+import { DRAFT_KINDS, DRAFT_OUTCOMES, DRAFT_PENDING_MS, UNUSED_OUTCOMES } from './reply/draft-outcomes.js';
+import { DRAFT_PROMPT_VERSION } from './reply/prompt-version.js';
 import { badRequest, safeJsonParse } from './util.js';
 
 /** range → 含今天在内的自然日数 */
@@ -59,6 +63,46 @@ export function parseDashboardQuery(q = {}) {
     accountId = q.accountId;
   }
   return { range, tz, accountId };
+}
+
+/** 推荐回复列表（GET /api/dashboard/drafts）每页默认几条、最多几条 */
+export const DRAFT_LIST_LIMIT = 20;
+export const DRAFT_LIST_MAX = 50;
+/**
+ * 推荐回复列表的筛选 → 算哪些结果。all 是改了再发和没用的，不含没发（没发的多半是没人看，说明不了推荐好不好）
+ */
+export const DRAFT_LIST_FILTERS = {
+  all: ['edited', 'own', 'dismissed', 'replaced'],
+  edited: ['edited'],
+  own: ['own'],
+  dismissed: ['dismissed'],
+  replaced: ['replaced'],
+  unsent: ['unsent'],
+};
+
+/**
+ * 推荐回复列表的参数：range、tz、accountId 同看板；filter 不传按 all；cursor 是上一页返回的 nextCursor；limit 1–50，默认 20
+ * @param {Record<string, unknown>} q req.query
+ */
+export function parseDraftListQuery(q = {}) {
+  const base = parseDashboardQuery(q);
+  const filter = q.filter === undefined || q.filter === '' ? 'all' : q.filter;
+  if (typeof filter !== 'string' || !Object.hasOwn(DRAFT_LIST_FILTERS, filter)) {
+    throw badRequest(`filter 只能是 ${Object.keys(DRAFT_LIST_FILTERS).join('、')}`, 'invalid_filter');
+  }
+  let cursor = null;
+  if (q.cursor !== undefined && q.cursor !== '') {
+    const raw = typeof q.cursor === 'string' && q.cursor.length <= 200 ? q.cursor : '';
+    const cut = raw.lastIndexOf('|');
+    if (cut <= 0 || cut === raw.length - 1) throw badRequest('cursor 不正确', 'invalid_cursor');
+    cursor = { at: raw.slice(0, cut), id: raw.slice(cut + 1) };
+  }
+  let limit = DRAFT_LIST_LIMIT;
+  if (q.limit !== undefined && q.limit !== '') {
+    limit = Number(q.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > DRAFT_LIST_MAX) throw badRequest(`limit 只能是 1–${DRAFT_LIST_MAX}`, 'invalid_limit');
+  }
+  return { ...base, filter, cursor, limit };
 }
 
 // ---------------- 时区换算（Intl，不引依赖） ----------------
@@ -189,6 +233,102 @@ const accEq = (col) => `(@acc IS NULL OR ${col} = @acc)`;
 const bucketOf = (col) => `CAST(strftime('%s', ${col}) AS INTEGER) / ${BUCKET_SECONDS}`;
 // 入站消息：客户发的，不含导入的历史消息（助手的概况工具 assistant/tools.js 用同一个口径）
 export const INBOUND = (m) => `${m}.direction = 'in' AND ${m}.author = 'customer' AND COALESCE(${m}.via, '') <> 'import'`;
+// 草稿的结果：还没定、起草已经超过 24 小时的（定时清理还没轮到）按没发算，看板只读不写；还没到 24 小时的为 NULL（还没定）
+const DRAFT_OC = (d) => `CASE WHEN ${d}outcome IS NOT NULL THEN ${d}outcome WHEN ${d}created_at < @pendingBefore THEN 'unsent' END`;
+const jsonLen = (col) => `CASE WHEN json_valid(${col}) THEN json_array_length(${col}) ELSE 0 END`;
+const round3 = (v) => Math.round(v * 1000) / 1000;
+
+/** 一组草稿的计数：总数、还没定的、定了的、各结果、改了再发的改动比例之和 */
+function draftGroup() {
+  return { total: 0, pending: 0, decided: 0, outcomes: Object.fromEntries(Object.keys(DRAFT_OUTCOMES).map((k) => [k, 0])), editSum: 0, editN: 0 };
+}
+function addDraftRow(g, row) {
+  g.total += row.n;
+  if (!row.oc) {
+    g.pending += row.n;
+    return;
+  }
+  g.decided += row.n;
+  if (Object.hasOwn(g.outcomes, row.oc)) g.outcomes[row.oc] += row.n;
+  if (row.oc === 'edited') {
+    g.editSum += row.er || 0;
+    g.editN += row.ern || 0;
+  }
+}
+/** 比率的分母是定了的（还没定的不算）；avgEditRatio 是改了再发的平均改动比例 */
+function finishDraftGroup({ editSum, editN, ...g }) {
+  const unused = UNUSED_OUTCOMES.reduce((n, k) => n + g.outcomes[k], 0);
+  return {
+    ...g,
+    unused,
+    usedRate: ratio(g.outcomes.used, g.decided),
+    editedRate: ratio(g.outcomes.edited, g.decided),
+    unusedRate: ratio(unused, g.decided),
+    avgEditRatio: editN ? round3(editSum / editN) : null,
+  };
+}
+
+/**
+ * 看板的推荐回复采纳：本时间段内起草的推荐回复和转人工草稿，按结果、类型、模型 + 提示词版本、每天统计。不按成员分。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{from:string, to:string, acc:string|null, pendingBefore:string}} P
+ * @param {(bucket:number) => {date:string}} toLocal
+ * @param {string[]} dates
+ */
+export function draftSummary(db, P, toLocal, dates) {
+  const where = `created_at >= @from AND created_at <= @to AND ${accEq('account_id')}`;
+  const rows = db
+    .prepare(
+      `SELECT kind, model, prompt_version AS pv, ${DRAFT_OC('')} AS oc, COUNT(*) AS n, SUM(edit_ratio) AS er, COUNT(edit_ratio) AS ern,
+              MIN(created_at) AS firstAt, MAX(created_at) AS lastAt, SUM(${jsonLen('file_ids')}) AS fs, SUM(${jsonLen('sent_file_ids')}) AS fsent
+         FROM draft_outcomes WHERE ${where}
+        GROUP BY kind, model, pv, oc`,
+    )
+    .all(P);
+  const total = draftGroup();
+  const kinds = new Map(Object.keys(DRAFT_KINDS).map((k) => [k, draftGroup()]));
+  const versions = new Map();
+  const files = { suggested: 0, sent: 0 };
+  for (const row of rows) {
+    addDraftRow(total, row);
+    if (!kinds.has(row.kind)) kinds.set(row.kind, draftGroup());
+    addDraftRow(kinds.get(row.kind), row);
+    const key = JSON.stringify([row.kind, row.model, row.pv]);
+    if (!versions.has(key)) {
+      versions.set(key, { kind: row.kind, model: row.model, promptVersion: row.pv, firstAt: row.firstAt, lastAt: row.lastAt, g: draftGroup() });
+    }
+    const v = versions.get(key);
+    if (row.firstAt < v.firstAt) v.firstAt = row.firstAt;
+    if (row.lastAt > v.lastAt) v.lastAt = row.lastAt;
+    addDraftRow(v.g, row);
+    files.suggested += row.fs || 0;
+    files.sent += row.fsent || 0;
+  }
+  const kindOrder = Object.keys(DRAFT_KINDS);
+  const orderOf = (k) => (kindOrder.includes(k) ? kindOrder.indexOf(k) : kindOrder.length);
+  const trendMap = new Map(dates.map((date) => [date, { date, used: 0, edited: 0, unused: 0, pending: 0 }]));
+  for (const row of db
+    .prepare(`SELECT ${bucketOf('created_at')} AS b, ${DRAFT_OC('')} AS oc, COUNT(*) AS n FROM draft_outcomes WHERE ${where} GROUP BY b, oc`)
+    .all(P)) {
+    const day = trendMap.get(toLocal(row.b).date);
+    if (!day) continue;
+    if (!row.oc) day.pending += row.n;
+    else if (row.oc === 'used' || row.oc === 'edited') day[row.oc] += row.n;
+    else day.unused += row.n;
+  }
+  return {
+    ...finishDraftGroup(total),
+    files,
+    byKind: [...kinds]
+      .map(([kind, g]) => ({ kind, label: DRAFT_KINDS[kind] || kind, ...finishDraftGroup(g) }))
+      .sort((a, b) => orderOf(a.kind) - orderOf(b.kind)),
+    byVersion: [...versions.values()]
+      .map(({ g, ...v }) => ({ ...v, label: DRAFT_KINDS[v.kind] || v.kind, ...finishDraftGroup(g) }))
+      .sort((a, b) => orderOf(a.kind) - orderOf(b.kind) || String(b.lastAt).localeCompare(String(a.lastAt))),
+    trend: [...trendMap.values()],
+    currentPromptVersion: DRAFT_PROMPT_VERSION,
+  };
+}
 
 /**
  * 模型调用的次数、token 和按设置里的单价估算的费用（看板的 cost，助手的用量工具也用它，口径一致）。
@@ -279,6 +419,7 @@ export function createDashboard(ctx, opts = {}) {
       acc: accountId,
       now: r.to,
       since30: new Date(nowMs - UNUSED_ENTRY_DAYS * 86400_000).toISOString(),
+      pendingBefore: new Date(nowMs - DRAFT_PENDING_MS).toISOString(),
     };
     const all = (sql) => db.prepare(sql).all(P);
     const get = (sql) => db.prepare(sql).get(P);
@@ -564,6 +705,9 @@ export function createDashboard(ctx, opts = {}) {
       })),
     };
 
+    // ---- 推荐回复采纳：本时间段内起草的（不按成员分） ----
+    const drafts = draftSummary(db, P, toLocal, r.dates);
+
     return {
       range: { from: r.from, to: r.to, tz },
       kpi,
@@ -577,8 +721,91 @@ export function createDashboard(ctx, opts = {}) {
       abuse,
       heatmap,
       outreach,
+      drafts,
     };
   }
 
-  return { build };
+  /**
+   * 推荐回复列表（改得多的和没用的）：本时间段内起草的，最新的在前，一页 limit 条。每条带客户的问题、草稿、实际发出的文字、
+   * 引用的条目、建议的文件和发出的那条消息（能不能「存进知识库」）。
+   * @param {ReturnType<typeof parseDraftListQuery>} q
+   * @returns {{items:any[], nextCursor:string|null}}
+   */
+  function listDrafts({ range, tz, accountId, filter, cursor, limit }) {
+    const nowMs = clock();
+    const r = resolveRange(range, tz, nowMs);
+    const P = {
+      from: r.from,
+      to: r.to,
+      acc: accountId,
+      pendingBefore: new Date(nowMs - DRAFT_PENDING_MS).toISOString(),
+      cAt: cursor?.at ?? null,
+      cId: cursor?.id ?? null,
+      limit: limit + 1,
+    };
+    const wanted = DRAFT_LIST_FILTERS[filter].map((o) => `'${o}'`).join(', ');
+    const rows = db
+      .prepare(
+        `SELECT d.*, ${DRAFT_OC('d.')} AS oc, c.id AS conv_exists, c.contact_name, c.contact_number
+           FROM draft_outcomes d LEFT JOIN conversations c ON c.id = d.conversation_id
+          WHERE d.created_at >= @from AND d.created_at <= @to AND ${accEq('d.account_id')} AND ${DRAFT_OC('d.')} IN (${wanted})
+            AND (@cAt IS NULL OR d.created_at < @cAt OR (d.created_at = @cAt AND d.id < @cId))
+          ORDER BY d.created_at DESC, d.id DESC LIMIT @limit`,
+      )
+      .all(P);
+    const more = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const arr = (v) => {
+      const x = safeJsonParse(v, []);
+      return Array.isArray(x) ? x.filter((id) => typeof id === 'string') : [];
+    };
+    const lookup = (sql, ids) => (ids.size ? new Map(db.prepare(sql).all(JSON.stringify([...ids])).map((x) => [x.id, x])) : new Map());
+    const entryIds = new Set(page.flatMap((x) => arr(x.entry_ids)));
+    const fileIds = new Set(page.flatMap((x) => arr(x.file_ids)));
+    const msgIds = new Set(page.map((x) => x.sent_message_id).filter(Boolean));
+    const entries = lookup('SELECT id, title FROM entries WHERE id IN (SELECT value FROM json_each(?))', entryIds);
+    const files = lookup('SELECT id, name FROM files WHERE id IN (SELECT value FROM json_each(?))', fileIds);
+    const msgs = lookup('SELECT id, author, text, revoked_at FROM messages WHERE id IN (SELECT value FROM json_each(?))', msgIds);
+    const accountNames = new Map(ctx.accounts.list().map((a) => [a.id, a.name]));
+    const items = page.map((x) => {
+      const sentFiles = new Set(arr(x.sent_file_ids));
+      const m = x.sent_message_id ? msgs.get(x.sent_message_id) : null;
+      return {
+        id: x.id,
+        conversationId: x.conversation_id,
+        conversationExists: !!x.conv_exists,
+        contactName: x.contact_name || '',
+        contactNumber: x.contact_number || '',
+        accountId: x.account_id,
+        accountName: x.account_id ? accountNames.get(x.account_id) ?? DELETED_ACCOUNT_NAME : null,
+        kind: x.kind,
+        kindLabel: DRAFT_KINDS[x.kind] || x.kind,
+        followUp: !!x.follow_up,
+        createdAt: x.created_at,
+        question: x.question,
+        text: x.text,
+        entries: arr(x.entry_ids).map((id) => ({ id, title: entries.get(id)?.title ?? null, deleted: !entries.has(id) })),
+        files: arr(x.file_ids).map((id) => ({ id, name: files.get(id)?.name ?? null, deleted: !files.has(id), sent: sentFiles.has(id) })),
+        outcome: x.oc,
+        outcomeLabel: DRAFT_OUTCOMES[x.oc] || x.oc,
+        outcomeAt: x.outcome_at,
+        editRatio: x.edit_ratio,
+        sentText: x.sent_text,
+        // 发出的那条人工消息：撤回了的结果照旧，只是不能再存进知识库
+        sentMessage: m
+          ? {
+              id: m.id,
+              revoked: !!m.revoked_at,
+              canSaveToKb: m.author === 'operator' && !m.revoked_at && !!String(m.text || '').trim() && !!x.conv_exists,
+            }
+          : null,
+        model: x.model,
+        promptVersion: x.prompt_version,
+      };
+    });
+    const last = page[page.length - 1];
+    return { items, nextCursor: more && last ? `${last.created_at}|${last.id}` : null };
+  }
+
+  return { build, listDrafts };
 }

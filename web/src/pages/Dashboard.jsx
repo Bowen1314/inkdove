@@ -20,6 +20,7 @@ import {
   OutreachCard,
   TrendCard,
 } from './dashboard/sections.jsx';
+import { DraftListCard, DraftsCard } from './dashboard/drafts.jsx';
 
 const RANGES = [
   { value: 'today', label: '今天' },
@@ -138,6 +139,8 @@ export default function Dashboard() {
         <AbuseCard abuse={data.abuse} />
         <OutreachCard outreach={data.outreach} />
         <HeatmapCard heatmap={data.heatmap} tz={data.range?.tz} />
+        <DraftsCard drafts={data.drafts} />
+        <DraftListCard range={range} accountId={accountId} tz={browserTz()} reloadKey={reloadKey} />
       </div>
     );
   }

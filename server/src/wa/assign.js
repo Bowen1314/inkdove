@@ -1,6 +1,7 @@
 // 按客户分配会话：改负责人、批量分配、转交、分配记录，以及成员和号变动时把会话收回成未分配（表和列见 db.js）。
 // 谁能看哪个会话由 auth.js 的 canAccessConversation 判断；这里只管写。每次改负责人都在事务里同时写一行分配记录。
 import { canAccessAccount, rowToUser } from '../auth.js';
+import { settleDrafts } from '../reply/draft-outcomes.js';
 import { HttpError, newId, notFound, nowIso } from '../util.js';
 
 export const ASSIGN_REASONS = ['manual', 'bulk', 'transfer', 'migration', 'campaign', 'access_removed', 'user_deleted'];
@@ -42,10 +43,14 @@ function writeAssignee(db, row, toUserId, { byUserId = null, reason, at = nowIso
   const from = row.assignee_id ?? null;
   if (from === (toUserId ?? null)) return false;
   db.prepare('UPDATE conversations SET assignee_id = ?, assigned_at = ? WHERE id = ?').run(toUserId, toUserId ? at : null, row.id);
-  db.prepare(
-    `UPDATE conversations SET draft = NULL
-      WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.agentUserId') IS NOT NULL AND json_extract(draft, '$.agentUserId') IS NOT ?`,
-  ).run(row.id, toUserId ?? null);
+  const cleared = db
+    .prepare(
+      `UPDATE conversations SET draft = NULL
+        WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.agentUserId') IS NOT NULL AND json_extract(draft, '$.agentUserId') IS NOT ?`,
+    )
+    .run(row.id, toUserId ?? null).changes;
+  // 推荐回复采纳统计：改派清掉的草稿记没发
+  if (cleared) settleDrafts(db, row.id, 'unsent', { at });
   db.prepare(
     `INSERT INTO conversation_assignments(id, conversation_id, from_user_id, to_user_id, by_user_id, reason, at)
      VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -119,9 +124,17 @@ export function transferAll(db, fromUserId, toUserId, by) {
  * @returns {number} 清了几份
  */
 export function clearMemberDrafts(db, userId) {
-  return db
+  const ids = db
+    .prepare("SELECT id FROM conversations WHERE json_valid(draft) AND json_extract(draft, '$.agentUserId') = ?")
+    .all(userId)
+    .map((r) => r.id);
+  const n = db
     .prepare("UPDATE conversations SET draft = NULL WHERE json_valid(draft) AND json_extract(draft, '$.agentUserId') = ?")
     .run(userId).changes;
+  // 推荐回复采纳统计：清掉的草稿记没发
+  const at = nowIso();
+  for (const id of ids) settleDrafts(db, id, 'unsent', { at });
+  return n;
 }
 
 /**

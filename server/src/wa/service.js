@@ -821,7 +821,11 @@ export function createWaService(ctx, opts = {}) {
    * 转人工草稿照旧只在人工接管（operatorTakeover，同时也清推荐）和恢复机器人时清
    */
   function clearSuggestion(convId) {
-    db.prepare("UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest'").run(convId);
+    const n = db
+      .prepare("UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest'")
+      .run(convId).changes;
+    // 人工发的走 operatorDeliver（先接管、草稿已经清了，这里清不到），清到的是机器人、手机、外联发的：推荐记没发
+    if (n) noteDraft('没发', (d) => d.unsent(convId));
   }
 
   /**
@@ -830,9 +834,26 @@ export function createWaService(ctx, opts = {}) {
    * JSON 里的 true 用 json_extract 取出来是 1
    */
   function clearFollowUpSuggestion(convId) {
-    db.prepare(
-      "UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest' AND json_extract(draft, '$.followUp') = 1",
-    ).run(convId);
+    const n = db
+      .prepare(
+        "UPDATE conversations SET draft = NULL WHERE id = ? AND json_valid(draft) AND json_extract(draft, '$.kind') = 'suggest' AND json_extract(draft, '$.followUp') = 1",
+      )
+      .run(convId).changes;
+    if (n) noteDraft('没发', (d) => d.unsent(convId));
+  }
+
+  /**
+   * 推荐回复采纳统计（reply/draft-outcomes.js）：记一份草稿的去向。出错只记 warn，从不影响发送、清草稿
+   * @param {string} what 日志里的说明
+   * @param {(d:any) => any} fn
+   */
+  function noteDraft(what, fn) {
+    if (!ctx.draftOutcomes) return;
+    try {
+      fn(ctx.draftOutcomes);
+    } catch (err) {
+      log.warn(`[wa] 记录推荐回复结果（${what}）失败：${err?.message || err}`);
+    }
   }
 
   /** 草稿里记的那个人（draft.agentUserId）已经停用或删除了：起草期间被停用、删除的，草稿不存（存下之后的由 routes/users.js 清） */
@@ -868,6 +889,8 @@ export function createWaService(ctx, opts = {}) {
     operatorTakeover(convId);
     const msg = await sendAndRecord(acc, getConvRow(convId), clip(text, MAX_OPERATOR_TEXT), { author: 'operator', via, sentBy });
     noteOperatorResponse(convId, msg, { via, sentBy });
+    // 推荐回复采纳统计：拿发出的文字和这个会话还没定的草稿比（发送失败的不比）
+    noteDraft('比较', (d) => d.operatorSent(convId, msg));
     return msg;
   }
 
@@ -876,6 +899,8 @@ export function createWaService(ctx, opts = {}) {
     operatorTakeover(convId);
     const msg = await sendFileAndRecord(acc, getConvRow(convId), file, { author: 'operator', via, sentBy, caption: clip(caption, MAX_CAPTION) });
     noteOperatorResponse(convId, msg, { via, sentBy });
+    // 推荐回复采纳统计：发的是草稿建议的文件就记上
+    noteDraft('发文件', (d) => d.fileSent(convId, file.id, msg));
     return msg;
   }
 
@@ -883,6 +908,8 @@ export function createWaService(ctx, opts = {}) {
   function resumeBot(convId) {
     db.prepare('UPDATE conversations SET bot_paused = 0, needs_human = 0, pending_reason = NULL, draft = NULL WHERE id = ?').run(convId);
     ctx.records.handoffResume({ conversationId: convId });
+    // 推荐回复采纳统计：恢复机器人时还没定的草稿（包括填进输入框没发的）记没发
+    noteDraft('没发', (d) => d.unsent(convId));
   }
 
   // ---------------- 入站 ----------------
@@ -1780,6 +1807,7 @@ export function createWaService(ctx, opts = {}) {
       return;
     }
     db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
+    noteDraft('记录', (d) => d.recorded(conv, draft, { question: message }));
   }
 
   // ---------------- F1 / F14：拟真发送 ----------------
@@ -2862,6 +2890,7 @@ export function createWaService(ctx, opts = {}) {
         log.info(`[wa] 会话 ${convId} 起草推荐回复期间换了负责人，或者点按钮的人被停用、删除了，推荐里是他的资料，不存`);
       } else if (now && !stale) {
         db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
+        noteDraft('记录', (d) => d.recorded(now, draft, { question: input.message, requestedBy: user }));
       }
       return { draft: parseDraft(JSON.stringify(draft)) };
     },
@@ -2891,10 +2920,15 @@ export function createWaService(ctx, opts = {}) {
       return conversationById(id);
     },
 
-    /** 关掉推荐回复 / 草稿卡片：清掉这个会话当前的草稿（suggest 和 handoff 都清）。没有草稿也照常返回 */
-    clearDraft(id) {
-      if (!getConvRow(id)) throw notFound('会话不存在');
+    /**
+     * 关掉推荐回复 / 草稿卡片：清掉这个会话当前的草稿（suggest 和 handoff 都清）。没有草稿也照常返回。
+     * filled 为 true 是「填入输入框」清的：采纳统计里不算关掉，等人工发出去再比；否则是点 × 关掉的，记关掉
+     */
+    clearDraft(id, { filled = false } = {}) {
+      const row = getConvRow(id);
+      if (!row) throw notFound('会话不存在');
       db.prepare('UPDATE conversations SET draft = NULL WHERE id = ?').run(id);
+      if (row.draft && !filled) noteDraft('关掉', (d) => d.dismissed(id));
       return conversationById(id);
     },
 

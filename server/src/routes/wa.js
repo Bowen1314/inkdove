@@ -102,10 +102,12 @@ export function waRouter(ctx) {
     const c = loadConv(req);
     res.json(wa.resolvePending(c.id));
   });
-  // 关掉推荐回复 / 草稿：清掉当前草稿（suggest 和 handoff 都清），没有草稿也返回 200，权限同手动回复 → 完整的 Conversation
+  // 关掉推荐回复 / 草稿：清掉当前草稿（suggest 和 handoff 都清），没有草稿也返回 200，权限同手动回复 → 完整的 Conversation。
+  // ?filled=1 是「填入输入框」清的，采纳统计里不算关掉（等发出去再比）
   router.delete('/conversations/:id/draft', (req, res) => {
     const c = loadConv(req);
-    res.json(wa.clearDraft(c.id));
+    const filled = req.query.filled === '1' || req.query.filled === 'true';
+    res.json(wa.clearDraft(c.id, { filled }));
   });
   // F15：人工发文件，权限同手动回复
   router.post('/conversations/:id/send-file', async (req, res) => {

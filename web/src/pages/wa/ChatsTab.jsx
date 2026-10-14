@@ -1246,14 +1246,14 @@ function ChatPane({
    * 手动要来、没存进服务端的那份直接丢掉。keepFiles：草稿带的文件留着，发完或再点 × 才收起。
    * 服务端清失败时提示，卡片恢复显示
    */
-  const closeDraft = async (keepFiles = []) => {
+  const closeDraft = async (keepFiles = [], { filled = false } = {}) => {
     if (!conv || !shownDraft) return;
     const prev = { manual, keptFiles };
     setClosedAt(liveDraftAt || '');
     setManual(null);
     setKeptFiles(keepFiles.length ? { draftAt: liveDraftAt, fileIds: keepFiles } : null);
     try {
-      const res = await api.clearDraft(conv.id, { silent: true });
+      const res = await api.clearDraft(conv.id, { silent: true, filled });
       if (res?.id) onConvUpdate(res);
     } catch (e) {
       if (e?.status === 401 || !aliveRef.current) return;
@@ -1326,7 +1326,8 @@ function ChatPane({
   /** 填入输入框，草稿卡片随之关掉（带的文件留着） */
   const fillDraft = (t, fileIds = []) => {
     setText(t);
-    closeDraft(fileIds);
+    // 填入输入框不算关掉（推荐回复采纳统计等发出去再比）
+    closeDraft(fileIds, { filled: true });
     setTimeout(() => {
       const el = inputRef.current;
       if (el) {

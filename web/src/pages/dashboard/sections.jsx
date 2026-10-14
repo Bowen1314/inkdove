@@ -29,7 +29,7 @@ const entryLink = (id) => (id ? `/kb/entries?edit=${enc(id)}` : undefined);
 const sumBy = (list, key) => list.reduce((n, x) => n + num(x[key]), 0);
 
 /** 卡片：H3 标题（用 h2 标签保证大纲层级），右边可放说明或链接 */
-function Card({ title, span, aside, flush = false, className = '', children, busy }) {
+export function Card({ title, span, aside, flush = false, className = '', children, busy }) {
   const id = useId();
   return (
     <section
@@ -49,7 +49,7 @@ function Card({ title, span, aside, flush = false, className = '', children, bus
 }
 
 /** 卡片里的小节：Caption 标题，右边可放 link */
-function Sub({ title, aside, children, className = '' }) {
+export function Sub({ title, aside, children, className = '' }) {
   return (
     <div className={`dash-sub ${className}`}>
       <div className="dash-sub__head">
@@ -62,7 +62,7 @@ function Sub({ title, aside, children, className = '' }) {
 }
 
 /** 小号的指标：Caption 标签 + 15px 数字 + 可选的一行灰字 */
-function Stat({ label, value, unit, foot, tone }) {
+export function Stat({ label, value, unit, foot, tone }) {
   return (
     <div className="dash-stat">
       <div className="dash-stat__label">{label}</div>
@@ -75,10 +75,10 @@ function Stat({ label, value, unit, foot, tone }) {
   );
 }
 
-const Empty = ({ title, desc, action }) => <EmptyState compact title={title} desc={desc} action={action} />;
+export const Empty = ({ title, desc, action }) => <EmptyState compact title={title} desc={desc} action={action} />;
 
 /** 选了某个号时，给不按号筛选的块标一句 */
-function NotFiltered({ text = '不按号筛选', help }) {
+export function NotFiltered({ text = '不按号筛选', help }) {
   return (
     <span className="dash-card__note">
       {text}

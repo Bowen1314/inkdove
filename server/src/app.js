@@ -12,6 +12,7 @@ import { canAccessAccount, createAuth } from './auth.js';
 import { CONDUCT_DEBOUNCE_MS, CONDUCT_SWEEP_MS, createConduct } from './blockwords/conduct.js';
 import { createBlockwords } from './blockwords/store.js';
 import { createDashboard } from './dashboard.js';
+import { createDraftOutcomes, DRAFT_SWEEP_INTERVAL_MS } from './reply/draft-outcomes.js';
 import { openDb } from './db.js';
 import { createMailer } from './email.js';
 import { createMockAi } from './ai/mock.js';
@@ -102,6 +103,8 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   conductIntervalMs?: number,
  *   conductDebounceMs?: number,
  *   conductNow?: () => number,
+ *   draftSweepIntervalMs?: number,
+ *   draftNow?: () => number,
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
  *   placeholderFixTimeoutMs：测试用，草稿里外文的【待你确认：…】译成中文最多等多久（默认见 wa/translate.js 的 PLACEHOLDER_FIX_TIMEOUT_MS）
@@ -110,6 +113,8 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   assistantNow、assistantLimits：测试用，首页 AI 助手的时钟和循环上限（工具次数、总时长、每步时长）
  *   conductIntervalMs：AI 发言检查多久扫一次，为 0 时不起定时器（测试里手动调 ctx.conduct.run()）；conductDebounceMs：会话最后一条
  *   我方消息之后等多久再查；conductNow：测试用的时钟
+ *   draftSweepIntervalMs：推荐回复采纳统计多久清理一次（过了 24 小时没定的记没发、删超过 180 天的），为 0 时不起定时器
+ *   （测试里手动调 ctx.draftOutcomes.sweep()）；draftNow：测试用的时钟
  */
 export function createApp(config, options = {}) {
   const log = options.log || console;
@@ -165,6 +170,7 @@ export function createApp(config, options = {}) {
     outreach: null,
     redteam: null,
     dashboard: null,
+    draftOutcomes: null,
     blockwords: null,
     conduct: null,
     assistant: null,
@@ -195,6 +201,9 @@ export function createApp(config, options = {}) {
   ctx.conduct.start(options.conductIntervalMs ?? CONDUCT_SWEEP_MS);
   ctx.files = createFileStore(ctx);
   ctx.files.resumePending();
+  // 推荐回复采纳统计：每份推荐回复、转人工草稿最后是直接用、改了再发还是没用（reply/draft-outcomes.js），发送的地方要用，先建
+  ctx.draftOutcomes = createDraftOutcomes(ctx, { now: options.draftNow });
+  ctx.draftOutcomes.start(options.draftSweepIntervalMs ?? DRAFT_SWEEP_INTERVAL_MS);
   ctx.wa = createWaService(ctx, {
     humanize: options.humanize,
     notifyRetryDelayMs: options.notifyRetryDelayMs,
@@ -370,6 +379,7 @@ export function createApp(config, options = {}) {
       await ctx.update.stop();
       await ctx.globalProxy.close();
       ctx.audit.stop();
+      ctx.draftOutcomes.stop();
       try {
         db.close();
       } catch {

@@ -242,8 +242,14 @@ export const api = {
   cancelRedteamRun: (id, o) => post(`/api/redteam/runs/${enc(id)}/cancel`, {}, o),
 
   // 看板（F12，admin）：range 取 today | 7d | 30d；accountId 空为全部号码；tz 是浏览器的 IANA 时区
-  /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach}，结构见 SPEC-phase2 F12 */
+  /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach, drafts}，结构见 SPEC-phase2 F12 */
   getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
+  /**
+   * 推荐回复列表（改得多的和没用的）：filter 取 all | edited | own | dismissed | replaced | unsent，cursor 是上一页的 nextCursor
+   * → {items, nextCursor}
+   */
+  getDashboardDrafts: ({ range, accountId, tz, filter, cursor, limit } = {}, o) =>
+    get('/api/dashboard/drafts', { ...o, query: { range, accountId, tz, filter, cursor, limit } }),
 
   // 首页 AI 助手（所有人都能用，对话只有本人看得到）：提问在后台进行，前端轮询那条消息，直到 status 不是 running
   /** → {chats:[{id, title, createdAt, updatedAt}]（新到旧）, usage:{used, limit}}（今天问了几次、每天最多几次） */
@@ -380,8 +386,12 @@ export const api = {
   setBotPaused: (id, paused) => post(`/api/wa/conversations/${enc(id)}/bot`, { paused }),
   /** 人工回复的号「标为已处理」：只清掉待处理，不动机器人暂停状态和草稿 → Conversation */
   resolveConversation: (id, o) => post(`/api/wa/conversations/${enc(id)}/resolve`, {}, o),
-  /** 关掉推荐回复 / 草稿（推荐回复和转人工草稿都清）；没有草稿也成功 → Conversation */
-  clearDraft: (id, o) => del(`/api/wa/conversations/${enc(id)}/draft`, o),
+  /**
+   * 关掉推荐回复 / 草稿（推荐回复和转人工草稿都清）；没有草稿也成功 → Conversation。
+   * filled 为真是「填入输入框」清的：采纳统计里不算关掉，等发出去再比
+   */
+  clearDraft: (id, { filled = false, ...o } = {}) =>
+    del(`/api/wa/conversations/${enc(id)}/draft`, { ...o, query: filled ? { filled: 1 } : undefined }),
   /**
    * 客户发来的图片、视频、语音、文件、贴纸（后端收到就存了盘）。白名单里的图片、视频、音频直接显示或播放，
    * 其他一律下载；download 为真时都按下载处理

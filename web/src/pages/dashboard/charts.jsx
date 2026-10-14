@@ -95,13 +95,13 @@ function TipBody({ title, rows, foot }) {
 
 /**
  * 每日趋势：按处理结果堆叠的柱状图。data: [{date, replied, handoff, blocked, offtopic}]
- * 每一天是一个可聚焦的 <g>，悬停或键盘聚焦显示当天明细。
+ * 每一天是一个可聚焦的 <g>，悬停或键盘聚焦显示当天明细。series 换掉堆叠的几项（推荐回复的趋势用），label 是整张图的读屏名称
  */
-export function TrendChart({ data }) {
+export function TrendChart({ data, series = DECISION_SERIES, label: chartLabel = '每日处理结果' }) {
   const [ref, width] = useWidth();
   const rows = data.map((d) => {
-    const vals = Object.fromEntries(DECISION_SERIES.map((s) => [s.key, num(d[s.key])]));
-    const total = DECISION_SERIES.reduce((n, s) => n + vals[s.key], 0);
+    const vals = Object.fromEntries(series.map((s) => [s.key, num(d[s.key])]));
+    const total = series.reduce((n, s) => n + vals[s.key], 0);
     return { date: d.date, ...dateParts(d.date), vals, total };
   });
   const max = Math.max(0, ...rows.map((r) => r.total));
@@ -124,7 +124,7 @@ export function TrendChart({ data }) {
   return (
     <div ref={ref} className="dash-chart">
       {width > 0 && (
-        <svg width={width} height={H} className="dash-chart__svg" role="group" aria-label="每日处理结果">
+        <svg width={width} height={H} className="dash-chart__svg" role="group" aria-label={chartLabel}>
           {ticks.map((t) => (
             <g key={t}>
               <line x1={padLeft} x2={width} y1={y(t)} y2={y(t)} className={t === 0 ? 'dash-chart__axis' : 'dash-chart__grid'} />
@@ -137,21 +137,21 @@ export function TrendChart({ data }) {
             const x0 = padLeft + i * band;
             const bx = x0 + (band - barW) / 2;
             let acc = 0;
-            const label = `${r.long}：${DECISION_SERIES.map((s) => `${s.label} ${r.vals[s.key]}`).join('，')}`;
+            const label = `${r.long}：${series.map((s) => `${s.label} ${r.vals[s.key]}`).join('，')}`;
             return (
               <Tooltip
                 key={r.date || i}
                 content={
                   <TipBody
                     title={r.long}
-                    rows={DECISION_SERIES.map((s) => ({ label: s.label, value: fmtNum(r.vals[s.key]), color: s.color }))}
+                    rows={series.map((s) => ({ label: s.label, value: fmtNum(r.vals[s.key]), color: s.color }))}
                     foot={`合计 ${fmtNum(r.total)}`}
                   />
                 }
               >
                 <g className="dash-trend__band" tabIndex={0} role="img" aria-label={label}>
                   <rect x={x0} y={padTop} width={band} height={innerH} className="dash-trend__hit" />
-                  {DECISION_SERIES.map((s) => {
+                  {series.map((s) => {
                     const v = r.vals[s.key];
                     if (!v) return null;
                     const y1 = y(acc + v);
