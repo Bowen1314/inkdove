@@ -7,7 +7,7 @@
 
 # 墨鸽 Inkdove
 
-**A WhatsApp workspace for export sales teams: customers talk to one company number, each customer is assigned to a salesperson, and when you need it, one click gets AI to draft a reply from your knowledge base. A person always sends it.**
+**A WhatsApp workspace for export sales teams: customers talk to one company number, each customer is assigned to a salesperson, and when you need it, one click gets AI to draft a reply grounded in your knowledge base through RAG (full-text search plus a built-in vector store). A person always sends it.**
 
 [![Release](https://img.shields.io/github/v/release/Bowen1314/inkdove)](https://github.com/Bowen1314/inkdove/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)

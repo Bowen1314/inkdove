@@ -7,7 +7,7 @@
 
 # 墨鸽 Inkdove
 
-**外贸团队的 WhatsApp 工作台：公司号统一对外，客户分给业务员，需要时一键让 AI 按知识库起草回复，人来发。**
+**外贸团队的 WhatsApp 工作台：公司号统一对外，客户分给业务员；需要时一键让 AI 用 RAG（全文检索 + 内置向量库）从知识库里找出依据、起草回复，人来发。**
 
 [![Release](https://img.shields.io/github/v/release/Bowen1314/inkdove)](https://github.com/Bowen1314/inkdove/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
