@@ -2191,3 +2191,7 @@
   margin-right: auto;
   align-self: center;
 }
+/* 按钮多（停用这个业务员、误报、打开会话、知道了），窄屏放不下时换行 */
+.blockword-alert-modal .modal__foot {
+  flex-wrap: wrap;
+}

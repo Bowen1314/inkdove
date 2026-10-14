@@ -514,8 +514,10 @@ describe('屏蔽词（mock）', () => {
     assert.equal(first.conversationId, id);
     assert.deepEqual(first.words, ['zorp']);
     assert.deepEqual(first.ranges, [[0, 4]]);
+    assert.equal(first.userDisabled, false, '小王启用中');
     assert.equal(a1.items[2].blocked, false);
     assert.equal(a1.items[2].source, 'phone');
+    assert.equal(a1.items[2].userDisabled, null, '手机上发的不是成员');
 
     // 二管理点了「知道了」
     const ack = await t.req('POST', `/api/blockwords/hits/${first.id}/ack`, { cookie: admin2.cookie });
@@ -546,6 +548,44 @@ describe('屏蔽词（mock）', () => {
     assert.equal((await t.req('GET', '/api/blockwords/hits?status=nope')).status, 400);
     assert.equal((await t.req('GET', '/api/blockwords/hits?from=yesterday')).status, 400);
     assert.equal((await t.req('GET', '/api/blockwords/hits?pageSize=500')).status, 400);
+  });
+
+  it('提醒带发送人现在的状态 userDisabled：成员启用中 false、停用后 true（记操作日志）、删掉后 null；机器人、手机上发的为 null', async () => {
+    const member = await t.addMember({ email: 'bw-stop@example.com', name: '小李', accountIds: [quiet.id] });
+    const bw = t.ctx.blockwords;
+    const mine = bw.check('小李说 zorp', { source: 'operator', accountId: quiet.id, user: member.user });
+    const bot = bw.check('机器人说 blarg', { source: 'bot', accountId: acc.id });
+    const phone = bw.check('手机上说坏词', { source: 'phone', blocked: false, accountId: quiet.id });
+    const state = async () => {
+      const items = (await alerts()).body.items;
+      const of = (h) => items.find((x) => x.id === h.id).userDisabled;
+      return { mine: of(mine), bot: of(bot), phone: of(phone) };
+    };
+    assert.deepEqual(await state(), { mine: false, bot: null, phone: null });
+
+    // 弹窗里「停用这个业务员」用的就是成员页面的接口
+    const r = await t.req('PUT', `/api/users/${member.user.id}`, { body: { disabled: true } });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.disabled, true);
+    const log = rows("SELECT * FROM audit_logs WHERE action = 'member.update' ORDER BY seq DESC LIMIT 1")[0];
+    assert.equal(log.summary, '停用了成员「小李」');
+    assert.equal(log.target_id, member.user.id);
+    assert.deepEqual(await state(), { mine: true, bot: null, phone: null });
+    // 历史列表也带
+    const list = (await t.req('GET', `/api/blockwords/hits?who=${member.user.id}`)).body;
+    assert.deepEqual(list.items.map((x) => x.userDisabled), [true]);
+    // 停用不算处理，提醒还在
+    assert.equal((await alerts()).body.total, 3);
+
+    // 删掉成员：记录里的发送人还在，状态为 null；「知道了」返回的也带
+    assert.equal((await t.req('DELETE', `/api/users/${member.user.id}`)).status, 200);
+    const gone = (await alerts()).body.items.find((x) => x.id === mine.id);
+    assert.equal(gone.userId, member.user.id);
+    assert.equal(gone.userName, '小李');
+    assert.equal(gone.userDisabled, null);
+    const ack = await t.req('POST', `/api/blockwords/hits/${mine.id}/ack`);
+    assert.equal(ack.status, 200);
+    assert.equal(ack.body.userDisabled, null);
   });
 
   describe('AI 扩充', () => {

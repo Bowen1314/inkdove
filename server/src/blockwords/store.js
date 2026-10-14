@@ -90,6 +90,26 @@ function isoParam(v, field) {
 export function createBlockwords(ctx) {
   const { db } = ctx;
 
+  /**
+   * 行 → 记录，并按 user_id 查发送人现在的状态 userDisabled：停用了 true、启用中 false；
+   * 不是成员发的（机器人、机主手机、通知号码）或成员已经删了为 null。弹窗按这个决定显不显示「停用这个业务员」。
+   * 一页最多几百行，按主键逐个查，同一个人只查一次
+   */
+  const userDisabledStmt = db.prepare('SELECT disabled FROM users WHERE id = ?');
+  function toHits(rows) {
+    const state = new Map();
+    return rows.map((r) => {
+      const h = rowToHit(r);
+      if (h.userId && !state.has(h.userId)) {
+        const u = userDisabledStmt.get(h.userId);
+        state.set(h.userId, u ? !!u.disabled : null);
+      }
+      h.userDisabled = h.userId ? state.get(h.userId) : null;
+      return h;
+    });
+  }
+  const toHit = (row) => toHits([row])[0];
+
   /** 开着而且有词时返回编译好的词表，否则 null */
   function compiled() {
     const b = ctx.getSettings().blockwords;
@@ -196,7 +216,7 @@ export function createBlockwords(ctx) {
     alerts() {
       const total = db.prepare(`SELECT COUNT(*) n FROM blockword_hits WHERE ${ALERT_WHERE}`).get().n;
       const items = total
-        ? db.prepare(`SELECT * FROM blockword_hits WHERE ${ALERT_WHERE} ORDER BY ts, rowid LIMIT ?`).all(ALERT_LIMIT).map(rowToHit)
+        ? toHits(db.prepare(`SELECT * FROM blockword_hits WHERE ${ALERT_WHERE} ORDER BY ts, rowid LIMIT ?`).all(ALERT_LIMIT))
         : [];
       return { total, items };
     },
@@ -211,7 +231,7 @@ export function createBlockwords(ctx) {
       );
       const row = db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id);
       if (!row) throw notFound('这条记录不存在');
-      return rowToHit(row);
+      return toHit(row);
     },
 
     /**
@@ -232,7 +252,7 @@ export function createBlockwords(ctx) {
            acked_at = COALESCE(acked_at, ?)
          WHERE id = ? AND false_positive_at IS NULL`,
       ).run(now, by, name, by, name, now, id);
-      return rowToHit(db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id));
+      return toHit(db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id));
     },
 
     /**
@@ -285,10 +305,9 @@ export function createBlockwords(ctx) {
       }
       const w = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const total = db.prepare(`SELECT COUNT(*) n FROM blockword_hits ${w}`).get(...params).n;
-      const items = db
-        .prepare(`SELECT * FROM blockword_hits ${w} ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?`)
-        .all(...params, size, (page - 1) * size)
-        .map(rowToHit);
+      const items = toHits(
+        db.prepare(`SELECT * FROM blockword_hits ${w} ORDER BY ts DESC, rowid DESC LIMIT ? OFFSET ?`).all(...params, size, (page - 1) * size),
+      );
       const senders = db
         .prepare('SELECT user_id id, MAX(user_name) name FROM blockword_hits WHERE user_id IS NOT NULL GROUP BY user_id ORDER BY name')
         .all();

@@ -2,11 +2,12 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client.js';
 import { usePolling } from '../hooks/usePolling.js';
+import { useAuth } from '../lib/auth.jsx';
 import { hitSegments, notifyBlockwordAck, onBlockwordAck } from '../lib/blockwords.js';
 import { fmtFull } from '../lib/format.js';
 import { blockwordResult, blockwordSourceLabel, blockwordWho, conductLabel } from '../lib/labels.js';
 import { Spinner } from './common.jsx';
-import { Modal } from './Modal.jsx';
+import { Modal, useConfirm } from './Modal.jsx';
 import { StatusDot } from './StatusDot.jsx';
 import { toast } from './toastBus.js';
 
@@ -53,12 +54,17 @@ const hidden = new Set();
  * 屏蔽词提醒（只给管理员，Layout 里挂一个）：每 5 秒取一次还没处理的命中，有就弹窗，一次显示一条（最早的）。
  * 「知道了」记成已处理，别的管理员就不再弹；「打开会话」先记成已处理再跳到会话。登录后进来先取一次，没处理的照样弹。
  * AI 发言检查发现的严重问题也走这里（轻微的服务端不给，只在设置页的记录里）：写问题和说明，不写屏蔽词，多一个「误报」。
+ * 成员发的（不是机器人、机主手机、通知号码，也不是自己）多一个「停用这个业务员」：管理员点了、确认后才停用，
+ * 和「成员」页面的停用一样；不算处理这条提醒，还要点「知道了」。已经停用的写「已停用」。
  */
 export function BlockwordAlerts() {
   const navigate = useNavigate();
+  const confirm = useConfirm();
+  const { user: me } = useAuth();
   const [data, setData] = useState(null); // {total, items}
   const [, setHiddenTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false); // 正在停用发送人
 
   const load = useCallback(async () => {
     setData(await api.getBlockwordAlerts({ silent: true }));
@@ -74,10 +80,14 @@ export function BlockwordAlerts() {
   const more = Math.max(0, (data.total || 0) - 1);
   const result = blockwordResult(hit);
   const isAi = hit.detector === 'ai';
+  const working = busy || stopping;
+  // userDisabled：服务端按发送人现在的状态给，不是成员发的或成员已经删了为 null
+  const canStop = !!hit.userId && hit.userDisabled === false && hit.userId !== me?.id;
+  const stopped = !!hit.userId && hit.userDisabled === true;
 
   /** 「知道了」（falsePositive 时是「误报」，同时算处理了）；thenOpen：处理完打开会话 */
   const ack = async (thenOpen, falsePositive = false) => {
-    if (busy) return;
+    if (working) return;
     setBusy(true);
     try {
       if (falsePositive) await api.falsePositiveBlockwordHit(hit.id, { silent: true });
@@ -101,26 +111,63 @@ export function BlockwordAlerts() {
     setHiddenTick((n) => n + 1);
   };
 
+  /** 「停用这个业务员」：确认后 PUT /api/users/:id {disabled: true}，出错（比如最后一个管理员）请求那边已经提示了 */
+  const stopMember = async () => {
+    if (working) return;
+    const userId = hit.userId;
+    const name = hit.userName || '这个业务员';
+    const ok = await confirm({
+      title: `停用「${name}」？`,
+      message: '停用后他马上退出登录，登不上也发不了消息。他负责的客户还记在他名下，可以之后在「成员」页面转交，也可以在那里重新启用他。',
+      confirmText: '停用',
+      danger: true,
+    });
+    if (!ok) return;
+    setStopping(true);
+    try {
+      await api.updateUser(userId, { disabled: true });
+    } catch {
+      setStopping(false);
+      return;
+    }
+    // 他的几条提醒都改成「已停用」，下一轮轮询服务端也会这样给
+    setData((d) => (d ? { ...d, items: d.items.map((x) => (x.userId === userId ? { ...x, userDisabled: true } : x)) } : d));
+    setStopping(false);
+    toast.success(`已停用${name}`);
+  };
+
   return (
     <Modal
       open
       title={isAi ? 'AI 发言检查：发现严重问题' : '发现屏蔽词'}
       onClose={close}
       width={560}
+      className="blockword-alert-modal"
       footer={
         <>
           {more > 0 && <span className="blockword-alert__more muted">还有 {more} 条</span>}
+          {canStop && (
+            <button type="button" className="btn btn--danger" onClick={stopMember} disabled={working}>
+              {stopping && <Spinner />}
+              停用这个业务员
+            </button>
+          )}
+          {stopped && (
+            <StatusDot tone="neutral" muted>
+              已停用
+            </StatusDot>
+          )}
           {isAi && (
-            <button type="button" className="btn" onClick={() => ack(false, true)} disabled={busy}>
+            <button type="button" className="btn" onClick={() => ack(false, true)} disabled={working}>
               误报
             </button>
           )}
           {hit.conversationId && (
-            <button type="button" className="btn" onClick={() => ack(true)} disabled={busy}>
+            <button type="button" className="btn" onClick={() => ack(true)} disabled={working}>
               打开会话
             </button>
           )}
-          <button type="button" className="btn btn--primary" onClick={() => ack(false)} disabled={busy}>
+          <button type="button" className="btn btn--primary" onClick={() => ack(false)} disabled={working}>
             {busy && <Spinner />}
             知道了
           </button>
