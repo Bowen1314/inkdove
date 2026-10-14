@@ -1,6 +1,6 @@
 # 已核实的外部接口
 
-代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
+代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口、重排接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
@@ -70,6 +70,16 @@
   - Gemini：`POST {地址}/v1beta/models/{模型}:batchEmbedContents`，`x-goog-api-key: <key>`，体 `{requests: [{model: "models/{模型}", content: {parts: [{text}]}, taskType}]}`（条目用 `RETRIEVAL_DOCUMENT`，查询用 `RETRIEVAL_QUERY`），返回 `embeddings[].values`（和请求同序）和 `usageMetadata.promptTokenCount`。文档里 `taskType` 标了「改用 `embedContentConfig.taskType`」，旧字段仍然收，这里用旧的。见 [embeddings](https://ai.google.dev/api/embeddings)；
   - 发出去的内容：后台计算时是条目的标题、内容和标签（长条目切成几段，每段最多 1500 字）；回复检索时是本次客户消息加最近几条客户消息（最多 1500 字）；设置页「测试」发一句固定的示例话。都不带号码和客户名字；
   - 错误：401、403 当鉴权失败，404 当模型名或地址不对，429 读 `Retry-After`（秒数或 HTTP 日期，最多信 1 小时），408 和 5xx 当服务暂时不可用，其他 4xx 当请求被拒。超时：后台一批 60 秒，查询 8 秒，设置页测试 20 秒。
+- **重排接口**（可选的重排；按文档写的，2026-10 查的，测试只用了本地假服务，还没用真服务试过。代码在 `server/src/ai/rerank.js`）：
+  - 各家是同一个格式：`POST {地址}/rerank`，`Authorization: Bearer <key>`（没填密钥时不带，自己部署的服务用），体 `{model, query, documents: [字符串…]}`，返回按相关度从高到低的 `results[]`，每项有 `index`（在 `documents` 里的位置）和 `relevance_score`。这里不信返回的先后，按分数自己再排一遍；序号不对、重复、分数不是数的项跳过，一项能用的都没有就当返回格式不对：
+    - Jina：`https://api.jina.ai/v1`，用量在 `usage.total_tokens`。`return_documents` 默认是 true（会把文字原样带回来），这里不用 `document`。见 [Jina Reranker](https://jina.ai/reranker/) 和 [OpenAPI](https://api.jina.ai/openapi.json)；
+    - Cohere v2：`https://api.cohere.com/v2`，`documents` 是字符串数组，每条默认最多 4096 token（`max_tokens_per_doc`），一次建议不超过 1000 条。用量在 `meta`：按搜索次数计费（`meta.billed_units.search_units`），这里只在给了 `meta.tokens.input_tokens` 或 `meta.billed_units.input_tokens` 时记 token，否则记 null。见 [Rerank V2 API](https://docs.cohere.com/reference/rerank)；
+    - 硅基流动：英文文档写的是 `https://api.siliconflow.com/v1`，国内站是 `https://api.siliconflow.cn/v1`（国内站的文档页这次没打开）。用量在 `tokens.input_tokens`、`tokens.output_tokens`。文档里模型的枚举只有 `Qwen/Qwen3-Reranker-8B`、`4B`、`0.6B`，`BAAI/bge-reranker-v2-m3` 只在分块参数的说明里提到，能不能用以控制台为准。见 [Create Rerank](https://docs.siliconflow.com/en/api-reference/rerank/create-rerank.md)；
+    - Voyage：`https://api.voyageai.com/v1`，返回放在 `data[]` 里（不是 `results[]`），字段一样，用量在 `usage.total_tokens`。限返回条数的参数叫 `top_k`，不是 `top_n`。一次最多 1000 条。见 [Reranker API](https://docs.voyageai.com/reference/reranker-api)；
+    - 自己部署：vLLM 的 `/rerank`、`/v1/rerank`、`/v2/rerank` 按 Jina v1 和 Cohere v1、v2 的格式实现，地址填 `http://<主机>:<端口>/v1`，见 [vLLM online serving](https://docs.vllm.ai/en/latest/serving/online_serving/)；Xinference 是 `POST /v1/rerank`，返回 `results[]`，见 [Xinference rerank](https://inference.readthedocs.io/en/latest/models/model_abilities/rerank.html)。Hugging Face 的 text-embeddings-inference 原生的 `/rerank` 用的是 `texts` 字段、返回裸数组，和这个格式不一样，不能直接填，见 [TEI OpenAPI](https://huggingface.github.io/text-embeddings-inference/openapi.json)；
+  - **不传 `top_n`**：Jina、Cohere、硅基流动不传时都返回全部，Voyage 不认 `top_n`（它叫 `top_k`），而这里本来就要全部最多 40 条的顺序，所以不传，各家都兼容。也不传 `return_documents`；
+  - 发出去的内容：查询是本次客户消息加最近几条客户消息（最多 1500 字，和查询向量同一段）；候选是排在前面的最多 40 条条目，每条「标题 + 内容 + 标签」最多 2000 字；设置页「测试」发一个固定的中文问题和三段固定的示例文字。都不带号码和客户名字。AI 助手查知识库时，查询是助手自己写的检索词；
+  - 错误：401、403 当鉴权失败，404 当地址或模型不对（提示地址一般以 `/v1` 结尾，Cohere 是 `/v2`），429 当限流，408 和 5xx 当服务暂时不可用，其他 4xx 当请求被拒，返回不是 JSON 或没有结果当返回格式不对。错误信息里去掉密钥。超时：回复检索时 8 秒，设置页测试 20 秒。失败不重试，这次照原来的顺序。
 - **翻译接口**（一键翻译选「翻译 API」时用；**按文档写的，测试只用了本地假服务，还没用真服务试过**。代码在 `server/src/translate/`，每家一个文件，文件开头也记了依据）：
   - 共同的做法：超时 10 秒；不跟随重定向（3xx 当成地址没填对）；401、403 当鉴权失败，404 当地址不对，429 当限流，408 和 5xx 当对方出错，其他 4xx 当请求被拒，各家另有的错误码见下面；错误信息、日志里抹掉密钥（原样的和 URL 编码后的）和 DeepLX 地址的路径；
   - **DeepL**：`POST https://api.deepl.com/v2/translate`（免费版密钥以 `:fx` 结尾，用 `api-free.deepl.com`），`Authorization: DeepL-Auth-Key <key>`（放在查询串和表单里的旧写法已停用），JSON `{text: [...], target_lang, source_lang?}`，不给 `source_lang` 时返回 `translations[].detected_source_language`。目标语言英语、葡语、中文要写变体，这里用 `EN-US`、`PT-BR`、`ZH-HANS`，挪威语 `NB`。456 是额度用完，429 和 529 是太频繁。没有单独的语言检测接口。见 [translate](https://developers.deepl.com/api-reference/translate)、[languages](https://developers.deepl.com/docs/getting-started/supported-languages)、[errors](https://developers.deepl.com/docs/best-practices/error-handling)；

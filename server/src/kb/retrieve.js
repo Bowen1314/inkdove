@@ -7,7 +7,9 @@
 //    和关键词的前 50 条按排名融合（RRF，k=60）后再按总字数截断。查询向量失败、超时、没开时只用关键词，照第 4 步；
 // 4. 跨语言改写：关键词命中的条目不到 topK 条、调用方又允许时，调一次模型（ctx.ai.searchTerms）把客户的话改写成
 //    知识库语言的检索词，用「改写出来的词 + 原话的词」再查一次。失败、超时、解析不了都退回只用原话的结果。
-//    第 3 步用上了、而且当前模型的向量已经覆盖 90% 以上的 active 条目时不改写（按意思搜已经能跨语言找到）。
+//    第 3 步用上了、而且当前模型的向量已经覆盖 90% 以上的 active 条目时不改写（按意思搜已经能跨语言找到）；
+// 5. 重排（可选，设置里开了重排才有，见 kb/rerank.js）：上面得出的候选（截断之前）取前 40 条发给重排接口按相关度重新排，
+//    再按总字数截断。只改顺序，不影响要不要改写（改写多找回来的条目也一起重排）。失败、超时、没开时照原来的顺序。
 import { COVERAGE_FOR_NO_REWRITE, VECTOR_TOP_K } from './vectors.js';
 import { CONTEXT_CHAR_LIMIT, fitToBudget, MAX_QUERY_TERMS, pickQueryTerms } from './search.js';
 
@@ -18,7 +20,7 @@ export const REWRITE_SAMPLE_TITLES = 15;
 /** 同一段话多久之内再检索直接用上次改写的结果（比如转人工后紧接着起草草稿、「换一条」），不再调模型 */
 export const REWRITE_CACHE_MS = 30 * 60_000;
 const REWRITE_CACHE_MAX = 200;
-/** 发给模型改写、算查询向量的话最多多少字（从最近的往前取） */
+/** 发给模型改写、算查询向量、重排的话最多多少字（从最近的往前取） */
 export const QUERY_TEXT_CHARS = 1500;
 /** 检索时多取几倍的候选，按总字数截断时放不下的跳过、还有后面的可选 */
 const CANDIDATES_PER_SLOT = 3;
@@ -47,7 +49,7 @@ function normalizeTerms(list) {
 }
 
 /**
- * 发给模型改写、算查询向量用的那段话：按说话的先后排（texts 里越靠后越早），从最近的往前取，最多 QUERY_TEXT_CHARS 字
+ * 发给模型改写、算查询向量、重排用的那段话：按说话的先后排（texts 里越靠后越早），从最近的往前取，最多 QUERY_TEXT_CHARS 字
  * @param {string[]} texts 按优先级从高到低
  * @param {number} [max]
  */
@@ -120,19 +122,20 @@ async function rewriteQuery(ctx, texts) {
 
 /**
  * 挑这一轮带进提示词的条目。
- * @param {any} ctx 要 kb；允许改写时还要 ai.searchTerms 和 log；开了向量检索时用 vectors（kb/vectors.js）
+ * @param {any} ctx 要 kb；允许改写时还要 ai.searchTerms 和 log；开了向量检索时用 vectors（kb/vectors.js），开了重排时用 reranker（kb/rerank.js）
  * @param {{texts:string[], limitChars?:number, topK?:number, rewrite?:boolean}} o
  *   texts：检索用的几段话，按优先级从高到低（检索词按 pickQueryTerms 的规则取）；
  *   rewrite：命中不足时允不允许调模型改写（调用方按当天剩下的模型次数决定）
- * @returns {Promise<{entries:any[], mode:'all'|'search', rewriteTerms:string[], llmCalls:number, vector:boolean}>}
+ * @returns {Promise<{entries:any[], mode:'all'|'search', rewriteTerms:string[], llmCalls:number, vector:boolean, rerank:boolean}>}
  *   mode：all 是全带，search 是检索；rewriteTerms：模型改写出来的词（没改写是空数组）；
- *   llmCalls：这次调了几次模型（0 或 1，只算改写；算查询向量不算，不计入会话每天的模型次数）；
- *   vector：这次有没有用上按意思搜
+ *   llmCalls：这次调了几次模型（0 或 1，只算改写；算查询向量、重排不算，不计入会话每天的模型次数）；
+ *   vector：这次有没有用上按意思搜；rerank：这次有没有用上重排
  */
 export async function selectEntries(ctx, { texts, limitChars = CONTEXT_CHAR_LIMIT, topK = 20, rewrite = false }) {
   const all = ctx.kb.activeEntriesWithin(limitChars);
-  if (all) return { entries: all, mode: 'all', rewriteTerms: [], llmCalls: 0, vector: false };
-  const vec = ctx.vectors ? await ctx.vectors.search(queryTextOf(texts)) : null;
+  if (all) return { entries: all, mode: 'all', rewriteTerms: [], llmCalls: 0, vector: false, rerank: false };
+  const query = queryTextOf(texts);
+  const vec = ctx.vectors ? await ctx.vectors.search(query) : null;
   const limit = vec ? VECTOR_TOP_K : topK * CANDIDATES_PER_SLOT;
   const terms = pickQueryTerms(texts);
   let ranked = ctx.kb.searchEntries(terms, { limit });
@@ -151,5 +154,14 @@ export async function selectEntries(ctx, { texts, limitChars = CONTEXT_CHAR_LIMI
     }
   }
   if (vec?.hits.length) ranked = rrfMerge(ranked, vec.hits, ctx.kb);
-  return { entries: fitToBudget(ranked, limitChars, topK), mode: 'search', rewriteTerms, llmCalls, vector: !!vec?.hits.length };
+  const reranked = ctx.reranker ? await ctx.reranker.rerank(query, ranked) : null;
+  if (reranked) ranked = reranked;
+  return {
+    entries: fitToBudget(ranked, limitChars, topK),
+    mode: 'search',
+    rewriteTerms,
+    llmCalls,
+    vector: !!vec?.hits.length,
+    rerank: !!reranked,
+  };
 }

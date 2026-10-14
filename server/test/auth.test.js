@@ -368,6 +368,7 @@ describe('全局设置（F7 / F10 之后的结构）', () => {
     assert.deepEqual(r.body, {
       llm: { format: 'openai', baseUrl: '', model: '', distillModel: '', apiKeySet: false, apiKeyLast4: null },
       embedding: { enabled: false, source: 'llm', format: 'openai', baseUrl: '', model: '', apiKeySet: false, apiKeyLast4: null },
+      rerank: { enabled: false, baseUrl: '', model: '', apiKeySet: false, apiKeyLast4: null },
       reply: { persona: '', debounceSeconds: 4, maxBotRepliesPerChatPerHour: 20, humanize: true },
       media: { voice: false, image: false, mediaModel: '', transcribeModel: '' },
       leads: { enabled: true },

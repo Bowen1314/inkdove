@@ -288,7 +288,7 @@ export default function ProxySection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="代理"
-        desc="全局代理：墨鸽自己连外网的请求（AI 模型、向量检索、翻译接口、发信、抓取网页、检查更新、Meta 接口）都经机场节点出去。扫码号默认不走这里，要走的话在号的「IP 代理」里选「用全局代理」。"
+        desc="全局代理：墨鸽自己连外网的请求（AI 模型、向量检索、重排、翻译接口、发信、抓取网页、检查更新、Meta 接口）都经机场节点出去。扫码号默认不走这里，要走的话在号的「IP 代理」里选「用全局代理」。"
         onSubmit={onSubmit}
       >
         {unavailable && <Callout tone="warning">{MIHOMO_MISSING}</Callout>}

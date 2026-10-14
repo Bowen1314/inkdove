@@ -1599,7 +1599,8 @@
   }
 }
 
-.settings-section + .settings-section {
+.settings-section + .settings-section,
+.settings-group + .settings-group {
   margin-top: var(--sp-12);
 }
 .settings-section__head {

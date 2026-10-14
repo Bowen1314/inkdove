@@ -326,6 +326,7 @@ export const LLM_PURPOSES = {
   suggest: '推荐回复',
   kb_search: '知识库检索改写',
   embedding: '向量检索',
+  rerank: '重排',
   blocklist: '屏蔽词扩充',
   conduct: '发言检查',
   assistant: '助手',

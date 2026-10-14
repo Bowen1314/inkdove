@@ -121,6 +121,7 @@
       - `leads`：F6 客户线索提取（`ctx.ai.extractLead`），计入会话每日模型次数；`redteam`：F5 红线体检里的调用（检索词改写、生成、套话重写、审核），体检用 `llmScope({purpose: 'redteam'})` 覆盖按方法名推出的用途；
       - `kb_search`：知识库检索词改写（`ctx.ai.searchTerms`，第 52 条），计入会话每日模型次数（测试对话和红线体检不限）；
       - `embedding`：向量检索的向量接口（`ctx.ai.embed`，第 53 条），不计入会话每日模型次数；
+      - `rerank`：可选的重排（`ctx.ai.rerank`，见 [features.md 的「知识库怎么带进回复」](features.md#知识库怎么带进回复)），不计入会话每日模型次数；
       - 规格外新增：`file_describe`（F15 产品资料描述）和 `translate`（会话输入框的一键翻译，另做，不计入会话每日模型次数）。新加调模型的方法要在 `server/src/records.js` 的 `AI_METHOD_PURPOSE` 里登记，否则不记；
     - model 记设置里的模型名，不是接口返回的带日期版本，按它和 `pricing` 对单价；
     - token：

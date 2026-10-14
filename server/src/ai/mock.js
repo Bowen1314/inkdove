@@ -226,6 +226,21 @@ export function createMockAi(opts = {}) {
       return { vectors: texts.map(mockEmbedding), dims: MOCK_EMBED_DIMS, inputTokens: null, model: 'mock' };
     },
 
+    /**
+     * 重排 mock：每条文字的分数是 query 切出来的词（tokenize）在这条里出现了几个，除以这条的词数开方（短的、词都对上的排前面），
+     * 分数一样的保持原来的顺序。和真实实现一样返回 {results:[{index, score}]}，不发网络请求
+     */
+    async rerank({ query = '', documents = [] }) {
+      const q = new Set(tokenize(query));
+      const results = documents.map((d, index) => {
+        const words = tokenize(d);
+        const hit = new Set(words.filter((w) => q.has(w))).size;
+        return { index, score: hit / Math.sqrt(words.length || 1) };
+      });
+      results.sort((a, b) => b.score - a.score || a.index - b.index);
+      return { results, inputTokens: null, outputTokens: null, model: 'mock' };
+    },
+
     /** 一键翻译 mock：按客户消息里的字符判断语言（见 mockLanguage）；和原文同一种语言时原样返回，否则返回"[译成 X] 原文" */
     async translate({ text, customerMessages = [], conduct = false }) {
       await wait();

@@ -147,6 +147,10 @@ const SETTINGS_SPECS = {
   'embedding.baseUrl': { label: '向量服务 · 接口地址' },
   'embedding.apiKey': { label: '向量服务 · API 密钥', kind: 'secret' },
   'embedding.model': { label: '向量模型' },
+  'rerank.enabled': { label: '重排' },
+  'rerank.baseUrl': { label: '重排服务 · 接口地址' },
+  'rerank.apiKey': { label: '重排服务 · API 密钥', kind: 'secret' },
+  'rerank.model': { label: '重排模型' },
   'reply.persona': { label: '默认 persona（语气和身份）', kind: 'text' },
   'reply.debounceSeconds': { label: '等客户说完再回（秒）' },
   'reply.maxBotRepliesPerChatPerHour': { label: '每个会话每小时最多自动回复' },
@@ -839,6 +843,7 @@ export const RULES = [
   { m: 'POST', p: '/settings/llm/test', a: 'settings.llm_test', run: (x) => ({ summary: `测试{了}回复模型的连接${testResult(x)}` }) },
   { m: 'POST', p: '/settings/llm/models', a: 'settings.llm_models', run: (x) => ({ summary: `拉取{了}模型列表${testResult(x)}` }) },
   { m: 'POST', p: '/settings/embedding/test', a: 'settings.embedding_test', run: (x) => ({ summary: `测试{了}向量服务的连接${testResult(x)}` }) },
+  { m: 'POST', p: '/settings/rerank/test', a: 'settings.rerank_test', run: (x) => ({ summary: `测试{了}重排服务的连接${testResult(x)}` }) },
   {
     m: 'POST',
     p: '/settings/translation/test',

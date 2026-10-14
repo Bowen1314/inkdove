@@ -1,7 +1,8 @@
 import { embedTexts, EmbedError } from './embed.js';
 import { chat, extractJson, LlmError, transcribe } from './llm.js';
+import { rerankDocuments, RerankError } from './rerank.js';
 import { chatWithTools, probeToolSupport } from './tool-call.js';
-import { resolveEmbeddingConfig } from '../settings.js';
+import { resolveEmbeddingConfig, resolveRerankConfig } from '../settings.js';
 import { formatEntryForContext } from '../kb/search.js';
 import { reportLlmCall } from '../records.js';
 import {
@@ -35,6 +36,8 @@ const SEARCH_TIMEOUT = 20_000;
 /** 向量：后台算条目的一批（几十段）最多等 60 秒；检索时的查询向量挡在生成回复前面，最多等 8 秒 */
 const EMBED_DOC_TIMEOUT = 60_000;
 const EMBED_QUERY_TIMEOUT = 8_000;
+/** 重排挡在生成回复前面，和查询向量一样最多等 8 秒 */
+const RERANK_TIMEOUT = 8_000;
 /** 助手的一步（一次带工具的模型调用）最多等多久；整个问题的总时长由 assistant/agent.js 控制，每步取两者里小的 */
 const ASSISTANT_STEP_TIMEOUT = 60_000;
 
@@ -47,12 +50,13 @@ const str = (v, n = 300) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
  * 由 records.js 的 withLlmCallLog 按方法写，这里只用 reportLlmCall 报上实际用的格式、模型和 token 数。
  * @param {() => any} getSettings
  * @param {{replyTimeoutMs?: number, reviewTimeoutMs?: number, distillTimeoutMs?: number, mediaTimeoutMs?: number, searchTimeoutMs?: number,
- *   assistantTimeoutMs?: number}} [opts]
+ *   assistantTimeoutMs?: number, rerankTimeoutMs?: number}} [opts]
  */
 export function createRealAi(getSettings, opts = {}) {
   const replyTimeout = opts.replyTimeoutMs ?? REPLY_TIMEOUT;
   const distillTimeout = opts.distillTimeoutMs ?? DISTILL_TIMEOUT;
   const mediaTimeout = opts.mediaTimeoutMs ?? MEDIA_TIMEOUT;
+  const rerankTimeout = opts.rerankTimeoutMs ?? RERANK_TIMEOUT;
   const timeouts = {
     reply: replyTimeout,
     review: opts.reviewTimeoutMs ?? REPLY_TIMEOUT,
@@ -298,6 +302,22 @@ export function createRealAi(getSettings, opts = {}) {
         timeoutMs: timeoutMs ?? (task === 'query' ? EMBED_QUERY_TIMEOUT : EMBED_DOC_TIMEOUT),
       });
       reportLlmCall({ inputTokens: r.inputTokens, outputTokens: null });
+      return r;
+    },
+
+    /**
+     * 重排（可选，kb/rerank.js）：用设置里的重排接口（或 config 指定的，测试接口用）给一批文字按和 query 的相关度排序，
+     * 只发一次请求不重试。返回 {results:[{index, score}]（按分数从高到低）, inputTokens, outputTokens, model}；错误都是 RerankError（带 kind）。
+     * llm_calls 记 rerank：格式记 rerank，模型是重排模型，token 按接口给的（没给记 null）。
+     * @param {{query:string, documents:string[], signal?:AbortSignal, timeoutMs?:number, config?:any}} o
+     */
+    async rerank({ query, documents, signal, timeoutMs, config }) {
+      const cfg = config || resolveRerankConfig(getSettings());
+      if (!cfg.ok) throw new RerankError(cfg.error, 'config');
+      // 先报格式和模型（调用失败也要记一行），成功后再报 token 数
+      reportLlmCall({ format: 'rerank', model: cfg.model });
+      const r = await rerankDocuments(cfg, { query, documents, signal, timeoutMs: timeoutMs ?? rerankTimeout });
+      reportLlmCall({ inputTokens: r.inputTokens, outputTokens: r.outputTokens });
       return r;
     },
 

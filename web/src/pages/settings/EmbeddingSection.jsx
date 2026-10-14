@@ -283,7 +283,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
   const pct = total ? Math.round((embedded / total) * 100) : 0;
 
   return (
-    <div ref={formRef}>
+    <div ref={formRef} className="settings-group">
       <SettingsSection
         as="form"
         title="向量检索（可选）"

@@ -5,6 +5,7 @@ import { ErrorState, PageHeader, SkeletonRows } from '../../ui/common.jsx';
 import { SettingsLayout } from '../../ui/Settings.jsx';
 import LlmSection from './LlmSection.jsx';
 import EmbeddingSection from './EmbeddingSection.jsx';
+import RerankSection from './RerankSection.jsx';
 import ReplySettingsSection from './ReplySettingsSection.jsx';
 import SuggestSection from './SuggestSection.jsx';
 import TranslationSection from './TranslationSection.jsx';
@@ -21,7 +22,7 @@ import VersionSection from './VersionSection.jsx';
 /** 分组子导航，每组一个子路由。「品牌」「版本」放最后。 */
 const NAV = [
   { to: '/settings/llm', label: 'AI 模型' },
-  { to: '/settings/embedding', label: '向量检索' },
+  { to: '/settings/embedding', label: '向量检索和重排' },
   { to: '/settings/reply', label: '回复' },
   { to: '/settings/suggest', label: '推荐回复' },
   { to: '/settings/translation', label: '翻译' },
@@ -93,7 +94,15 @@ export default function SettingsPage() {
       <Routes>
         <Route index element={<SettingsIndex />} />
         <Route path="llm" element={<LlmSection {...props} health={health} refreshHealth={refreshHealth} />} />
-        <Route path="embedding" element={<EmbeddingSection {...props} />} />
+        <Route
+          path="embedding"
+          element={
+            <>
+              <EmbeddingSection {...props} />
+              <RerankSection {...props} />
+            </>
+          }
+        />
         <Route path="reply" element={<ReplySettingsSection {...props} />} />
         <Route path="suggest" element={<SuggestSection {...props} />} />
         <Route path="translation" element={<TranslationSection {...props} />} />

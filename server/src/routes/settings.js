@@ -1,4 +1,4 @@
-// 全局设置（仅 admin）：LLM、向量检索、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）、一键翻译、全局代理。
+// 全局设置（仅 admin）：LLM、向量检索、重排、全局回复、语音图片、线索开关、发信方式（F10）、品牌（网站名称和 Logo）、模型单价（F12）、一键翻译、全局代理。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,12 +11,14 @@ import {
   checkEmbeddingPatch,
   checkLlmBaseUrl,
   checkLlmFormat,
+  checkRerankPatch,
   checkTranslationProviderPatch,
   emailConfigured,
   llmConfigured,
   logoMeta,
   publicSettings,
   resolveEmbeddingConfig,
+  resolveRerankConfig,
   str,
 } from '../settings.js';
 import { redact } from '../translate/common.js';
@@ -28,6 +30,15 @@ const MAX_LOGO_BYTES = 512 * 1024;
 const EMBED_TEST_TEXT = '你好，请问这款产品的价格和交货期是多少？ Hello, what is the price and lead time?';
 /** 测试向量接口最多等多久 */
 const EMBED_TEST_TIMEOUT_MS = 20_000;
+/** 测试重排接口时用的问题和三段文字：中文问价格，正确答案是第 2 段（英文），看接口能不能跨语言排对 */
+const RERANK_TEST_QUERY = '这款保温杯多少钱？';
+const RERANK_TEST_DOCS = [
+  'Shipping: orders ship within 15 days after payment.',
+  'Price: the A100 thermos costs 59 USD per piece.',
+  '营业时间：周一到周五 9:00–18:00。',
+];
+/** 测试重排接口最多等多久 */
+const RERANK_TEST_TIMEOUT_MS = 20_000;
 const LOGO_TYPE_MESSAGE = '只支持 PNG、JPG、WebP 或 SVG 图片';
 /** 测试翻译接口时译成英语的那段话 */
 const TRANSLATION_TEST_TEXT = '你好，很高兴认识你。请问这款产品的价格和交货期是多少？';
@@ -231,6 +242,40 @@ export function settingsRouter(ctx) {
       res.json({ ok: true, dims, model: cfg.model, latencyMs: Date.now() - started });
     } catch (err) {
       // embed.js 已经抹过密钥，这里再兜一次底
+      res.json({ ok: false, error: redactKey(err?.message || err, cfg.apiKey), kind: typeof err?.kind === 'string' ? err.kind : 'error' });
+    }
+  });
+
+  // 重排：用设置页表单里当前（可能还没保存）的值给一组固定的文字排一次，回模型、耗时和排第一的是不是正确答案。没传、null 或
+  // 空着的字段用已保存的值（密钥通常不传）。字段不合法回 400；其余成功失败都回 200，失败时 kind 说是哪类问题（同向量检索的测试），
+  // 错误信息里不带密钥。llm_calls 记成「测试连接」
+  router.post('/rerank/test', async (req, res) => {
+    const b = isPlainObject(req.body) ? req.body : {};
+    const s = ctx.getSettings();
+    const draft = {};
+    for (const f of ['baseUrl', 'model', 'apiKey']) {
+      const v = b[f];
+      if (v === undefined || v === null || (typeof v === 'string' && !v.trim() && f === 'apiKey')) continue;
+      draft[f] = v;
+    }
+    const rerank = checkRerankPatch(s.rerank, draft);
+    const cfg = ctx.config.llmMock
+      ? { ok: true, baseUrl: '', apiKey: '', model: rerank.model || 'mock' }
+      : resolveRerankConfig({ rerank });
+    if (!cfg.ok) {
+      res.json({ ok: false, error: cfg.error, kind: 'config', field: cfg.field });
+      return;
+    }
+    const started = Date.now();
+    try {
+      const r = await llmScope({ accountId: null, conversationId: null, purpose: 'test' }, () =>
+        ctx.ai.rerank({ query: RERANK_TEST_QUERY, documents: RERANK_TEST_DOCS, config: cfg, timeoutMs: RERANK_TEST_TIMEOUT_MS }),
+      );
+      const top = r?.results?.[0];
+      if (!top) throw Object.assign(new Error('重排接口没有返回结果'), { kind: 'bad_response' });
+      res.json({ ok: true, model: cfg.model, latencyMs: Date.now() - started, results: r.results.length, topMatches: top.index === 1 });
+    } catch (err) {
+      // rerank.js 已经抹过密钥，这里再兜一次底
       res.json({ ok: false, error: redactKey(err?.message || err, cfg.apiKey), kind: typeof err?.kind === 'string' ? err.kind : 'error' });
     }
   });

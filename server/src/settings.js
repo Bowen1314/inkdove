@@ -1,4 +1,4 @@
-// 全局设置（第二期）：只剩 llm、embedding、reply、media、leads、email、branding、pricing、outreach、suggest、translation、proxy、blockwords。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
+// 全局设置（第二期）：只剩 llm、embedding、rerank、reply、media、leads、email、branding、pricing、outreach、suggest、translation、proxy、blockwords。号级设置（回复方式、名单、通道、通知、代理）在 accounts.js。
 import { MAX_BLOCKWORDS, normalizeWordList } from './blockwords/match.js';
 import { kvGet, kvSet } from './db.js';
 import { checkBypassList } from './proxy/bypass.js';
@@ -20,6 +20,8 @@ export const EMBEDDING_SOURCES = ['llm', 'custom'];
 /** 向量接口的格式（Anthropic 没有向量接口） */
 export const EMBEDDING_FORMATS = ['openai', 'gemini'];
 export const EMBEDDING_DEFAULTS = Object.freeze({ enabled: false, source: 'llm', format: 'openai', baseUrl: '', apiKey: '', model: '' });
+/** 可选的重排（kb/rerank.js）：一种格式（POST {baseUrl}/rerank），默认关 */
+export const RERANK_DEFAULTS = Object.freeze({ enabled: false, baseUrl: '', apiKey: '', model: '' });
 /** 会话输入框一键翻译的方式：ai 用回复模型翻译（默认，升级后不变），api 用翻译接口（translate/） */
 export const TRANSLATION_MODES = ['ai', 'api'];
 /** 选「翻译 API」时默认显示哪家 */
@@ -42,6 +44,8 @@ function defaults(config) {
     },
     // 可选的向量检索（按意思搜，kb/vectors.js），默认关
     embedding: { ...EMBEDDING_DEFAULTS },
+    // 可选的重排（检索出来的候选再按相关度排一次，kb/rerank.js），默认关
+    rerank: { ...RERANK_DEFAULTS },
     reply: {
       persona: '',
       debounceSeconds: 4,
@@ -224,6 +228,10 @@ export function loadSettings(db, config) {
   if (!EMBEDDING_SOURCES.includes(em.source)) em.source = EMBEDDING_DEFAULTS.source;
   if (!EMBEDDING_FORMATS.includes(em.format)) em.format = EMBEDDING_DEFAULTS.format;
   for (const k of ['baseUrl', 'apiKey', 'model']) if (typeof em[k] !== 'string') em[k] = '';
+  // 存坏了的重排设置：同上
+  const rr = s.rerank;
+  if (typeof rr.enabled !== 'boolean') rr.enabled = false;
+  for (const k of ['baseUrl', 'apiKey', 'model']) if (typeof rr[k] !== 'string') rr[k] = '';
   // 存坏了的翻译设置：字段逐个回到默认值（不认识的方式回到 AI 翻译）
   const tr = s.translation;
   if (!TRANSLATION_MODES.includes(tr.mode)) tr.mode = 'ai';
@@ -321,6 +329,13 @@ export function publicSettings(s, config) {
       model: s.embedding.model,
       apiKeySet: !!s.embedding.apiKey,
       apiKeyLast4: last4(s.embedding.apiKey),
+    },
+    rerank: {
+      enabled: s.rerank.enabled,
+      baseUrl: s.rerank.baseUrl,
+      model: s.rerank.model,
+      apiKeySet: !!s.rerank.apiKey,
+      apiKeyLast4: last4(s.rerank.apiKey),
     },
     reply: {
       persona: s.reply.persona,
@@ -439,6 +454,37 @@ export function resolveEmbeddingConfig(s) {
   }
   if (!model) return { ok: false, error: '还没有填写向量模型', field: 'model' };
   return { ok: true, ...cfg, model };
+}
+
+/**
+ * 重排设置的字段校验（不做「开着时必须填什么」的交叉检查，那个在 applySettingsPatch 里）。设置保存和测试接口共用。
+ * 密钥和向量检索的一样：给了就改，空串就是清空。错误信息以 rerank.<字段> 开头，前端靠它把错误放到对应字段下面。
+ * @param {any} current 现在的 rerank 设置
+ * @param {any} p 要改的字段
+ * @returns 改好的完整 rerank 设置（不改动入参）
+ */
+export function checkRerankPatch(current, p) {
+  if (!isPlainObject(p)) throw badRequest('rerank 必须是对象');
+  const r = { ...current };
+  if (p.enabled !== undefined) r.enabled = boolField(p.enabled, 'rerank.enabled');
+  if (p.baseUrl !== undefined) r.baseUrl = checkBaseUrl(p.baseUrl, 'rerank.baseUrl');
+  if (p.model !== undefined) r.model = str(p.model, 'rerank.model', 200).trim();
+  if (p.apiKey !== undefined) r.apiKey = str(p.apiKey, 'rerank.apiKey', 1000).trim();
+  return r;
+}
+
+/**
+ * 重排实际用的接口。不管开没开都算，开关由调用方看。
+ * @param {{rerank:any}} s
+ * @returns {{ok:true, baseUrl:string, apiKey:string, model:string} | {ok:false, error:string, field:string}}
+ */
+export function resolveRerankConfig(s) {
+  const r = s.rerank || {};
+  const baseUrl = String(r.baseUrl || '').trim();
+  const model = String(r.model || '').trim();
+  if (!baseUrl) return { ok: false, error: '还没有填写重排接口的地址', field: 'baseUrl' };
+  if (!model) return { ok: false, error: '还没有填写重排模型', field: 'model' };
+  return { ok: true, baseUrl, apiKey: r.apiKey || '', model };
 }
 
 /**
@@ -607,6 +653,12 @@ export function applySettingsPatch(current, patch) {
       throw badRequest('embedding.baseUrl 开启向量检索并单独配置时必须填写接口地址', 'embedding_base_url_required');
     }
     if (!s.embedding.model) throw badRequest('embedding.model 开启向量检索时必须填写向量模型', 'embedding_model_required');
+  }
+  // 重排：开着时要有地址和模型名（只在这次改动涉及 rerank 时检查）。测试通过才能保存是设置页管的，和向量检索一样
+  if (patch.rerank !== undefined) {
+    s.rerank = checkRerankPatch(s.rerank, patch.rerank);
+    if (s.rerank.enabled && !s.rerank.baseUrl) throw badRequest('rerank.baseUrl 开启重排时必须填写接口地址', 'rerank_base_url_required');
+    if (s.rerank.enabled && !s.rerank.model) throw badRequest('rerank.model 开启重排时必须填写重排模型', 'rerank_model_required');
   }
 
   if (patch.reply !== undefined) {

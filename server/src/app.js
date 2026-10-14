@@ -20,6 +20,7 @@ import { createDistillRunner } from './distill/runner.js';
 import { verifyFileToken } from './files/signed.js';
 import { createFileStore } from './files/store.js';
 import { createKbStore } from './kb/store.js';
+import { createReranker } from './kb/rerank.js';
 import { createVectorIndexer, VECTOR_DEBOUNCE_MS } from './kb/vectors.js';
 import { createLeadStore, LEADS_SCAN_INTERVAL_MS } from './leads/store.js';
 import { createOutreach, OUTREACH_TICK_MS } from './outreach/store.js';
@@ -76,6 +77,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   leadsScanIntervalMs?: number,
  *   vectorDebounceMs?: number,
  *   vectorNow?: () => number,
+ *   rerankNow?: () => number,
  *   outreachNow?: () => number,
  *   outreachIntervalMs?: () => number,
  *   outreachTickMs?: number,
@@ -135,6 +137,8 @@ export function createApp(config, options = {}) {
       settings = next;
       // 向量检索的配置变了：清掉之前的错误重新算，换了模型就全部重算
       ctx.vectors?.onSettingsChanged();
+      // 重排的配置变了：清掉排好的顺序的缓存
+      ctx.reranker?.onSettingsChanged();
     },
     updateSettings(fn) {
       const next = structuredClone(settings);
@@ -153,6 +157,7 @@ export function createApp(config, options = {}) {
     globalProxy: null,
     ai: null,
     vectors: null,
+    reranker: null,
     distill: null,
     wa: null,
     files: null,
@@ -180,6 +185,8 @@ export function createApp(config, options = {}) {
   // 为 0 时不起任何定时器（测试里手动调 ctx.vectors.run()）；vectorNow 是测试用的时钟（算退避）
   ctx.vectors = createVectorIndexer(ctx, { debounceMs: options.vectorDebounceMs ?? VECTOR_DEBOUNCE_MS, now: options.vectorNow });
   ctx.vectors.start();
+  // 重排（可选）：检索出来的候选再按相关度排一次（kb/rerank.js）。rerankNow 是测试用的时钟（缓存过期、日志间隔）
+  ctx.reranker = createReranker(ctx, { now: options.rerankNow });
   ctx.distill = createDistillRunner(ctx);
   // 屏蔽词：发出前检查、命中记录和给管理员的提醒（blockwords/store.js），发送的地方都要用，先建
   ctx.blockwords = createBlockwords(ctx);

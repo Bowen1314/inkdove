@@ -57,6 +57,8 @@ export const AI_METHOD_PURPOSE = {
   searchTerms: 'kb_search',
   // 可选的向量检索（kb/vectors.js）：后台算条目的一批、检索时算查询向量都记，不计入会话每日模型次数
   embed: 'embedding',
+  // 可选的重排（kb/rerank.js）：检索时把候选条目再排一次，记在这次回复的号和会话上，不计入会话每日模型次数
+  rerank: 'rerank',
   // 设置 → 屏蔽词的「AI 扩充」（blockwords/expand.js），管理员手动点，不在会话里
   expandBlockwords: 'blocklist',
   // AI 发言检查（blockwords/conduct.js）：发出后在后台一批一批查，不计入会话每日模型次数。一键翻译和自动回复审核
