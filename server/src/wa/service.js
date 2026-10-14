@@ -38,7 +38,7 @@ import {
 } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
 import { needsRelay } from './relay.js';
-import { storedTranslation } from './translate.js';
+import { fixDraftPlaceholders, storedTranslation } from './translate.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
 
 const REPLIES_PER_MINUTE_PER_ACCOUNT = 30;
@@ -1702,7 +1702,8 @@ export function createWaService(ctx, opts = {}) {
     const fileIds = normalizeFileIds(out?.fileIds)
       .filter((id) => active.has(id))
       .slice(0, MAX_FILES_PER_REPLY);
-    const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
+    // 括号里写成外文的【待你确认：…】译成中文（只在有的时候调一次翻译，失败、超时照原样）
+    const text = clip(await fixDraftPlaceholders(ctx, { id: convId, accountId: acc.id }, String(out?.text ?? '').trim()), MAX_DRAFT_TEXT);
     if (!text && !fileIds.length) throw new Error('推荐回复是空的');
     const entryIds = draftEntryIds(out?.entryIds, c.entries);
     return { draft: { kind: 'suggest', text, fileIds, entryIds, createdAt: nowIso() }, startSeq };
@@ -1752,7 +1753,8 @@ export function createWaService(ctx, opts = {}) {
       const fileIds = normalizeFileIds(out?.fileIds)
         .filter((id) => active.has(id))
         .slice(0, MAX_FILES_PER_REPLY);
-      const text = clip(String(out?.text ?? '').trim(), MAX_DRAFT_TEXT);
+      // 同推荐回复：括号里写成外文的【待你确认：…】译成中文
+      const text = clip(await fixDraftPlaceholders(ctx, { id: convId, accountId: acc.id }, String(out?.text ?? '').trim()), MAX_DRAFT_TEXT);
       if (!text && !fileIds.length) throw new Error('草稿是空的');
       draft = { kind: 'handoff', text, fileIds, entryIds: draftEntryIds(out?.entryIds, c.entries), createdAt: nowIso() };
       // 草稿里写了负责人的名字、电话这些，记下是谁的（没用资料就不记，改派也不清）

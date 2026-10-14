@@ -565,7 +565,7 @@ export async function startFakeMeta() {
  * 可替换的 AI 钩子：默认走 mock，测试里给 hooks.generate / hooks.review / hooks.draft … 赋值来控制输出，
  * 并统计调用次数（hooks.calls.<名字>），hooks.args.<名字> 记最后一次的参数。
  */
-const HOOKED = ['generate', 'review', 'draft', 'suggest', 'kbDraft', 'describeImage', 'transcribe', 'describeFile', 'searchTerms', 'embed'];
+const HOOKED = ['generate', 'review', 'draft', 'suggest', 'kbDraft', 'describeImage', 'transcribe', 'describeFile', 'searchTerms', 'embed', 'translateToChinese'];
 export async function aiHooks() {
   const { createMockAi } = await import('../src/ai/mock.js');
   const mock = createMockAi({ delayMs: 0 });

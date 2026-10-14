@@ -240,11 +240,16 @@ export function createMockAi(opts = {}) {
       return { results: messages.filter((m) => m.checkId).map((m) => ({ id: m.checkId, ...CONDUCT_NONE })) };
     },
 
-    /** 译成中文 mock：去掉【待你确认：…】后按 mockLanguage 判断是中文的原样返回，否则返回"[译成中文] 原文" */
+    /**
+     * 译成中文 mock：去掉【待你确认：…】后按 mockLanguage 判断是中文的原样返回，否则每一行前面加"[译成中文] "
+     * （同样去掉占位后是中文的行、空行不加；只有一行时就是"[译成中文] 原文"）
+     */
     async translateToChinese({ text }) {
       await wait();
-      const plain = String(text).replace(/【待你确认[^】]*】/g, '');
-      return { translation: mockLanguage(plain) === '中文' ? text : `[译成中文] ${text}` };
+      const zh = (s) => mockLanguage(String(s).replace(/【待你确认[^】]*】/g, '')) === '中文';
+      if (zh(text)) return { translation: text };
+      const lines = String(text).split('\n');
+      return { translation: lines.map((l) => (!l.trim() || zh(l) ? l : `[译成中文] ${l}`)).join('\n') };
     },
 
     /** F6 mock 线索提取：规则见 mockExtractLead */

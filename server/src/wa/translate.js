@@ -18,7 +18,9 @@
 // - 消息的「翻译」：POST …/messages/:messageId/translation，译文存进 messages.translation，再请求直接返回；
 // - 推荐回复 / 草稿的「中文意思」：POST …/draft/translation，译文存进草稿 JSON 的 zh（草稿没变时才存）。
 // 原文去掉【待你确认：…】后本地判断就是中文的不调接口，via 记 none。同样只读会话状态、不计入会话每日模型次数。
+// 推荐回复和转人工草稿起草完、存下之前，括号里写成外文的【待你确认：…】也用这条路译成中文（fixDraftPlaceholders，在文件最后）。
 import { llmScope } from '../records.js';
+import { foreignPlaceholderContents, isChineseText, normalizePlaceholderLabels, replacePlaceholderContents } from '../reply/placeholders.js';
 import { llmConfigured } from '../settings.js';
 import { detectLocal } from '../translate/detect-local.js';
 import { callTranslationProvider, FIELD_LABELS, getTranslationProvider, missingField, TranslateError } from '../translate/index.js';
@@ -291,6 +293,12 @@ function keepTodos(source, out) {
 async function toChinese(ctx, conv, source) {
   const plain = source.replace(TODO_RE, ' ').trim();
   if (!plain || detectLocal(plain) === 'zh') return { text: source, via: 'none' };
+  const r = await dispatchToChinese(ctx, conv, source);
+  return r.via === 'none' ? r : { ...r, text: keepTodos(source, r.text) };
+}
+
+/** 译成简体中文的那一次调用（不做前面的判断）：ai 用回复模型；api 用选的服务，出错时同一键翻译（afterApiError） */
+async function dispatchToChinese(ctx, conv, source) {
   const settings = ctx.getSettings();
   const tr = settings.translation;
   const canUseAi = llmConfigured(settings, ctx.config);
@@ -305,7 +313,7 @@ async function toChinese(ctx, conv, source) {
       r = await afterApiError(ctx, conv, err, tr, canUseAi, () => aiToChinese(ctx, conv, source));
     }
   }
-  return r.via === 'none' ? r : { ...r, text: keepTodos(source, r.text) };
+  return r;
 }
 
 /** 存下的译文加上这次的 fallbackReason（改用了 AI 翻译的原因只在这次返回里，不存） */
@@ -365,4 +373,56 @@ export async function translateDraft(ctx, conv, body) {
     )
     .run(JSON.stringify(zh), conv.id, createdAt, text);
   return withReason(zh, r);
+}
+
+// ---------------- 推荐回复和草稿里外文的【待你确认：…】 ----------------
+
+/** 占位转中文那一次翻译最多等多久（毫秒）：超时就不等了，草稿照原样给出去 */
+export const PLACEHOLDER_FIX_TIMEOUT_MS = 10_000;
+/** 一处占位的译文最多多少字 */
+const MAX_PLACEHOLDER_ZH = 200;
+
+/**
+ * 推荐回复、转人工草稿起草之后的兜底：括号里要确认的内容必须是中文，业务员才看得懂（判断规则见 reply/placeholders.js）。
+ * 1. 认得出的外文标签（【Por confirmar: …】）换回【待你确认：…】，不调接口；
+ * 2. 括号里还是外文的，把这几段（每段一行）拼起来调一次翻译，再按行放回各自的位置。翻译方式和「中文意思」一样按「设置 → 翻译」
+ *    （ai 用回复模型的 translateToChinese，api 用选的服务，出错时同一键翻译），llm_calls 记 translate，同样不计入会话每日模型次数；
+ *    占位都是中文的不调。用这条路而不另做一次模型调用：用翻译 API 的团队不会因为这个多出模型费用，记录和花费也和「中文意思」放在一起看。
+ * 翻译出错、超过 timeoutMs（默认 PLACEHOLDER_FIX_TIMEOUT_MS，测试可以用 ctx.placeholderFixTimeoutMs 改）、行数对不上的，记一条 warn，括号里照原样（第 1 步换回的标签保留）；某一行译出来没有汉字的，那一处照原样。
+ * 不抛错，最多多等 timeoutMs。
+ * @param {any} ctx
+ * @param {{id:string, accountId:string|null}} conv
+ * @param {string} text 草稿正文
+ * @param {{timeoutMs?:number}} [o]
+ * @returns {Promise<string>}
+ */
+export async function fixDraftPlaceholders(ctx, conv, text, { timeoutMs = ctx.placeholderFixTimeoutMs ?? PLACEHOLDER_FIX_TIMEOUT_MS } = {}) {
+  const normalized = normalizePlaceholderLabels(text);
+  const foreign = foreignPlaceholderContents(normalized);
+  if (!foreign.length) return normalized;
+  const source = foreign.map((c) => c.replace(/\s+/g, ' ')).join('\n');
+  let timer;
+  try {
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`超过 ${Math.round(timeoutMs / 1000)} 秒没有返回`)), timeoutMs);
+    });
+    const r = await Promise.race([dispatchToChinese(ctx, conv, source), deadline]);
+    if (r.via === 'none') throw new Error('翻译服务认为原文是中文，没有翻译');
+    const lines = String(r.text ?? '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length !== foreign.length) throw new Error(`译文行数对不上（${foreign.length} 处占位，译文 ${lines.length} 行）`);
+    const zh = new Map();
+    foreign.forEach((c, i) => {
+      const t = clip(lines[i].replace(/[【】]/g, '').trim(), MAX_PLACEHOLDER_ZH);
+      if (isChineseText(t)) zh.set(c, t);
+    });
+    return replacePlaceholderContents(normalized, zh);
+  } catch (err) {
+    ctx.log.warn(`[translate] 会话 ${conv.id} 草稿里的【待你确认】是外文，译成中文失败，照原样给出：${err?.message || err}`);
+    return normalized;
+  } finally {
+    clearTimeout(timer);
+  }
 }

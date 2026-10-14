@@ -92,6 +92,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   webDist?: string,
  *   translateEndpoints?: Record<string, string>,
  *   translateTimeoutMs?: number,
+ *   placeholderFixTimeoutMs?: number,
  *   auditNow?: () => number,
  *   auditCleanupIntervalMs?: number,
  *   assistantNow?: () => number,
@@ -101,6 +102,7 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   conductNow?: () => number,
  * }} [options]
  *   translateEndpoints：测试用，把翻译接口（translate/ 下的服务 id → 根地址）指到本地假服务；translateTimeoutMs：翻译接口超时
+ *   placeholderFixTimeoutMs：测试用，草稿里外文的【待你确认：…】译成中文最多等多久（默认见 wa/translate.js 的 PLACEHOLDER_FIX_TIMEOUT_MS）
  *   globalProxy：全局代理（proxy/index.js）的选项；bindHost 默认和代理中继一样
  *   auditNow：操作日志的时钟（测试过期清理用）；auditCleanupIntervalMs：多久清一次过期的操作日志，为 0 时不起定时器（测试里手动调 ctx.audit.cleanup()）
  *   assistantNow、assistantLimits：测试用，首页 AI 助手的时钟和循环上限（工具次数、总时长、每步时长）
@@ -125,6 +127,7 @@ export function createApp(config, options = {}) {
     // 一键翻译用翻译接口时：测试可以把各家的地址指到本地假服务；每个会话判断出的客户语言记在进程里（wa/translate.js）
     translateEndpoints: options.translateEndpoints || {},
     translateTimeoutMs: options.translateTimeoutMs,
+    placeholderFixTimeoutMs: options.placeholderFixTimeoutMs,
     translationLanguages: new Map(),
     getSettings: () => settings,
     setSettings(next) {
