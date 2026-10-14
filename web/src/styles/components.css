@@ -1611,6 +1611,10 @@
   padding-bottom: var(--sp-3);
   border-bottom: 1px solid var(--border);
 }
+/* 右边的「恢复默认」等按钮不跟着说明文字一起被压窄（说明很长时按钮会伸出右边） */
+.settings-section__head > .hstack {
+  flex-shrink: 0;
+}
 .settings-section__desc {
   margin-top: 2px;
   color: var(--text-muted);
