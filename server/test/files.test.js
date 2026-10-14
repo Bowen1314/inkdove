@@ -12,7 +12,6 @@ import {
   convPath,
   getConv,
   getMessages,
-  sleep,
   startApp,
   startFakeWaha,
   TINY_PNG,
@@ -154,8 +153,8 @@ describe('F15 文件管理', () => {
       const big = await upload([{ name: 'big.pdf', buffer: Buffer.alloc(50 * 1024 * 1024 + 1) }]);
       assert.equal(big.status, 413);
       assert.equal(big.body.code, 'file_too_large');
-      await sleep(50);
-      assert.deepEqual(fs.readdirSync(path.join(t.dataDir, 'files', 'tmp')), []);
+      // 拒收后临时文件是异步删的（fs.rm 不等），等它删完
+      await waitFor(() => fs.readdirSync(path.join(t.dataDir, 'files', 'tmp')).length === 0, { timeout: 1000, message: '临时文件没删' });
       assert.equal((await t.req('GET', '/api/files')).body.length, 10);
     });
 
@@ -177,7 +176,8 @@ describe('F15 文件管理', () => {
       const txt = all.find((f) => f.filename === 'note.txt');
       assert.equal((await t.req('DELETE', `/api/files/${txt.id}`)).status, 200);
       assert.equal((await t.req('GET', `/api/files/${txt.id}`)).status, 404);
-      assert.ok(!fs.existsSync(path.join(t.dataDir, 'files', txt.id)));
+      // store.remove 异步删文件（fs.rm 不等），等它删完
+      await waitFor(() => !fs.existsSync(path.join(t.dataDir, 'files', txt.id)), { timeout: 1000, message: '文件没删' });
       assert.ok((await t.req('GET', '/api/sources')).body.some((s) => s.id === txt.kbSourceId), '对应的资料保留');
     });
 

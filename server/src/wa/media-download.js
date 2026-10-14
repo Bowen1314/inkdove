@@ -2,8 +2,8 @@
 //
 // 为什么不用 fetch：全局 fetch 原来走的是 npm undici 7.30 的连接——app.js 经 wa/proxy-test.js 加载了 undici 包，
 // 它一加载（lib/global.js）就把自己的 Agent 设成全局 dispatcher，Node 自带的 fetch 也就用它收发。
-// 现在 src/builtin-fetch.js 让全局 fetch 改回 Node 自带的连接；媒体下载照旧不用 fetch：文件大、要边下边写盘，
-// 直接用 node:http 的流最简单，也不受哪个 undici 接管全局 fetch 的影响。下面是当时查到的情况：
+// 现在 src/builtin-fetch.js 让全局 fetch 改回 Node 自带的连接，但那也不能用来下媒体：文件大、要边下边写盘，
+// 而 Node 自带的 undici 有同样的 bug（见下）。用 node:http 的流，不受哪个 undici 接管全局 fetch 的影响。下面是当时查到的情况：
 // 它有个 bug：响应体还没被读走、解析器因为背压暂停着，这时对方关了连接（HTTP/1.0、Connection: close），socket 的 end
 // 事件里 Parser.finish 的 assert(!this.paused) 失败（client-h1.js:374，经 onHttpSocketEnd），在事件回调里抛出、接不住，
 // 整个进程崩掉。实测稳定复现的条件：
@@ -11,6 +11,7 @@
 //   - 消费方改成每块同步写盘，单路下载不崩；但几个 16–20MB 的文件同时下载时，夹在中间的几十 KB 的小图照样崩
 //     （test/media.test.js 的并发回归测试：3 轮 16MB 视频 + 16MB PDF + 28KB 图片，同步写盘版 5/5 崩）。
 // undici 8 修了，但要 Node ≥ 22.19（本机 Node 20），cheerio 还依赖 undici 7，所以不升级；只把媒体下载挪出 undici。
+// Node 22 自带的 undici（6.28，22.23.3 上实测；Docker 镜像就是 Node 22）也一样崩，所以媒体下载必须留在 node:http。
 // 查 Meta 媒体信息那种小 JSON 请求还用 fetch（一次读完，不会卡在暂停状态）。
 //
 // 全局代理（proxy/route.js）开着时，不在直连名单里的地址经它出去（给 request 一个 createConnection）；direct=true 时总是直连。

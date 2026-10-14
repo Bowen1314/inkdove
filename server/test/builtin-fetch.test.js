@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 // src/builtin-fetch.js：加载 app.js 后，全局 fetch 用 Node 自带的连接，不用 npm undici 7.30（它在对方关连接时会让进程崩）。
+// 但 Node 22 自带的 undici（6.28，22.23.3 上实测）也有同样的 bug：响应体读得慢（比如边下边写盘）时对方关连接，进程照样崩。
+// 所以大文件绝不走 fetch（客户媒体用 node:http，见 wa/media-download.js，test/media.test.js 有并发回归测试）；
+// 这里只测 fetch 的正式用法：一次读进内存（arrayBuffer），或像 sources/fetch-url.js 的 readLimited 那样逐块读进内存。
 // 都在子进程里跑：测试进程的全局 dispatcher 早就定了（npm test 用 --import 先加载了 builtin-fetch.js；单独跑时可能先加载过 undici），
 // 验证不了 app.js 自己的加载顺序；而且崩了会带走整个测试进程。子进程用 execFile 起，不继承 --import。
 
@@ -41,18 +42,18 @@ describe('全局 fetch 不走 npm undici', () => {
     assert.deepEqual(JSON.parse(r.stdout.trim()), { hasDispatcher: true, npmAgent: false });
   });
 
-  describe('对方传完就关连接、几个大文件同时边下边写盘', () => {
+  describe('对方传完就关连接、几个大文件同时下载：读进内存（fetch 的正式用法）', () => {
     let server;
     let base;
-    let dir;
     const BIG = Buffer.alloc(16 * 1024 * 1024, 7);
+    const MID = Buffer.alloc(4 * 1024 * 1024, 9);
 
     before(async () => {
-      dir = fs.mkdtempSync(path.join(os.tmpdir(), 'inkdove-fetch-'));
       server = http.createServer((req, res) => {
+        const body = req.url === '/mid' ? MID : BIG;
         res.shouldKeepAlive = false;
-        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': BIG.length, connection: 'close' });
-        res.end(BIG);
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': body.length, connection: 'close' });
+        res.end(body);
       });
       await new Promise((r) => server.listen(0, '127.0.0.1', r));
       base = `http://127.0.0.1:${server.address().port}`;
@@ -60,28 +61,38 @@ describe('全局 fetch 不走 npm undici', () => {
     after(() => {
       server.closeAllConnections();
       server.close();
-      fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    // 加载 app.js 之前（即不先占住 dispatcher）这段在 Node 20 + undici 7.30 上稳定崩（assert(!this.paused)）
-    it('进程不崩，文件完整', async () => {
+    it('进程不崩，大小都对', async () => {
       const r = await node(`
-        import fs from 'node:fs';
-        import { Readable } from 'node:stream';
-        import { pipeline } from 'node:stream/promises';
         await import(${JSON.stringify(appUrl)});
-        const one = async (i) => {
-          const res = await fetch(${JSON.stringify(`${base}/big`)});
-          const out = ${JSON.stringify(dir)} + '/f' + i;
-          await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(out));
-          return fs.statSync(out).size;
+        // 一次读完（调模型、WAHA / Meta 的 JSON 这类）
+        const whole = async () => (await (await fetch(${JSON.stringify(`${base}/big`)})).arrayBuffer()).byteLength;
+        // 逐块读进内存、超过上限就取消（同 sources/fetch-url.js 的 readLimited，上限 5MB）
+        const limited = async () => {
+          const reader = (await fetch(${JSON.stringify(`${base}/mid`)})).body.getReader();
+          const chunks = [];
+          let total = 0;
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > 5 * 1024 * 1024) {
+              await reader.cancel().catch(() => {});
+              throw new Error('超过 5MB');
+            }
+            chunks.push(Buffer.from(value));
+          }
+          return Buffer.concat(chunks).length;
         };
-        const sizes = [];
-        for (let round = 0; round < 3; round++) sizes.push(...(await Promise.all([0, 1, 2].map(one))));
-        console.log(JSON.stringify(sizes));
+        const big = [];
+        const mid = [];
+        for (let round = 0; round < 3; round++) big.push(...(await Promise.all([0, 1, 2].map(whole))));
+        for (let round = 0; round < 3; round++) mid.push(...(await Promise.all([0, 1, 2].map(limited))));
+        console.log(JSON.stringify({ big, mid }));
       `);
       assert.equal(r.code, 0, r.stderr);
-      assert.deepEqual(JSON.parse(r.stdout.trim()), Array(9).fill(BIG.length));
+      assert.deepEqual(JSON.parse(r.stdout.trim()), { big: Array(9).fill(BIG.length), mid: Array(9).fill(MID.length) });
     });
   });
 });

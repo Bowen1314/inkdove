@@ -6,6 +6,8 @@
 // （读得慢、解析器暂停时对方关连接，assert(!this.paused) 失败，详见 wa/media-download.js 开头）。
 // 这里抢先调一次 fetch（data: 地址，不走网络），让 Node 自带的 Agent 先占住全局 dispatcher，之后 npm undici 加载时看到已经有了就不再替换。
 // fetch 函数本身一直是 Node 自带的，变的只是底下的连接。proxy-test.js 用 npm undici 自己的 fetch 和 ProxyAgent，不受影响。
+// 注意：这只避开了 npm 那份 undici。Node 22 自带的 undici（6.28）有同样的 bug，响应体读得慢时照样崩。所以 fetch 只用来收
+// 一次读进内存的正文（JSON、文本、sources/fetch-url.js 带上限的逐块读）；要边下边写盘的大文件用 node:http（wa/media-download.js）。
 // 测试：不少测试文件在导入 app.js 之前就导入了会带进 cheerio / undici 的模块，所以 package.json 的 test 脚本用
 // node --import ./src/builtin-fetch.js 让每个测试进程最先加载这个文件，和正式环境一致。
 fetch('data:,').catch(() => {});
