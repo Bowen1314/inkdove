@@ -17,7 +17,7 @@
   display: none;
 }
 
-/* DataTable 只带 hide-md / hide-sm，这页再加一档：< 1280（xl）隐藏详情和 IP */
+/* DataTable 只带 hide-md / hide-sm，这页再加一档：< 1280（xl）隐藏详情、IP 和设备 */
 @media (max-width: 1279px) {
   .audit-page .table .hide-xl {
     display: none;

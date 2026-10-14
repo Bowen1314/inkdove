@@ -534,6 +534,8 @@ CREATE INDEX IF NOT EXISTS conduct_cache_ts ON conduct_cache(ts);
   // target_*：操作的对象（类型、id、当时的名称）。changes：[{field, label, from?, to?, note?, secret?}]（JSON），
   //   密钥类只有 note（已修改 / 已设置 / 已清空），长文本只有字数。不存请求体、地址里的查询参数和响应。
   // ok、status：成功与否和 HTTP 状态码（0 是连接中途断开）；error：失败时的错误信息。
+  // ip：来源 IP；device：从 User-Agent 认出来的浏览器和系统，例如「Chrome 130 · Windows 电脑」（audit/device.js），
+  //   不存 User-Agent 原文，请求没带时为 NULL。
   // 列表按 (at, seq) 倒序、游标分页；三个索引都以 at 结尾，按人、按类型筛选时也不用排序
   db.exec(`CREATE TABLE IF NOT EXISTS audit_logs (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -552,13 +554,15 @@ CREATE INDEX IF NOT EXISTS conduct_cache_ts ON conduct_cache(ts);
   ok INTEGER NOT NULL,
   status INTEGER NOT NULL,
   error TEXT,
-  ip TEXT
+  ip TEXT,
+  device TEXT
 );
 CREATE INDEX IF NOT EXISTS audit_logs_at ON audit_logs(at);
 CREATE INDEX IF NOT EXISTS audit_logs_actor ON audit_logs(actor_id, at);
 CREATE INDEX IF NOT EXISTS audit_logs_category ON audit_logs(category, at);
 CREATE INDEX IF NOT EXISTS audit_logs_action ON audit_logs(action, at);
 `);
+  ensureColumn(db, 'audit_logs', 'device', 'TEXT');
 
   // ---- 首页的 AI 助手（读写见 assistant/store.js） ----
   // assistant_chats：每人自己的对话，只有本人看得到、删得掉；title 取第一个问题的前 40 字。每人最多留 100 个，多的删最早的。

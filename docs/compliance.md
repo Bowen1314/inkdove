@@ -20,7 +20,7 @@
 | 外联任务和收件人：上传文件里的**每个**号码（格式不对的、重复的也存）、发没发、什么时候回复、拒绝 | SQLite（`campaigns`、`campaign_recipients`） | 到删掉这个任务为止（只有草稿、已取消、已完成的任务能删） |
 | 屏蔽词命中、AI 发言检查发现的问题：原文（最多 1 万字）、发送人、号和会话、命中的词或问题类别和说明、谁点了「知道了」或「误报」 | SQLite（`blockword_hits`） | **一直留着**，没有删除功能 |
 | AI 发言检查查过的文字的哈希和结果（不存原文） | SQLite（`conduct_cache`） | 24 小时 |
-| 操作日志：谁、什么时候、做了什么、改之前和改之后、成功还是失败、IP；登录成功和失败、退出 | SQLite（`audit_logs`） | 默认 365 天，用 `INKDOVE_AUDIT_RETENTION_DAYS` 改（1–36500），过期的每天自动清 |
+| 操作日志：谁、什么时候、做了什么、改之前和改之后、成功还是失败、IP 和设备（浏览器和系统，从 User-Agent 认出来的一句话，不存原文）；登录成功和失败、退出 | SQLite（`audit_logs`） | 默认 365 天，用 `INKDOVE_AUDIT_RETENTION_DAYS` 改（1–36500），过期的每天自动清 |
 | 成员账号：邮箱、名字、角色、能用的号、密码的哈希、最近登录时间、「我的资料」（称呼、职位、电话、邮箱、介绍）、个人话术 | SQLite（`users`） | 到删掉这个成员为止。删掉后，消息上记的发送人名字、操作日志里的名字和邮箱、命中记录里的名字、会话分配记录、外联任务的发起人名字照样留着 |
 | 登录会话、邀请和重置链接（只存哈希） | SQLite（`auth_sessions`、`invites`） | 会话 30 天过期，链接 7 天过期 |
 | 会话分配记录：每次分给谁、谁分的、为什么 | SQLite（`conversation_assignments`） | 一直留着 |
@@ -80,7 +80,7 @@
 | 机主手机上发的消息 | 扫码号绑定的那部手机直接发给客户的消息也存下来，标成手机发的 | 一直有（黑名单里的号码除外） |
 | 会话分配记录 | 每次分给谁、谁分的、为什么分 | 一直有 |
 | 数据看板里的「成员」 | 每个成员处理了多少转人工、响应时间的中位数、在后台发了多少条消息 | 只有管理员看得到 |
-| 操作日志 | 谁在什么时候做了什么、改之前和改之后的值、成功还是失败、IP，还有登录成功、登录失败和退出。只能查，不能改，也不能删 | **一直开，关不掉**。默认留 365 天 |
+| 操作日志 | 谁在什么时候做了什么、改之前和改之后的值、成功还是失败、IP 和设备（浏览器、系统），还有登录成功、登录失败和退出。只能查，不能改，也不能删 | **一直开，关不掉**。默认留 365 天 |
 | 屏蔽词 | 检查我方发出的文字。在墨鸽里发的，命中就不发；机主在手机上发的，只提醒。所有管理员会看到弹窗。命中记录里有原文和发送人 | 关 |
 | AI 发言检查 | 把我方发出的文字交给回复模型，看有没有辱骂、威胁、歧视、骚扰、粗鲁的说法。只提醒，不拦。严重的弹窗，轻微的只进列表，管理员可以标「误报」 | 关 |
 | AI 助手 | 对话在界面上只有本人看得到。操作日志会记下谁提问、重试、删对话，不记问了什么，也不记标题。数据库里存着全文，能登服务器的人看得到 | 配好模型后所有人都能用 |
@@ -113,7 +113,7 @@
 > 1. **处理哪些信息**
 >    - 账号信息：邮箱、姓名、角色、能用的号、最近登录时间；你自己填的「我的资料」（称呼、职位、电话、邮箱、介绍）和个人话术。
 >    - 工作消息：你在工作台里发给客户的每条消息，还有【公司配发的手机号码】上直接发出的消息，都会记下发送人和时间。撤回的消息原文也会保留。
->    - 操作记录：你在工作台里的操作（例如改设置、分配会话、导出数据），登录成功、登录失败和退出，以及当时的 IP 地址。
+>    - 操作记录：你在工作台里的操作（例如改设置、分配会话、导出数据），登录成功、登录失败和退出，以及当时的 IP 地址和设备（浏览器和系统，例如 Chrome · Windows 电脑）。
 >    - 工作统计：你处理的会话数、响应时间、发出的消息数。
 >    - 【开了才写】合规检查记录：屏蔽词命中和 AI 发言检查发现的问题，包括原文、问题类别和说明。
 > 2. **为什么处理**：和客户沟通、管理销售工作；【防止对客户使用辱骂、威胁、歧视、骚扰等不当说法】；保障系统安全、排查问题。
@@ -141,7 +141,7 @@
 > 1. **What we process**
 >    - Account data: email, name, role, the numbers you can use, last sign-in time; the profile you fill in yourself (display name, job title, phone, email, bio) and your personal writing style.
 >    - Work messages: every message you send to customers from the workspace, and messages sent directly from 【the company phone number】, are recorded with the sender and time. The original text of deleted ("unsent") messages is kept.
->    - Activity records: what you do in the workspace (for example changing settings, assigning conversations, exporting data), sign-ins, failed sign-ins and sign-outs, and the IP address used.
+>    - Activity records: what you do in the workspace (for example changing settings, assigning conversations, exporting data), sign-ins, failed sign-ins and sign-outs, and the IP address and device (browser and operating system, e.g. Chrome on Windows) used.
 >    - Work statistics: conversations handled, response times, number of messages sent.
 >    - 【Only if enabled】 Conduct checks: blocked-word hits and issues found by the AI message check, including the original text, the issue category and an explanation.
 > 2. **Why**: to communicate with customers and manage sales work; 【to prevent abusive, threatening, discriminatory, harassing or rude language towards customers】; to keep the system secure and investigate problems.
@@ -166,7 +166,7 @@
 - [ ] AI 发言检查用的模型服务商，看过它的 API 条款：数据存多久、拿不拿去训练、服务器在哪个国家。服务器在中国、模型在境外的，出境路径定好了（见第五节）。
 - [ ] 定好谁处理提醒、怎么核实、员工怎么申辩。判错的点「误报」。
 - [ ] 拿机主手机的人知道：手机上发的消息也会被查。
-- [ ] 操作日志一直开着，关不掉。用 `INKDOVE_AUDIT_RETENTION_DAYS` 设保留天数（默认 365，范围 1–36500），和告知里写的一致。日志里有 IP。
+- [ ] 操作日志一直开着，关不掉。用 `INKDOVE_AUDIT_RETENTION_DAYS` 设保留天数（默认 365，范围 1–36500），和告知里写的一致。日志里有 IP 和设备（浏览器、系统）。
 
 ## 四、对客户
 

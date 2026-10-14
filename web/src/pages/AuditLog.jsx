@@ -116,6 +116,8 @@ function LogDrawer({ log, onClose }) {
           )}
           <dt>IP</dt>
           <dd className="num">{log.ip || '—'}</dd>
+          <dt>设备</dt>
+          <dd>{log.device || '—'}</dd>
         </dl>
         {log.changes.length > 0 && (
           <section>
@@ -240,7 +242,7 @@ export default function AuditLogPage() {
   ];
   const typeOptions = [{ value: '', label: '全部类型' }, ...types.map((x) => ({ value: x.value, label: x.label }))];
 
-  // 窄屏隐藏：< 1280 详情、IP；< 768 对象；< 640 操作人（挪到说明下面一行）
+  // 窄屏隐藏：< 1280 详情、IP、设备；< 768 对象；< 640 操作人（挪到说明下面一行）
   const columns = [
     {
       key: 'at',
@@ -317,6 +319,19 @@ export default function AuditLogPage() {
       hide: 'xl',
       shrink: true,
       render: (l) => <span className="num">{l.ip || '—'}</span>,
+    },
+    {
+      key: 'device',
+      header: '设备',
+      hide: 'xl',
+      render: (l) =>
+        l.device ? (
+          <span className="audit-page__cell ellipsis" title={l.device}>
+            {l.device}
+          </span>
+        ) : (
+          <span className="muted">—</span>
+        ),
     },
     {
       key: 'result',

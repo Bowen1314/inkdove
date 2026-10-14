@@ -4,9 +4,10 @@
 // - 操作人是 requireAuth 填的 req.user；没登录的请求（401）不记，登录和接受邀请由规则给出操作人；
 // - 成功失败都记：状态码 < 400 算成功，失败记状态码和接口返回的错误信息（越权 403、校验不过 400 也记）；
 // - 写日志出任何错都只打一行警告，绝不影响接口本身的状态码和返回内容；
-// - 不存请求体、查询参数、返回内容，也不存完整的地址。
+// - 不存请求体、查询参数、返回内容，也不存完整的地址；User-Agent 只存认出来的设备（「Chrome 130 · Windows 电脑」这样），不存原文。
 import { scrubUrls, clipText } from './diff.js';
 import { matchRule } from './actions.js';
+import { describeDevice } from './device.js';
 
 /** 失败原因：接口返回的 error（网址去掉令牌，截短）；没有的用状态码 */
 function errorOf(body, status) {
@@ -82,6 +83,7 @@ export function auditMiddleware(ctx, auth) {
         status,
         error: ok ? null : errorOf(body, status),
         ip: req.ip || req.socket?.remoteAddress || null,
+        device: describeDevice(req.get('user-agent')),
       });
     }
 

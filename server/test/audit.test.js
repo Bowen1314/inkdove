@@ -1,4 +1,4 @@
-// 操作日志：各类改动都记下来（谁、什么时候、改了什么、成功失败、IP）；给客户发消息和页面自动发的请求不记；
+// 操作日志：各类改动都记下来（谁、什么时候、改了什么、成功失败、IP、设备）；给客户发消息和页面自动发的请求不记；
 // 登录成功失败都记（不记密码）；密钥只记「已修改」绝不落明文；agent 越权的 403 记为失败；只有 admin 能查，没有改和删的接口；
 // 撤回消息不记内容；AI 助手不记问的内容和对话标题；全局代理的订阅地址、粘贴的配置和节点的凭证不落库；筛选和游标分页；过期清理。模型都用 mock。
 import assert from 'node:assert/strict';
@@ -24,9 +24,9 @@ describe('操作日志', () => {
   const changesOf = (row) => JSON.parse(row.changes);
   /** 整张表（所有列）拼成一个字符串，查有没有明文 */
   const dump = () => JSON.stringify(rows());
-  /** 登录请求，每次换一个来源 IP（不触发同一 IP 的失败次数限制） */
-  const login = (email, password) =>
-    t.req('POST', '/api/auth/login', { body: { email, password }, auth: false, headers: { 'x-forwarded-for': `203.0.113.${++ipSeq}` } });
+  /** 登录请求，每次换一个来源 IP（不触发同一 IP 的失败次数限制）；headers 可以带 user-agent */
+  const login = (email, password, headers = {}) =>
+    t.req('POST', '/api/auth/login', { body: { email, password }, auth: false, headers: { 'x-forwarded-for': `203.0.113.${++ipSeq}`, ...headers } });
 
   before(async () => {
     fake = await startFakeWaha();
@@ -549,6 +549,76 @@ describe('操作日志', () => {
         const x = await t.req('GET', `/api/audit-logs?${qs}`);
         assert.equal(x.status, 400, qs);
       }
+    });
+  });
+
+  describe('设备', () => {
+    const CHROME_WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+    const SAFARI_IPHONE =
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1';
+    /** 不带 User-Agent 的登录：fetch 总会带上 user-agent: node，所以用 http 直接发 */
+    const loginNoUa = (email, password) =>
+      new Promise((resolve, reject) => {
+        const data = JSON.stringify({ email, password });
+        const headers = { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'x-forwarded-for': `203.0.113.${++ipSeq}` };
+        const req = http.request(`${t.base}/api/auth/login`, { method: 'POST', headers }, (res) => {
+          res.resume();
+          res.on('end', () => resolve(res.statusCode));
+        });
+        req.on('error', reject);
+        req.end(data);
+      });
+
+    it('从 User-Agent 认出浏览器和系统，和 IP 一起记；User-Agent 原文不落库', async () => {
+      const r = await login(ADMIN_EMAIL, PASSWORD, { 'user-agent': CHROME_WIN });
+      assert.equal(r.status, 200);
+      const row = last('auth.login');
+      assert.equal(row.ok, 1);
+      assert.equal(row.device, 'Chrome 130 · Windows 电脑');
+      assert.equal(row.ip, `203.0.113.${ipSeq}`);
+      const all = dump();
+      assert.ok(!all.includes(CHROME_WIN), '完整的 User-Agent 不落库');
+      assert.ok(!/AppleWebKit|KHTML|Mozilla\/5\.0/.test(all), 'User-Agent 原文的片段也不落库');
+    });
+
+    it('列表接口返回 device，关键字能按设备找', async () => {
+      const r = await login('device-check@example.com', 'wrong-password-device', { 'user-agent': SAFARI_IPHONE });
+      assert.equal(r.status, 401);
+      const row = last('auth.login');
+      assert.equal(row.device, 'Safari 17 · iPhone');
+      const g = await t.req('GET', '/api/audit-logs?q=iphone&limit=200');
+      assert.equal(g.status, 200);
+      const hit = g.body.items.find((x) => x.id === String(row.seq));
+      assert.ok(hit, '按设备找得到（邮箱和说明里都没有 iPhone）');
+      assert.equal(hit.device, 'Safari 17 · iPhone');
+      assert.equal(hit.ip, row.ip);
+      assert.ok(!dump().includes(SAFARI_IPHONE));
+    });
+
+    it('没带 User-Agent（或是空的）时 device 为 NULL；fetch 默认带的 node 照记', async () => {
+      assert.equal(await loginNoUa('device-no-ua@example.com', 'wrong-password-no-ua'), 401);
+      let row = last('auth.login');
+      assert.equal(row.actor_email, 'device-no-ua@example.com');
+      assert.equal(row.device, null);
+      assert.ok(row.ip, 'IP 照记');
+
+      await login('device-empty-ua@example.com', 'wrong-password-empty-ua', { 'user-agent': '' });
+      row = last('auth.login');
+      assert.equal(row.actor_email, 'device-empty-ua@example.com');
+      assert.equal(row.device, null);
+
+      await login('device-node-ua@example.com', 'wrong-password-node-ua');
+      assert.equal(last('auth.login').device, 'node');
+    });
+
+    it('很长的 User-Agent 只留 60 个字以内', async () => {
+      const ua = `LongClient-${'q'.repeat(3000)}/1.0`;
+      await login('device-long-ua@example.com', 'wrong-password-long-ua', { 'user-agent': ua });
+      const row = last('auth.login');
+      assert.equal(row.actor_email, 'device-long-ua@example.com');
+      assert.ok(row.device && [...row.device].length <= 60, row.device);
+      assert.ok(row.device.startsWith('LongClient-q'));
+      assert.ok(!dump().includes('q'.repeat(100)));
     });
   });
 });

@@ -2,6 +2,7 @@
 // 接到请求上的中间件见 audit/middleware.js。日志只能由服务端写，接口只读，不能改、不能删。
 import { badRequest } from '../util.js';
 import { CATEGORIES, TARGET_TYPES } from './actions.js';
+import { DEVICE_MAX } from './device.js';
 import { clipText, MAX_CHANGES } from './diff.js';
 
 /** 过期清理多久跑一次 */
@@ -52,6 +53,7 @@ function rowToEntry(r) {
     status: r.status,
     error: r.error,
     ip: r.ip,
+    device: r.device,
   };
 }
 
@@ -63,20 +65,20 @@ export function createAuditLog(ctx, { retentionDays, now = Date.now }) {
   const { db, log } = ctx;
   const insert = db.prepare(
     `INSERT INTO audit_logs(at, actor_id, actor_name, actor_email, actor_role, action, category, summary,
-       target_type, target_id, target_name, changes, ok, status, error, ip)
+       target_type, target_id, target_name, changes, ok, status, error, ip, device)
      VALUES(@at, @actorId, @actorName, @actorEmail, @actorRole, @action, @category, @summary,
-       @targetType, @targetId, @targetName, @changes, @ok, @status, @error, @ip)`,
+       @targetType, @targetId, @targetName, @changes, @ok, @status, @error, @ip, @device)`,
   );
   let firstTimer = null;
   let timer = null;
 
   const store = {
     /**
-     * 写一行。
+     * 写一行。ip 是来源 IP；device 是 audit/device.js 从 User-Agent 认出来的短说明（不是原文）。
      * @param {{
      *   at?: string, actor?: {id?:string|null, name?:string, email?:string, role?:string|null}|null,
      *   action: string, summary: string, target?: {type:string, id?:string|null, name?:string|null}|null,
-     *   changes?: any[], ok: boolean, status: number, error?: string|null, ip?: string|null,
+     *   changes?: any[], ok: boolean, status: number, error?: string|null, ip?: string|null, device?: string|null,
      * }} e
      */
     record(e) {
@@ -100,12 +102,13 @@ export function createAuditLog(ctx, { retentionDays, now = Date.now }) {
         status: Number.isInteger(e.status) ? e.status : 0,
         error: e.error ? clipText(e.error, 300) : null,
         ip: e.ip ? clipText(e.ip, 64) : null,
+        device: e.device ? clipText(e.device, DEVICE_MAX - 1) : null,
       });
     },
 
     /**
      * 按时间倒序查一页。type 是类型（category，例如 account）或具体的操作（action，例如 account.update）；
-     * from、to 是 ISO 时间（含 from、不含 to）；q 在说明、对象名称、操作人名字和邮箱、改动、IP 里找（不分大小写）；
+     * from、to 是 ISO 时间（含 from、不含 to）；q 在说明、对象名称、操作人名字和邮箱、改动、IP、设备里找（不分大小写）；
      * cursor 是上一页给的 nextCursor。返回 {items, nextCursor}，没有下一页时 nextCursor 为 null。
      * @param {{actorId?:string, type?:string, from?:string, to?:string, q?:string, cursor?:string, limit?:number}} f
      */
@@ -132,9 +135,9 @@ export function createAuditLog(ctx, { retentionDays, now = Date.now }) {
         const like = `%${likeEscape(f.q)}%`;
         where.push(
           `(summary LIKE ? ESCAPE '\\' OR target_name LIKE ? ESCAPE '\\' OR actor_name LIKE ? ESCAPE '\\'
-            OR actor_email LIKE ? ESCAPE '\\' OR changes LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\')`,
+            OR actor_email LIKE ? ESCAPE '\\' OR changes LIKE ? ESCAPE '\\' OR ip LIKE ? ESCAPE '\\' OR device LIKE ? ESCAPE '\\')`,
         );
-        args.push(like, like, like, like, like, like);
+        args.push(like, like, like, like, like, like, like);
       }
       if (f.cursor) {
         const [at, seq] = decodeCursor(f.cursor);
