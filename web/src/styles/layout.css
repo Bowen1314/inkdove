@@ -207,6 +207,9 @@
   flex-direction: column;
 }
 .main {
+  /* 让页面里绝对定位的元素（比如 .sr-only 读屏文字）以这里为准、跟着这里滚动；
+     否则它们跑到整页上，把文档撑高，滚到底时整个界面被推上去，下面一大片空白 */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
