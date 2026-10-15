@@ -74,7 +74,10 @@
 
 ### 数据看板（管理员）
 
-按今天、7 天、30 天和号查看客户消息、新客户、自动回复率、转人工原因和响应时间、知识库健康度、客户阶段和漏斗、成员、模型成本、挡掉的白嫖、外联效果、时段热力图，以及推荐回复的采纳情况。日期和热力图按浏览器所在时区算。
+按今天、7 天、30 天和号查看客户消息、新客户、自动回复率、转人工原因和响应时间、平均回复时间、知识库健康度、客户阶段和漏斗、成员、模型成本、挡掉的白嫖、外联效果、时段热力图，以及推荐回复的采纳情况。日期和热力图按浏览器所在时区算。
+
+- **平均回复时间**：客户发来消息到有人回复（后台、WhatsApp 转发、机主手机都算）平均等了多久，旁边是中位数和算了几次。机器人先回了的不算。成员表里每人也有一列。
+- **按业务员筛选**：号码筛选旁边选一个业务员（或「未分配」），看板只算现在分给他的客户。按的是现在的负责人，会话改派后，以前的数据也跟着算到新负责人名下。知识库和模型成本不按业务员筛。
 
 ### AI 助手（首页）
 
@@ -303,12 +306,12 @@
 - **撤回**：发出的那条后来撤回了，结果不变，只是不能再从看板「存进知识库」。
 - **定时清理**：每小时一次（启动 1 分钟后先跑一次），把起草超过 24 小时还没定的记成没发，删掉起草超过 180 天的记录。看板读的时候也把超过 24 小时没定的当没发算，不用等清理。
 - **提示词版本**：每行记下起草用的模型（`llm_calls` 里一样的名字，mock 时是 `mock`）和提示词版本。改起草推荐回复、转人工草稿的提示词时，同时改 `server/src/reply/prompt-version.js` 里的 `DRAFT_PROMPT_VERSION`，看板就能按版本对比。
-- **看板**：`GET /api/dashboard` 多一个 `drafts`，按起草时间落在时间段里的草稿统计，按号筛，不按成员分：
+- **看板**：`GET /api/dashboard` 多一个 `drafts`，按起草时间落在时间段里的草稿统计，按号筛，不按成员分（按业务员筛选时只算分给他的会话里的草稿）：
   - `total`、`pending`（不到 24 小时、还没定的）、`decided`、`outcomes`（六种结果各多少条）、`unused`（关掉 + 换掉了 + 没发 + 自己写的）；
   - `usedRate`、`editedRate`、`unusedRate`：分母是 `decided`，还没定的不算；`avgEditRatio` 是改了再发的平均改动比例；
   - `files: {suggested, sent}`：草稿建议了几个文件，发出了几个；
   - `byKind[]`（推荐回复、转人工草稿）、`byVersion[]`（按类型 + 模型 + 提示词版本，带 `firstAt`、`lastAt`），每组字段同上；`trend[]` 每天一行 `{date, used, edited, unused, pending}`；`currentPromptVersion` 是现在的版本。
-- **列表**：`GET /api/dashboard/drafts?range&tz&accountId&filter&cursor&limit`，只有 admin（agent 403）。`range`、`tz`、`accountId` 同看板。`filter` 默认 `all`，是改了再发、自己写的、关掉、换掉了，**不含没发**（没发多半是没人看，说明不了推荐好不好），也可以是 `edited`、`own`、`dismissed`、`replaced`、`unsent` 之一；不对的返回 400 `invalid_filter`。最新的在前，`limit` 1–50（默认 20），下一页带上次返回的 `nextCursor`。每条有客户的问题、草稿、实际发出的文字、改动比例、引用的条目（删了的标出来）、建议的文件和发没发、模型和版本、会话和号，以及发出的那条消息 `sentMessage: {id, revoked, canSaveToKb}`。看板里照这个列出来，草稿和发出的文字并排、标出删掉和加上的词，可以打开会话，或者用「存进知识库」（`POST …/messages/:messageId/kb-draft`）。
+- **列表**：`GET /api/dashboard/drafts?range&tz&accountId&assigneeId&filter&cursor&limit`，只有 admin（agent 403）。`range`、`tz`、`accountId`、`assigneeId` 同看板。`filter` 默认 `all`，是改了再发、自己写的、关掉、换掉了，**不含没发**（没发多半是没人看，说明不了推荐好不好），也可以是 `edited`、`own`、`dismissed`、`replaced`、`unsent` 之一；不对的返回 400 `invalid_filter`。最新的在前，`limit` 1–50（默认 20），下一页带上次返回的 `nextCursor`。每条有客户的问题、草稿、实际发出的文字、改动比例、引用的条目（删了的标出来）、建议的文件和发没发、模型和版本、会话和号，以及发出的那条消息 `sentMessage: {id, revoked, canSaveToKb}`。看板里照这个列出来，草稿和发出的文字并排、标出删掉和加上的词，可以打开会话，或者用「存进知识库」（`POST …/messages/:messageId/kb-draft`）。
 - **表**：`draft_outcomes`，启动时自动建。列：`conversation_id`、`account_id`、`kind`、`follow_up`、`created_at`、`question`（客户的问题，最多 2000 字）、`text`（草稿）、`entry_ids`、`file_ids`、`model`、`prompt_version`、`requested_by_user_id`、`outcome`、`outcome_at`、`sent_message_id`、`sent_text`（最多 4000 字）、`edit_ratio`、`sent_file_ids`。看板只读，不往里写。
 - **已知的限制**：
   - 只看人工发出的第一条文字。填进输入框后先发一句「稍等」再发正文，会记成自己写的；
@@ -454,23 +457,32 @@
 
 ## 管理员数据看板（F12）
 
-- **接口**：`GET /api/dashboard?range=today|7d|30d&accountId=&tz=`，只有 admin，agent 返回 403 `forbidden`。一次返回规格「接口」里的全部字段，加上 F15 的 `kb.topFiles`；`handoffReasons[]` 多一个 `decision`（`handoff` 或 `blocked`）。只读已经记下的表，不调模型。代码在 `server/src/dashboard.js`。
+- **接口**：`GET /api/dashboard?range=today|7d|30d&accountId=&assigneeId=&tz=`，只有 admin，agent 返回 403 `forbidden`。一次返回规格「接口」里的全部字段，加上 F15 的 `kb.topFiles`；`handoffReasons[]` 多一个 `decision`（`handoff` 或 `blocked`）。只读已经记下的表，不调模型。代码在 `server/src/dashboard.js`。
 - **参数**：
   - `range` 不传按 `7d`；不是 `today`、`7d`、`30d` 的（包括重复传）返回 400 `invalid_range`；
   - `tz` 是 IANA 时区，不传按 `UTC`；传了但 Node 的 Intl 不认识的返回 400 `invalid_tz`。返回的 `range.tz` 是规范写法（`asia/shanghai` → `Asia/Shanghai`）；
-  - `accountId` 不传或为空表示全部号。删掉的号也照样能筛（数据还在），不存在的号不报 404。
+  - `accountId` 不传或为空表示全部号。删掉的号也照样能筛（数据还在），不存在的号不报 404；
+  - `assigneeId` 不传或为空表示全部业务员，`unassigned` 是未分配的会话，其余当成员 id。停用、删掉的成员也照样能筛，不存在的不报错（结果是空的）。不是字符串（比如重复传）或超过 200 字的返回 400 `invalid_assignee`。可以和 `accountId` 一起用。
+- **按业务员筛选**：只算**现在**分给这个成员的会话（`conversations.assignee_id`）。按的是现在的负责人，不是当时的：会话改派后，它以前的消息、处理记录、转人工、线索都跟着算到新负责人名下。会话删了的、记录上没有会话的（比如测试对话）不算。前端的下拉框列出：全部业务员、未分配、没停用的成员、停用了但名下还有会话的成员；和号码筛选一样，只在这一页记住，刷新后回到全部。
 - **时间段**：`today` 是 tz 当天 0 点到现在；`7d`、`30d` 是含今天在内往前 7、30 个自然日（按 tz），从第一天的 0 点到现在。`range.from`、`range.to` 是 UTC 的 ISO 时间。时间晚于现在的记录不算。
 - **按 tz 分组**：SQLite 不认识 IANA 时区，所以 SQL 先按 UTC 的 15 分钟分桶聚合，再用 Intl 把每个桶换算成当地的日期、星期和小时。时区偏移和夏令时切换都是 15 分钟的整数倍，印度这类半小时时区也对。`trend` 每天一行（`YYYY-MM-DD`，没数据的天也有）；`heatmap` 固定 7 行 × 24 列，周一在第 0 行。
 - **导入的历史消息（`via: "import"`）不计入**客户消息数、新客户和热力图：时间是旧的，也不是服务期间收到的。
-- **各字段**（"本时间段"指 range。除了 kb 和 cost，其他都按号筛）：
+- **各字段**（"本时间段"指 range。除了 kb 和 cost，其他都按号和业务员筛）：
   - `kpi.inboundMessages`：本时间段内的客户消息（入站，不含导入的）；
   - `kpi.newCustomers`：本时间段内有客户消息、并且会话里最早的一条客户消息（导入的也算在内比较）落在本时间段内、不是导入的会话数。导入过历史聊天的老客户再发消息，不算新客户；
   - `kpi.turns`、`kpi.autoReplyRate`：本时间段内的处理记录。`autoReplyRate = replied ÷ (replied + handoff + blocked)`，分母为 0 时 null。declined 不进 turns、趋势和回复率。**推荐回复**（手动起草的，以及 v0.3.0 自动起草留下的 botDecision `suggested`）不写处理记录，既不算自动回复也不算转人工，所以 turns、autoReplyRate、trend 只统计自动回复模式下机器人处理的消息，人工回复模式的号回复率是 null；起草推荐的模型调用在 `cost.byPurpose` 里单列一行「推荐回复」（`suggest`）；
   - `kpi.handoffs`：本时间段内开始的转人工记录数（`handoffs` 表；已经在待处理时再次转人工不新建），和 `turns.handoff`（处理记录数）口径不同；
   - `kpi.openNeedsHuman`：实时数，现在 needsHuman 的会话（含已删除号的会话）；
-  - `kpi.medianResponseMinutes`：本时间段内开始、已有首次回复的转人工记录，`firstResponseAt − startedAt` 的中位数，单位分钟，偶数个取中间两个的平均，保留两位小数；没有时 null；
+  - `kpi.medianResponseMinutes`：转人工后首次回复的中位数。本时间段内开始、已有首次回复的转人工记录，`firstResponseAt − startedAt` 的中位数，单位分钟，偶数个取中间两个的平均，保留两位小数；没有时 null。看板上写在「转人工次数」下面；
+  - `kpi.avgReplyMinutes`、`kpi.medianReplyMinutes`、`kpi.replyTurns`、`kpi.unrepliedTurns`：平均回复时间，客户等人工回复的平均、中位分钟数（两位小数，没有时 null），算了几轮，还有几轮没人回。口径：
+    - 一个会话的消息按时间排成一串，只留客户发的消息和我方发出去了的消息（`status = 'sent'`）。导入的历史消息、外联群发（`via: "campaign"`）、发送失败的不进这一串，就当没有；通知号上的提醒本来就不在会话里。**撤回了的消息照样算**（发出去过，对方看到过）；
+    - 一轮从一条客户消息开始，条件是它前面那条不是客户消息。客户连着发几条算一轮，从第一条算起；
+    - 一轮在它后面我方发的第一条消息结束。是人发的就是一次人工回复：后台发的（`operator`、`via: "admin"`）、WhatsApp 转发（`operator`、`via: "whatsapp"`）、机主手机上发的（`owner`、`via: "phone"`），早期没记 via 的 `operator` 也算；
+    - 机器人先回了的那一轮不算（不是人回的），机器人之后人工再补的一条也不算。后面还没有我方消息的是「还没回」，计入 `unrepliedTurns`，不进平均；
+    - 一轮的开始落在本时间段内才算，回复可以晚于时间段结束。等待时间小于 0（手机和服务器时间差一点）按 0 算；
+    - 和转人工的首次回复不是一回事：这里每一轮客户消息都算，不管转没转人工；
   - `handoffReasons`：本时间段内 handoff 和 blocked 的处理记录，按 (decision, code) 计数，次数倒序；
-  - `kb`（不按号筛）：
+  - `kb`（不按号和业务员筛）：
     - `topGaps`：本时间段内 `gap_hits` 按缺口计数，只列还 open 的，前 10；
     - `topEntries`：本时间段内 replied 的 usedEntryIds 里各条目出现的次数，前 10；
     - `unusedEntries`：最近 30 天（从现在往前，不随 range 和号变）任何一条处理记录的 usedEntryIds 都没出现过的 active 条目数；`activeEntries` 是 active 条目数；
@@ -481,9 +493,11 @@
     - `funnel`：每条线索取阶段历史和当前阶段里最靠后的漏斗阶段，到过第 k 阶段或更后的算到达第 k 阶段；
     - `countries`：会话的联系人号码用 libphonenumber-js（max 元数据）解析国家，国名用 Intl 的中文名。号码为空（@lid 换算不出来）或解析不出国家的归"未知"（`code: null`）。按人数倒序，同数时"未知"排最后，前 10；
   - `trend`：本时间段内的处理记录按当地日期分四类计数；
-  - `accounts`：现有的号（选了号时只列那个）。`state` 和 `/api/health` 一样取，缓存 30 秒；`inbound`、`autoReplyRate` 按本时间段；`openNeedsHuman` 实时；
-  - `members`：所有成员（含停用的）各一行。`handled` 和 `medianResponseMinutes` 按本时间段内开始、首次回复是后台发送（`admin_ui`）的转人工记录，按首次回复人统计；`manualMessages` 是本时间段内这个人在后台发送成功的人工消息（文字和文件）。已删除的成员期间有记录的也列一行，名字取消息上记的发送人，没有时是"已删除的成员"。另外两行"手机回复"（`kind: "phone"`）和"WhatsApp 转发"（`kind: "relay"`），`userId` 和 `manualMessages` 为 null；
-  - `cost`：本时间段内的模型调用按 (purpose, model) 汇总。选了号时，带号的调用只算这个号的，不带号的（整理知识库、红线体检、测试连接等）照算。费用 = 输入 token × inputPerMillion ÷ 10⁶ + 输出 token × outputPerMillion ÷ 10⁶，model 按设置里的模型名和 `pricing` 精确匹配（区分大小写）。**口径**：
+  - `accounts`：现有的号（选了号时只列那个）。`state` 和 `/api/health` 一样取，缓存 30 秒；`inbound`、`autoReplyRate` 按本时间段；`openNeedsHuman` 实时。按业务员筛选时还是列出所有号，数字只算这个人的客户；
+  - `members`：所有成员（含停用的）各一行。`handled` 和 `medianResponseMinutes` 按本时间段内开始、首次回复是后台发送（`admin_ui`）的转人工记录，按首次回复人统计；`manualMessages` 是本时间段内这个人在后台发送成功的人工消息（文字和文件）。已删除的成员期间有记录的也列一行，名字取消息上记的发送人，没有时是"已删除的成员"。另外两行"手机回复"（`kind: "phone"`）和"WhatsApp 转发"（`kind: "relay"`），`userId` 和 `manualMessages` 为 null。
+    - 每行另有 `avgReplyMinutes`、`medianReplyMinutes`、`replyTurns`：口径同 `kpi.avgReplyMinutes`，按回那一轮的人分：后台发的按发送人（`sent_by_user_id`），手机回复、WhatsApp 转发各一行。早期没记 via 的人工回复只算进 kpi 的总数，不分到人。看板上是「平均回复时间」一列（带次数，默认按它从快到慢排），「转人工后首次回复」是转人工记录的中位数；
+    - 按业务员筛选时只算这个人的客户，只列有动静的行（回过、处理过转人工或发过后台消息的），选中的那个成员总列着。比如筛王丽，看到的是王丽的客户都是谁回的、回得多快；
+  - `cost`：本时间段内的模型调用按 (purpose, model) 汇总。选了号时，带号的调用只算这个号的，不带号的（整理知识库、红线体检、测试连接等）照算。不按业务员筛。费用 = 输入 token × inputPerMillion ÷ 10⁶ + 输出 token × outputPerMillion ÷ 10⁶，model 按设置里的模型名和 `pricing` 精确匹配（区分大小写）。**口径**：
     - `estimatedCostUsd` 只算配了单价的模型，一次都对不上时为 null；
     - `byPurpose[].costUsd`：这个用途里只要有一次调用的模型没配单价，就为 null。所以有 null 的行时，各行加起来不等于总费用；
     - token：一个用途里全是 null 的（比如 mock、语音转写），`inputTokens`、`outputTokens` 为 null；顶层的 token 数只加有值的；
@@ -494,6 +508,7 @@
   - `outreach`：本时间段内发出（status=sent，按 sentAt）的收件人；`replied`、`declined` 是其中已经回复、已经拒绝的（不管回复在什么时候）；两个比率都是 0–1 的小数，发送数为 0 时 null。`byAccount` 按发送数倒序，已删除的号名字是"（已删除）"。
 - **比率**都是 0–1 的小数，分母为 0 时 null。
 - **索引**：新增 `messages(direction, ts)` 和 `campaign_recipients(sent_at)`；decisions、llm_calls、handoffs、gap_hits 的时间索引在记录这些数据时已经建了。每块数据都是一两条 SQL 聚合，不在 JS 里遍历消息。
+- **平均回复时间的查询**：一条 SQL，没加新索引。先用 `messages(direction, ts)` 找出本时间段内有客户消息的会话，再按 `messages(conversation_id)` 逐个会话取消息，用窗口函数（LAG、LEAD）标出每一轮的开头和结尾。只把每一轮一行交给 JS 算平均和中位数。20 万条消息、5000 个会话时，7 天约 70 毫秒，30 天且所有会话都有消息时约 0.3 秒。按业务员筛选在选会话这一步，只会更快。
 
 ## 全局代理
 

@@ -304,11 +304,12 @@ describe('看板：权限和参数', () => {
   });
 
   it('parseDashboardQuery', () => {
-    assert.deepEqual(parseDashboardQuery({}), { range: '7d', tz: 'UTC', accountId: null });
-    assert.deepEqual(parseDashboardQuery({ range: '30d', tz: 'Europe/London', accountId: 'abc' }), {
+    assert.deepEqual(parseDashboardQuery({}), { range: '7d', tz: 'UTC', accountId: null, assigneeId: null });
+    assert.deepEqual(parseDashboardQuery({ range: '30d', tz: 'Europe/London', accountId: 'abc', assigneeId: 'unassigned' }), {
       range: '30d',
       tz: 'Europe/London',
       accountId: 'abc',
+      assigneeId: 'unassigned',
     });
     assert.throws(() => parseDashboardQuery({ accountId: ['a', 'b'] }), /accountId/);
   });
@@ -329,6 +330,12 @@ describe('看板：KPI 和按号筛选', () => {
       openNeedsHuman: 3,
       // 5 7 10 15 20 30 40（奇数个），没人回的 h7 不算
       medianResponseMinutes: 15,
+      // 平均回复时间（详细的在 dashboard-reply-time.test.js）：cA2 在 T3 的一轮当场就被老王回了；cA1 那轮机器人先回的不算；
+      // cA3、cA4、cC2 还没人回；cB1、cB2 的这一轮从 7 天前就开始了，不算
+      avgReplyMinutes: 0,
+      medianReplyMinutes: 0,
+      replyTurns: 1,
+      unrepliedTurns: 3,
     });
   });
 
@@ -343,6 +350,10 @@ describe('看板：KPI 和按号筛选', () => {
       openNeedsHuman: 2,
       // 5 7 10 15 20 40 → (10 + 15) / 2
       medianResponseMinutes: 12.5,
+      avgReplyMinutes: 0,
+      medianReplyMinutes: 0,
+      replyTurns: 1,
+      unrepliedTurns: 2,
     });
     const b = await dash(`?range=7d&tz=UTC&accountId=${B.id}`);
     assert.deepEqual(b.kpi, {
@@ -353,6 +364,10 @@ describe('看板：KPI 和按号筛选', () => {
       handoffs: 1,
       openNeedsHuman: 1,
       medianResponseMinutes: 30,
+      avgReplyMinutes: null,
+      medianReplyMinutes: null,
+      replyTurns: 0,
+      unrepliedTurns: 0,
     });
     const c = await dash(`?range=7d&tz=UTC&accountId=${C.id}`);
     assert.deepEqual(c.kpi, {
@@ -363,6 +378,10 @@ describe('看板：KPI 和按号筛选', () => {
       handoffs: 0,
       openNeedsHuman: 0,
       medianResponseMinutes: null,
+      avgReplyMinutes: null,
+      medianReplyMinutes: null,
+      replyTurns: 0,
+      unrepliedTurns: 1,
     });
     // 删掉的号也能筛（数据还在），没有数据时都是 0
     const gone = await dash('?range=7d&tz=UTC&accountId=acc-gone');
@@ -381,6 +400,8 @@ describe('看板：KPI 和按号筛选', () => {
     assert.equal(d.kpi.autoReplyRate, 3 / 9);
     assert.equal(d.kpi.handoffs, 9);
     assert.equal(d.kpi.medianResponseMinutes, 17.5); // 5 7 10 15 20 30 40 50
+    // 多了 cB1 那轮：从 T_EDGE 开始（上海在 7 天内），T2 Alice 回的，等了 6 天 9 小时；另一轮是老王当场回的
+    assert.deepEqual([d.kpi.replyTurns, d.kpi.avgReplyMinutes, d.kpi.medianReplyMinutes], [2, 4590, 4590]);
     const b = await dash(`?range=7d&tz=Asia/Shanghai&accountId=${B.id}`);
     assert.equal(b.kpi.inboundMessages, 3);
     assert.equal(b.kpi.newCustomers, 1);
@@ -568,23 +589,36 @@ describe('看板：客户线索', () => {
 describe('看板：成员', () => {
   it('按首次回复人统计，外加手机回复和 WhatsApp 转发两行', async () => {
     const d = await dash('?range=7d&tz=UTC');
+    const none = { avgReplyMinutes: null, medianReplyMinutes: null, replyTurns: 0 };
     assert.deepEqual(d.members, [
-      { userId: adminUser.id, name: adminUser.name || adminUser.email, kind: 'user', handled: 0, medianResponseMinutes: null, manualMessages: 1 },
+      { userId: adminUser.id, name: adminUser.name || adminUser.email, kind: 'user', handled: 0, medianResponseMinutes: null, manualMessages: 1, ...none },
       // h1 10、h2 20、h3 30；后台消息 cA1 两条 + cB1 一条（失败的和 7d 外的不算）
-      { userId: alice.id, name: 'Alice', kind: 'user', handled: 3, medianResponseMinutes: 20, manualMessages: 3 },
-      { userId: bob.id, name: 'Bob', kind: 'user', handled: 0, medianResponseMinutes: null, manualMessages: 0 },
-      // 已经删掉的成员，名字取消息上记的发送人
-      { userId: 'ghost-user', name: '老王', kind: 'user', handled: 1, medianResponseMinutes: 40, manualMessages: 1 },
-      { userId: null, name: '手机回复', kind: 'phone', handled: 2, medianResponseMinutes: 10, manualMessages: null },
-      { userId: null, name: 'WhatsApp 转发', kind: 'relay', handled: 1, medianResponseMinutes: 7, manualMessages: null },
+      { userId: alice.id, name: 'Alice', kind: 'user', handled: 3, medianResponseMinutes: 20, manualMessages: 3, ...none },
+      { userId: bob.id, name: 'Bob', kind: 'user', handled: 0, medianResponseMinutes: null, manualMessages: 0, ...none },
+      // 已经删掉的成员，名字取消息上记的发送人；cA2 在 T3 的那一轮是他回的
+      {
+        userId: 'ghost-user',
+        name: '老王',
+        kind: 'user',
+        handled: 1,
+        medianResponseMinutes: 40,
+        manualMessages: 1,
+        avgReplyMinutes: 0,
+        medianReplyMinutes: 0,
+        replyTurns: 1,
+      },
+      { userId: null, name: '手机回复', kind: 'phone', handled: 2, medianResponseMinutes: 10, manualMessages: null, ...none },
+      { userId: null, name: 'WhatsApp 转发', kind: 'relay', handled: 1, medianResponseMinutes: 7, manualMessages: null, ...none },
     ]);
     const a = await dash(`?range=7d&tz=UTC&accountId=${A.id}`);
     const aliceA = a.members.find((m) => m.userId === alice.id);
-    assert.deepEqual(aliceA, { userId: alice.id, name: 'Alice', kind: 'user', handled: 2, medianResponseMinutes: 15, manualMessages: 2 });
+    assert.deepEqual(aliceA, { userId: alice.id, name: 'Alice', kind: 'user', handled: 2, medianResponseMinutes: 15, manualMessages: 2, ...none });
     const s = await dash('?range=7d&tz=Asia/Shanghai');
     const bobS = s.members.find((m) => m.userId === bob.id);
     assert.equal(bobS.handled, 1);
     assert.equal(bobS.medianResponseMinutes, 50);
+    const aliceS = s.members.find((m) => m.userId === alice.id);
+    assert.deepEqual([aliceS.replyTurns, aliceS.avgReplyMinutes], [1, 9180]);
   });
 });
 

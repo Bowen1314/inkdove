@@ -428,6 +428,12 @@
 .dash-table .table tbody tr:last-child > td {
   border-bottom: 0;
 }
+/* 成员表单元格里数字后面的小灰字（「12 次」） */
+.dash-table__sub {
+  margin-left: var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
 .dash-table__link {
   font-weight: 500;
 }

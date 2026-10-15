@@ -81,13 +81,16 @@
 | 会话 | 管理员看得到所有号的所有会话。每条消息记了是谁发的（哪个成员、机器人、机主手机、外联）和发送时间，撤回的消息原文也看得到。业务员只看得到分给自己的会话 | 一直有 |
 | 机主手机上发的消息 | 扫码号绑定的那部手机直接发给客户的消息也存下来，标成手机发的 | 一直有（黑名单里的号码除外） |
 | 会话分配记录 | 每次分给谁、谁分的、为什么分 | 一直有 |
-| 数据看板里的「成员」 | 每个成员处理了多少转人工、响应时间的中位数、在后台发了多少条消息 | 只有管理员看得到 |
-| 推荐回复采纳统计 | 每份推荐回复记下是谁点的、最后是直接用、改了再发还是没用，以及实际发出的文字。看板只按号、类型、模型统计，**不按成员分**；但列表里能看到每条发出的文字，打开会话就知道是谁发的。库里记了点按钮的人，能登服务器的人查得到 | 一直有，留 180 天 |
+| 数据看板里的「成员」 | 每个成员处理了多少转人工、转人工后首次回复的中位数、在后台发了多少条消息，以及**平均回复时间**：客户发来消息后，这个人隔多久回的（平均、中位数、次数）。这是在评估员工的工作表现 | 一直有，只有管理员看得到 |
+| 数据看板按业务员筛选 | 管理员选一个业务员，看分给他的客户：消息数、新客户、自动回复率、待处理、回复时间、转人工、客户阶段、推荐回复的采纳情况、外联效果，以及这些客户都是谁回的。按现在的负责人算，会话改派后，以前的数据跟着算到新负责人名下 | 一直有，只有管理员看得到 |
+| 推荐回复采纳统计 | 每份推荐回复记下是谁点的、最后是直接用、改了再发还是没用，以及实际发出的文字。看板按号、类型、模型统计，不按点按钮的人分；但按业务员筛选时只算分给他的会话，差不多就是这个人的采纳情况。列表里能看到每条发出的文字，打开会话就知道是谁发的。库里记了点按钮的人，能登服务器的人查得到 | 一直有，留 180 天 |
 | 操作日志 | 谁在什么时候做了什么、改之前和改之后的值、成功还是失败、IP 和设备（浏览器、系统），还有登录成功、登录失败和退出。只能查，不能改，也不能删 | **一直开，关不掉**。默认留 365 天 |
 | 屏蔽词 | 检查我方发出的文字。在墨鸽里发的，命中就不发；机主在手机上发的，只提醒。所有管理员会看到弹窗。弹窗里可以停用发这条消息的业务员，要管理员自己点、确认，不会自动停用。命中记录里有原文和发送人 | 关 |
 | AI 发言检查 | 把我方发出的文字交给回复模型，看有没有辱骂、威胁、歧视、骚扰、粗鲁的说法。只提醒，不拦。严重的弹窗（和屏蔽词的一样，也能停用发的人），轻微的只进列表，管理员可以标「误报」 | 关 |
 | AI 助手 | 对话在界面上只有本人看得到。操作日志会记下谁提问、重试、删对话，不记问了什么，也不记标题。数据库里存着全文，能登服务器的人看得到 | 配好模型后所有人都能用 |
 | 「我的资料」、个人话术 | 起草回复时发给回复模型 | 填了才有 |
+
+回复时间和按业务员筛选不用打开，升级后就有，算的是已经记下的消息。要拿它考核员工的，告知里写清楚（模板第 1、2 条）。
 
 开着屏蔽词或 AI 发言检查时，业务员的输入框下面会显示「发出的消息会做合规检查」。这一行**不能代替告知**：它没说查什么、谁看、留多久，用机主手机发消息的人也看不到。
 
@@ -117,9 +120,9 @@
 >    - 账号信息：邮箱、姓名、角色、能用的号、最近登录时间；你自己填的「我的资料」（称呼、职位、电话、邮箱、介绍）和个人话术。
 >    - 工作消息：你在工作台里发给客户的每条消息，还有【公司配发的手机号码】上直接发出的消息，都会记下发送人和时间。撤回的消息原文也会保留。
 >    - 操作记录：你在工作台里的操作（例如改设置、分配会话、导出数据），登录成功、登录失败和退出，以及当时的 IP 地址和设备（浏览器和系统，例如 Chrome · Windows 电脑）。
->    - 工作统计：你处理的会话数、响应时间、发出的消息数。
+>    - 工作统计：你处理的会话数、发出的消息数，客户发来消息后你隔多久回复（平均和中位数）。管理员还能按业务员查看分给你的客户的情况，例如消息数、自动回复率、客户阶段、推荐回复用了多少。
 >    - 【开了才写】合规检查记录：屏蔽词命中和 AI 发言检查发现的问题，包括原文、问题类别和说明。
-> 2. **为什么处理**：和客户沟通、管理销售工作；【防止对客户使用辱骂、威胁、歧视、骚扰等不当说法】；保障系统安全、排查问题。
+> 2. **为什么处理**：和客户沟通、管理销售工作；了解和评估工作表现，例如回复客户的速度【写明会不会用于考核】；【防止对客户使用辱骂、威胁、歧视、骚扰等不当说法】；保障系统安全、排查问题。
 > 3. **怎么检查**【开了才写】
 >    - 屏蔽词：消息发出前检查。在工作台里发的，命中就不发；在手机上发的，只提醒管理员。
 >    - AI 发言检查：由【模型服务商名称】的 AI 模型查看你发出的文字和前面最多 4 条聊天。只提醒，不拦截。AI 会判错，检查结果只作为线索。管理员会核实原文和上下文，处理前听你的说明。
@@ -145,9 +148,9 @@
 >    - Account data: email, name, role, the numbers you can use, last sign-in time; the profile you fill in yourself (display name, job title, phone, email, bio) and your personal writing style.
 >    - Work messages: every message you send to customers from the workspace, and messages sent directly from 【the company phone number】, are recorded with the sender and time. The original text of deleted ("unsent") messages is kept.
 >    - Activity records: what you do in the workspace (for example changing settings, assigning conversations, exporting data), sign-ins, failed sign-ins and sign-outs, and the IP address and device (browser and operating system, e.g. Chrome on Windows) used.
->    - Work statistics: conversations handled, response times, number of messages sent.
+>    - Work statistics: conversations handled, number of messages sent, and how long customers wait for your reply (average and median). Administrators can also filter the dashboard by staff member to see the customers assigned to you, for example message counts, auto-reply rate, customer stages and how many suggested replies were used.
 >    - 【Only if enabled】 Conduct checks: blocked-word hits and issues found by the AI message check, including the original text, the issue category and an explanation.
-> 2. **Why**: to communicate with customers and manage sales work; 【to prevent abusive, threatening, discriminatory, harassing or rude language towards customers】; to keep the system secure and investigate problems.
+> 2. **Why**: to communicate with customers and manage sales work; to understand and evaluate work performance, for example how fast customers get a reply 【state whether this is used in performance reviews】; 【to prevent abusive, threatening, discriminatory, harassing or rude language towards customers】; to keep the system secure and investigate problems.
 > 3. **How messages are checked** 【only if enabled】
 >    - Blocked words: checked before sending. Messages sent from the workspace are not sent if they match. Messages sent from the phone are only flagged to administrators.
 >    - AI message check: an AI model from 【provider name】 reads the text you send and up to 4 earlier messages in the chat. It only raises alerts and does not block anything. The AI can be wrong. An alert is only a lead: an administrator will check the original text and context, and will hear your explanation before taking any action.
@@ -326,7 +329,7 @@
 
 - **不要靠同意。** 劳动关系里员工的同意一般不算自由作出（EDPB 第 05/2020 号同意指南第 21 段；第 29 条工作组第 2/2017 号意见 WP249，EDPB 仍在引用）。一般靠合法利益，监控要必要、相称、尽量少侵入。比如能用屏蔽词解决的，就不开 AI 发言检查。
 - **各国的具体规定（第八十八条）：** 德国《联邦数据保护法》（BDSG）第 26 条第 1 款第 1 句，在欧盟法院 C-34/21 案判决后，很可能不能单独作为依据（巴登-符腾堡州数据保护机构的看法，法院没有最终定论）。德国还没有单独的员工数据保护法。
-- **德国职工委员会：** 《企业组织法》（BetrVG）第 87 条第 1 款第 6 项，引入和使用用来监控员工行为或绩效的技术设施，职工委员会有共同决定权。联邦劳动法院的判例认为，只要设施客观上适合监控就算，不看雇主的本意。管理员看聊天、操作日志、AI 发言检查，都很可能算。有职工委员会的，先谈成企业协议再开。
+- **德国职工委员会：** 《企业组织法》（BetrVG）第 87 条第 1 款第 6 项，引入和使用用来监控员工行为或绩效的技术设施，职工委员会有共同决定权。联邦劳动法院的判例认为，只要设施客观上适合监控就算，不看雇主的本意。管理员看聊天、操作日志、AI 发言检查、看板里每个成员的回复时间，都很可能算。有职工委员会的，先谈成企业协议再开。
 - **影响评估（第三十五条）：** 第 29 条工作组的 DPIA 指南（WP248 rev.01，EDPB 已认可）列了九条标准，一般满足两条就要做。系统性地查员工的通信，至少满足「系统性监控」「弱势的数据主体（员工）」「高度私密的数据（通信）」三条。**很可能要做。**
 - **自动化决策（第二十二条）：** AI 发言检查只提醒，由人决定，一般不算「完全基于自动化处理的决定」。前提是人真的看了原文再决定，不是照单全收。
 

@@ -375,7 +375,7 @@ function DraftItem({ item, onSaveToKb }) {
   );
 }
 
-export function DraftListCard({ range, accountId, tz, reloadKey }) {
+export function DraftListCard({ range, accountId, assigneeId, tz, reloadKey }) {
   const [filter, setFilter] = useState('all');
   const [items, setItems] = useState([]);
   const [nextCursor, setNextCursor] = useState(null);
@@ -385,7 +385,7 @@ export function DraftListCard({ range, accountId, tz, reloadKey }) {
   const [retry, setRetry] = useState(0);
   const [kbItem, setKbItem] = useState(null);
 
-  const query = { range, accountId: accountId || undefined, tz, filter };
+  const query = { range, accountId: accountId || undefined, assigneeId: assigneeId || undefined, tz, filter };
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -407,7 +407,7 @@ export function DraftListCard({ range, accountId, tz, reloadKey }) {
       });
     return () => ctrl.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [range, accountId, tz, filter, reloadKey, retry]);
+  }, [range, accountId, assigneeId, tz, filter, reloadKey, retry]);
 
   const loadMore = async () => {
     if (!nextCursor || more) return;

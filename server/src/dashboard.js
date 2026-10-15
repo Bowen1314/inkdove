@@ -8,6 +8,11 @@
 // 导入的历史消息（messages.via = 'import'）不算入站消息、不算新客户、不进热力图：时间是旧的，也不是服务期间收到的。
 //
 // 推荐回复采纳（drafts）和它的列表（GET /api/dashboard/drafts）读 draft_outcomes（reply/draft-outcomes.js 记的）。
+//
+// 平均回复时间（kpi.avgReplyMinutes，成员表每人一列）按「客户等人工回复的一轮」算，见 replyTurns。
+//
+// 按业务员筛选（assigneeId）：只算现在分给这个成员的会话（conversations.assignee_id，'unassigned' 是未分配的）。
+// 按的是现在的负责人：会话改派后，它以前的消息、处理记录也跟着算到新负责人名下。知识库和成本不按业务员筛选。
 import { parsePhoneNumberFromString } from 'libphonenumber-js/max';
 import { DELETED_ACCOUNT_NAME } from './accounts.js';
 import { codeLabel, LEAD_STAGES, leadStageLabel, LLM_PURPOSES, purposeLabel, RESPONDER_KINDS } from './codes.js';
@@ -42,9 +47,13 @@ export function canonicalTz(tz) {
   }
 }
 
+/** 按业务员筛选时表示「未分配」的值 */
+export const UNASSIGNED = 'unassigned';
+
 /**
  * 校验查询参数。range 不传按 7d，不是 today|7d|30d 返回 400；tz 不传按 UTC，传了但 Intl 不认识返回 400；
  * accountId 不传或为空表示全部号（号删了也照样按它筛，数据还在）。
+ * assigneeId 不传或为空表示全部业务员，'unassigned' 是未分配的会话，其余当成员 id（成员停用、删了也照样筛，不报错）。
  * @param {Record<string, unknown>} q req.query
  */
 export function parseDashboardQuery(q = {}) {
@@ -62,7 +71,12 @@ export function parseDashboardQuery(q = {}) {
     if (typeof q.accountId !== 'string' || q.accountId.length > 200) throw badRequest('accountId 不正确');
     accountId = q.accountId;
   }
-  return { range, tz, accountId };
+  let assigneeId = null;
+  if (q.assigneeId !== undefined && q.assigneeId !== '') {
+    if (typeof q.assigneeId !== 'string' || q.assigneeId.length > 200) throw badRequest('assigneeId 不正确', 'invalid_assignee');
+    assigneeId = q.assigneeId;
+  }
+  return { range, tz, accountId, assigneeId };
 }
 
 /** 推荐回复列表（GET /api/dashboard/drafts）每页默认几条、最多几条 */
@@ -81,7 +95,7 @@ export const DRAFT_LIST_FILTERS = {
 };
 
 /**
- * 推荐回复列表的参数：range、tz、accountId 同看板；filter 不传按 all；cursor 是上一页返回的 nextCursor；limit 1–50，默认 20
+ * 推荐回复列表的参数：range、tz、accountId、assigneeId 同看板；filter 不传按 all；cursor 是上一页返回的 nextCursor；limit 1–50，默认 20
  * @param {Record<string, unknown>} q req.query
  */
 export function parseDraftListQuery(q = {}) {
@@ -230,6 +244,18 @@ export function countryOfNumber(digits) {
 const jsonArr = (col) => `json_each(CASE WHEN json_valid(${col}) THEN ${col} ELSE '[]' END)`;
 // 按号筛选：@acc 为 NULL 时不筛
 const accEq = (col) => `(@acc IS NULL OR ${col} = @acc)`;
+
+/**
+ * 按业务员筛选的 SQL 片段（参数 @asg）。不筛时是 1，查询和原来一样；筛的时候：
+ * - col(c)：会话表的 assignee_id 列（查询里已经 JOIN 了会话，或者就是查会话表）
+ * - conv(col)：别的表的 conversation_id 列，要求它指向分给这个人的会话（会话删了的不算，conversation_id 为空的也不算）
+ * @param {string|null} asg parseDashboardQuery 的 assigneeId
+ */
+export function assigneeScope(asg) {
+  if (!asg) return { col: () => '1', conv: () => '1' };
+  const cond = (col) => (asg === UNASSIGNED ? `${col} IS NULL` : `${col} = @asg`);
+  return { col: cond, conv: (col) => `${col} IN (SELECT id FROM conversations WHERE ${cond('assignee_id')})` };
+}
 const bucketOf = (col) => `CAST(strftime('%s', ${col}) AS INTEGER) / ${BUCKET_SECONDS}`;
 // 入站消息：客户发的，不含导入的历史消息（助手的概况工具 assistant/tools.js 用同一个口径）
 export const INBOUND = (m) => `${m}.direction = 'in' AND ${m}.author = 'customer' AND COALESCE(${m}.via, '') <> 'import'`;
@@ -269,14 +295,15 @@ function finishDraftGroup({ editSum, editN, ...g }) {
 }
 
 /**
- * 看板的推荐回复采纳：本时间段内起草的推荐回复和转人工草稿，按结果、类型、模型 + 提示词版本、每天统计。不按成员分。
+ * 看板的推荐回复采纳：本时间段内起草的推荐回复和转人工草稿，按结果、类型、模型 + 提示词版本、每天统计。不按成员分；
+ * 按业务员筛选时只算分给他的会话里的草稿。
  * @param {import('better-sqlite3').Database} db
- * @param {{from:string, to:string, acc:string|null, pendingBefore:string}} P
+ * @param {{from:string, to:string, acc:string|null, asg?:string|null, pendingBefore:string}} P
  * @param {(bucket:number) => {date:string}} toLocal
  * @param {string[]} dates
  */
 export function draftSummary(db, P, toLocal, dates) {
-  const where = `created_at >= @from AND created_at <= @to AND ${accEq('account_id')}`;
+  const where = `created_at >= @from AND created_at <= @to AND ${accEq('account_id')} AND ${assigneeScope(P.asg).conv('conversation_id')}`;
   const rows = db
     .prepare(
       `SELECT kind, model, prompt_version AS pv, ${DRAFT_OC('')} AS oc, COUNT(*) AS n, SUM(edit_ratio) AS er, COUNT(edit_ratio) AS ern,
@@ -388,6 +415,106 @@ export function llmCostSummary(db, pricingList, { from, to, acc }) {
   return cost;
 }
 
+// ---------------- 平均回复时间 ----------------
+
+/**
+ * 客户等人工回复的一轮一轮（平均回复时间用）的 SQL。
+ *
+ * 一个会话里的消息按 (ts, seq) 排成一串，只留客户看得到的：客户发的消息，和我方发出去了的消息（status = 'sent'）。
+ * 导入的历史消息（via = 'import'）、外联群发（via = 'campaign'）、发送失败的都不进这一串，就当没有。
+ * 通知号上的提醒存在 notice_messages，本来就不在 messages 里。撤回了的消息照样在（发出去过，对方看到过）。
+ *
+ * - 一轮从一条客户消息开始，条件是它前面那条不是客户消息（我方回过之后客户发的第一条，或者会话里的第一条）；
+ *   客户连着发的几条算同一轮，等待时间从第一条算。
+ * - 一轮在它后面我方发的第一条消息结束。是人发的（后台 author=operator、via=admin；WhatsApp 转发 operator、via=whatsapp；
+ *   机主手机上发的 owner、via=phone；早期没记 via 的 operator 也算）就是一次人工回复；是机器人自动回复的，这一轮不算
+ *   （不是人回的）；后面还没有我方消息的是「还没回」。
+ * - 一轮的开始落在本时间段内才算，回复可以晚于时间段结束。
+ *
+ * 实现：只看本时间段内有客户消息（不含导入的）的会话（messages_direction_ts），逐个会话按 messages_conv 取它的消息
+ * （CROSS JOIN 定死顺序，+m.direction 不让它改走按方向的索引）；LAG 标出每一轮的开头和结尾，只留这些行再用 LEAD 把
+ * 开头和后面紧跟的结尾配成一对。按号、按业务员筛选在选会话这一步。
+ * @param {string|null} asg 按业务员筛选（assigneeScope）
+ */
+export function replyTurnsSql(asg) {
+  const S = assigneeScope(asg);
+  return `
+WITH convs AS (
+  SELECT DISTINCT m.conversation_id AS id FROM messages m JOIN conversations c ON c.id = m.conversation_id
+   WHERE ${INBOUND('m')} AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')} AND ${S.col('c.assignee_id')}
+),
+line AS (
+  SELECT m.conversation_id AS cid, m.ts, m.seq, m.via, m.sent_by_user_id AS uid, m.sent_by_name AS uname,
+         CASE WHEN m.direction = 'in' THEN 'c' WHEN m.author IN ('operator', 'owner') THEN 'h' ELSE 'b' END AS k
+    FROM convs v CROSS JOIN messages m ON m.conversation_id = v.id
+   WHERE COALESCE(m.via, '') NOT IN ('import', 'campaign')
+     AND ((+m.direction = 'in' AND m.author = 'customer') OR (+m.direction = 'out' AND m.status = 'sent'))
+),
+marked AS (
+  SELECT *, LAG(k) OVER (PARTITION BY cid ORDER BY ts, seq) AS pk FROM line
+),
+edges AS (
+  SELECT * FROM marked WHERE (k = 'c' AND (pk IS NULL OR pk <> 'c')) OR (k <> 'c' AND pk = 'c')
+),
+paired AS (
+  SELECT k, ts, LEAD(ts) OVER w AS rts, LEAD(k) OVER w AS rk, LEAD(via) OVER w AS rvia, LEAD(uid) OVER w AS ruid, LEAD(uname) OVER w AS runame
+    FROM edges WINDOW w AS (PARTITION BY cid ORDER BY ts, seq)
+)
+SELECT ts AS start, rts AS reply, rk AS kind, rvia AS via, ruid AS userId, runame AS userName
+  FROM paired WHERE k = 'c' AND ts >= @from AND ts <= @to`;
+}
+
+/**
+ * 本时间段内开始的每一轮：{start, reply, kind, via, userId, userName}。kind：h 人工回复、b 机器人先回了（不算）、
+ * null 还没回（reply 也是 null）。via、userId、userName 是那条回复的。
+ * @param {import('better-sqlite3').Database} db
+ * @param {{from:string, to:string, acc:string|null, asg?:string|null}} P
+ */
+export function replyTurns(db, P) {
+  return db.prepare(replyTurnsSql(P.asg)).all({ from: P.from, to: P.to, acc: P.acc, ...(P.asg ? { asg: P.asg } : {}) });
+}
+
+/** 一组等待分钟数 → {avgReplyMinutes, medianReplyMinutes, replyTurns}，没有时平均和中位都是 null */
+function replyStats(minutes) {
+  return {
+    avgReplyMinutes: minutes.length ? Math.round((minutes.reduce((a, b) => a + b, 0) / minutes.length) * 100) / 100 : null,
+    medianReplyMinutes: median(minutes),
+    replyTurns: minutes.length,
+  };
+}
+
+/**
+ * replyTurns 的结果汇总：全部的平均、中位，还没回的轮数；按回复人分：后台成员（userId）、手机回复、WhatsApp 转发。
+ * 等待时间小于 0（手机和服务器时间差一点）按 0 算。
+ */
+export function summarizeReplyTurns(turns) {
+  const all = [];
+  const byUser = new Map();
+  const names = new Map();
+  const phone = [];
+  const relay = [];
+  let unreplied = 0;
+  for (const t of turns) {
+    if (!t.kind) {
+      unreplied++;
+      continue;
+    }
+    if (t.kind !== 'h') continue;
+    const min = Math.max(0, (Date.parse(t.reply) - Date.parse(t.start)) / 60000);
+    if (!Number.isFinite(min)) continue;
+    all.push(min);
+    if (t.via === 'phone') phone.push(min);
+    else if (t.via === 'whatsapp') relay.push(min);
+    else if (t.userId) {
+      if (!byUser.has(t.userId)) byUser.set(t.userId, []);
+      byUser.get(t.userId).push(min);
+      if (t.userName) names.set(t.userId, t.userName);
+    }
+  }
+  const of = (list) => replyStats(list || []);
+  return { total: { ...of(all), unrepliedTurns: unreplied }, user: (id) => of(byUser.get(id)), userIds: [...byUser.keys()], names, phone: of(phone), relay: of(relay) };
+}
+
 // ---------------- 看板 ----------------
 
 /**
@@ -408,15 +535,17 @@ export function createDashboard(ctx, opts = {}) {
   }
 
   /**
-   * @param {{range:string, tz:string, accountId:string|null}} q parseDashboardQuery 的结果
+   * @param {{range:string, tz:string, accountId:string|null, assigneeId?:string|null}} q parseDashboardQuery 的结果
    */
-  async function build({ range, tz, accountId }) {
+  async function build({ range, tz, accountId, assigneeId = null }) {
     const nowMs = clock();
     const r = resolveRange(range, tz, nowMs);
+    const S = assigneeScope(assigneeId);
     const P = {
       from: r.from,
       to: r.to,
       acc: accountId,
+      asg: assigneeId,
       now: r.to,
       since30: new Date(nowMs - UNUSED_ENTRY_DAYS * 86400_000).toISOString(),
       pendingBefore: new Date(nowMs - DRAFT_PENDING_MS).toISOString(),
@@ -434,7 +563,7 @@ export function createDashboard(ctx, opts = {}) {
     const inboundRows = all(
       `SELECT c.account_id AS acc, ${bucketOf('m.ts')} AS b, COUNT(*) AS n
          FROM messages m JOIN conversations c ON c.id = m.conversation_id
-        WHERE ${INBOUND('m')} AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')}
+        WHERE ${INBOUND('m')} AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')} AND ${S.col('c.assignee_id')}
         GROUP BY c.account_id, b`,
     );
     const heatmap = Array.from({ length: 7 }, () => Array(24).fill(0));
@@ -457,7 +586,7 @@ export function createDashboard(ctx, opts = {}) {
           WHERE f.direction = 'in' AND f.author = 'customer'
             AND f.conversation_id IN (
               SELECT m.conversation_id FROM messages m JOIN conversations c ON c.id = m.conversation_id
-               WHERE ${INBOUND('m')} AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')})
+               WHERE ${INBOUND('m')} AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')} AND ${S.col('c.assignee_id')})
           GROUP BY f.conversation_id)
         WHERE first_ts >= @from AND COALESCE(first_via, '') <> 'import'`,
     ).n;
@@ -465,7 +594,7 @@ export function createDashboard(ctx, opts = {}) {
     // ---- 处理记录：按号、结果、code 计数 ----
     const decisionRows = all(
       `SELECT account_id AS acc, decision, code, COUNT(*) AS n FROM decisions
-        WHERE ts >= @from AND ts <= @to AND ${accEq('account_id')}
+        WHERE ts >= @from AND ts <= @to AND ${accEq('account_id')} AND ${S.conv('conversation_id')}
         GROUP BY account_id, decision, code`,
     );
     const turns = { replied: 0, handoff: 0, blocked: 0, offtopic: 0 };
@@ -498,6 +627,7 @@ export function createDashboard(ctx, opts = {}) {
     for (const row of all(
       `SELECT decision, ${bucketOf('ts')} AS b, COUNT(*) AS n FROM decisions
         WHERE ts >= @from AND ts <= @to AND decision IN ('replied', 'handoff', 'blocked', 'offtopic') AND ${accEq('account_id')}
+          AND ${S.conv('conversation_id')}
         GROUP BY decision, b`,
     )) {
       const day = trendMap.get(toLocal(row.b).date);
@@ -507,18 +637,24 @@ export function createDashboard(ctx, opts = {}) {
     // ---- 转人工记录：本时间段内开始的 ----
     const handoffRows = all(
       `SELECT started_at, first_response_at, first_responder_kind AS kind, first_responder_user_id AS userId FROM handoffs
-        WHERE started_at >= @from AND started_at <= @to AND ${accEq('account_id')}`,
+        WHERE started_at >= @from AND started_at <= @to AND ${accEq('account_id')} AND ${S.conv('conversation_id')}`,
     );
     const responseMinutes = (h) => Math.max(0, (Date.parse(h.first_response_at) - Date.parse(h.started_at)) / 60000);
     const responded = handoffRows.filter((h) => h.first_response_at && Number.isFinite(Date.parse(h.first_response_at)));
 
     // ---- 待处理（实时） ----
     const openByAccount = new Map(
-      all(`SELECT account_id AS acc, COUNT(*) AS n FROM conversations WHERE needs_human = 1 AND ${accEq('account_id')} GROUP BY account_id`).map(
+      all(
+        `SELECT account_id AS acc, COUNT(*) AS n FROM conversations
+          WHERE needs_human = 1 AND ${accEq('account_id')} AND ${S.col('assignee_id')} GROUP BY account_id`,
+      ).map(
         (row) => [row.acc, row.n],
       ),
     );
     const openNeedsHuman = [...openByAccount.values()].reduce((a, b) => a + b, 0);
+
+    // ---- 平均回复时间：本时间段内开始的每一轮客户等人工回复（见 replyTurnsSql） ----
+    const reply = summarizeReplyTurns(replyTurns(db, P));
 
     const kpi = {
       inboundMessages,
@@ -527,7 +663,10 @@ export function createDashboard(ctx, opts = {}) {
       turns,
       handoffs: handoffRows.length,
       openNeedsHuman,
+      // 转人工到首次人工回复的中位数（只算转人工记录）
       medianResponseMinutes: median(responded.map(responseMinutes)),
+      // 客户等人工回复的平均、中位分钟数，算了几轮（机器人先回了的不算），还有几轮还没人回
+      ...reply.total,
     };
 
     const handoffReasons = [...reasons.values()].sort(byCount);
@@ -572,7 +711,12 @@ export function createDashboard(ctx, opts = {}) {
     }
 
     // ---- 客户线索：stages、funnel、countries 是当前的线索（不按时间段），products 按本时间段的回复 ----
-    const stageCounts = new Map(all(`SELECT stage, COUNT(*) AS n FROM leads WHERE ${accEq('account_id')} GROUP BY stage`).map((x) => [x.stage, x.n]));
+    const stageCounts = new Map(
+      all(`SELECT stage, COUNT(*) AS n FROM leads WHERE ${accEq('account_id')} AND ${S.conv('conversation_id')} GROUP BY stage`).map((x) => [
+        x.stage,
+        x.n,
+      ]),
+    );
     const stages = [
       ...Object.keys(LEAD_STAGES).map((stage) => ({ stage, label: leadStageLabel(stage), count: stageCounts.get(stage) || 0 })),
       ...[...stageCounts]
@@ -584,9 +728,10 @@ export function createDashboard(ctx, opts = {}) {
     const funnelRow = get(
       `SELECT ${FUNNEL_STAGES.map((_, i) => `COALESCE(SUM(top >= ${i}), 0) AS r${i}`).join(', ')} FROM (
          SELECT lead_id, MAX(${rankCase('stage')}) AS top FROM (
-           SELECT l.id AS lead_id, l.stage FROM leads l WHERE ${accEq('l.account_id')}
+           SELECT l.id AS lead_id, l.stage FROM leads l WHERE ${accEq('l.account_id')} AND ${S.conv('l.conversation_id')}
            UNION ALL
-           SELECT h.lead_id, h.stage FROM lead_stage_history h JOIN leads l ON l.id = h.lead_id WHERE ${accEq('l.account_id')})
+           SELECT h.lead_id, h.stage FROM lead_stage_history h JOIN leads l ON l.id = h.lead_id
+            WHERE ${accEq('l.account_id')} AND ${S.conv('l.conversation_id')})
          GROUP BY lead_id)`,
     );
     const funnel = FUNNEL_STAGES.map((stage, i) => ({ stage, label: leadStageLabel(stage), reached: funnelRow[`r${i}`] }));
@@ -595,7 +740,7 @@ export function createDashboard(ctx, opts = {}) {
     for (const row of all(
       `SELECT COALESCE(c.contact_number, '') AS number, COUNT(*) AS n
          FROM leads l LEFT JOIN conversations c ON c.id = l.conversation_id
-        WHERE ${accEq('l.account_id')} GROUP BY number`,
+        WHERE ${accEq('l.account_id')} AND ${S.conv('l.conversation_id')} GROUP BY number`,
     )) {
       const code = countryOfNumber(row.number);
       countryCounts.set(code, (countryCounts.get(code) || 0) + row.n);
@@ -608,6 +753,7 @@ export function createDashboard(ctx, opts = {}) {
       `SELECT e.id AS entryId, e.title, COUNT(*) AS count
          FROM decisions d, ${jsonArr('d.used_entry_ids')} j JOIN entries e ON e.id = j.value
         WHERE d.decision = 'replied' AND e.type = 'product' AND d.ts >= @from AND d.ts <= @to AND ${accEq('d.account_id')}
+          AND ${S.conv('d.conversation_id')}
         GROUP BY e.id ORDER BY count DESC, e.title LIMIT 10`,
     );
 
@@ -626,11 +772,12 @@ export function createDashboard(ctx, opts = {}) {
     });
 
     // ---- 成员：按转人工记录的首次回复人统计，外加手机回复、WhatsApp 转发两行 ----
+    // handled、medianResponseMinutes 是转人工记录的；avgReplyMinutes、medianReplyMinutes、replyTurns 是谁回的那一轮（后台按发送人）
     const manualRows = all(
       `SELECT m.sent_by_user_id AS userId, MAX(m.sent_by_name) AS name, COUNT(*) AS n
          FROM messages m JOIN conversations c ON c.id = m.conversation_id
         WHERE m.direction = 'out' AND m.author = 'operator' AND m.via = 'admin' AND m.status = 'sent'
-          AND m.sent_by_user_id IS NOT NULL AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')}
+          AND m.sent_by_user_id IS NOT NULL AND m.ts >= @from AND m.ts <= @to AND ${accEq('c.account_id')} AND ${S.col('c.assignee_id')}
         GROUP BY m.sent_by_user_id`,
     );
     const manualByUser = new Map(manualRows.map((x) => [x.userId, x]));
@@ -638,14 +785,20 @@ export function createDashboard(ctx, opts = {}) {
     const handledBy = (pred) => responded.filter(pred).length;
     const userStats = (userId) => {
       const isUser = (h) => h.kind === 'admin_ui' && h.userId === userId;
-      return { handled: handledBy(isUser), medianResponseMinutes: median(minutesBy(isUser)), manualMessages: manualByUser.get(userId)?.n || 0 };
+      return {
+        handled: handledBy(isUser),
+        medianResponseMinutes: median(minutesBy(isUser)),
+        manualMessages: manualByUser.get(userId)?.n || 0,
+        ...reply.user(userId),
+      };
     };
     const users = db.prepare('SELECT id, email, name FROM users ORDER BY created_at, rowid').all();
     const known = new Set(users.map((u) => u.id));
-    // 已经删掉的成员：期间有过首次回复或后台消息的也列出来，名字取消息上记的发送人
+    // 已经删掉的成员：期间有过首次回复、后台消息或回复过一轮的也列出来，名字取消息上记的发送人
     const goneIds = new Set([
       ...responded.filter((h) => h.kind === 'admin_ui' && h.userId && !known.has(h.userId)).map((h) => h.userId),
       ...manualRows.filter((x) => !known.has(x.userId)).map((x) => x.userId),
+      ...reply.userIds.filter((id) => !known.has(id)),
     ]);
     const kindRow = (kind, responderKind) => {
       const pred = (h) => h.kind === responderKind;
@@ -656,19 +809,24 @@ export function createDashboard(ctx, opts = {}) {
         handled: handledBy(pred),
         medianResponseMinutes: median(minutesBy(pred)),
         manualMessages: null,
+        ...reply[kind],
       };
     };
-    const members = [
+    let members = [
       ...users.map((u) => ({ userId: u.id, name: u.name || u.email, kind: 'user', ...userStats(u.id) })),
       ...[...goneIds].map((id) => ({
         userId: id,
-        name: manualByUser.get(id)?.name || DELETED_MEMBER_NAME,
+        name: manualByUser.get(id)?.name || reply.names.get(id) || DELETED_MEMBER_NAME,
         kind: 'user',
         ...userStats(id),
       })),
       kindRow('phone', 'phone'),
       kindRow('relay', 'whatsapp_relay'),
     ];
+    // 按业务员筛选时只留这些会话里有动静的行（谁回过他的客户），选中的那个成员总留着
+    if (assigneeId) {
+      members = members.filter((m) => m.userId === assigneeId || m.handled > 0 || m.manualMessages > 0 || m.replyTurns > 0);
+    }
 
     // ---- 成本（不按号筛选；和会话有关的调用按号筛，不属于任何号的调用照算） ----
     const cost = llmCostSummary(db, ctx.getSettings().pricing, P);
@@ -678,14 +836,16 @@ export function createDashboard(ctx, opts = {}) {
       offtopic: codeCounts(abuseOfftopic, 'offtopic'),
       blocked: codeCounts(abuseBlocked, 'blocked'),
       // 实时：现在还在静默中的会话
-      mutedConversations: get(`SELECT COUNT(*) AS n FROM conversations WHERE muted_until > @now AND ${accEq('account_id')}`).n,
+      mutedConversations: get(
+        `SELECT COUNT(*) AS n FROM conversations WHERE muted_until > @now AND ${accEq('account_id')} AND ${S.col('assignee_id')}`,
+      ).n,
     };
 
     // ---- 外联：本时间段内发出的，回复、拒绝按这些人算 ----
     const outreachRows = all(
       `SELECT account_id AS acc, COUNT(*) AS sent, SUM(replied_at IS NOT NULL) AS replied, SUM(declined_at IS NOT NULL) AS declined
          FROM campaign_recipients
-        WHERE status = 'sent' AND sent_at >= @from AND sent_at <= @to AND ${accEq('account_id')}
+        WHERE status = 'sent' AND sent_at >= @from AND sent_at <= @to AND ${accEq('account_id')} AND ${S.conv('conversation_id')}
         GROUP BY account_id ORDER BY sent DESC, account_id`,
     );
     const sum = (k) => outreachRows.reduce((n, x) => n + x[k], 0);
@@ -705,7 +865,7 @@ export function createDashboard(ctx, opts = {}) {
       })),
     };
 
-    // ---- 推荐回复采纳：本时间段内起草的（不按成员分） ----
+    // ---- 推荐回复采纳：本时间段内起草的（不按成员分；按业务员筛选时只算分给他的会话） ----
     const drafts = draftSummary(db, P, toLocal, r.dates);
 
     return {
@@ -731,13 +891,14 @@ export function createDashboard(ctx, opts = {}) {
    * @param {ReturnType<typeof parseDraftListQuery>} q
    * @returns {{items:any[], nextCursor:string|null}}
    */
-  function listDrafts({ range, tz, accountId, filter, cursor, limit }) {
+  function listDrafts({ range, tz, accountId, assigneeId = null, filter, cursor, limit }) {
     const nowMs = clock();
     const r = resolveRange(range, tz, nowMs);
     const P = {
       from: r.from,
       to: r.to,
       acc: accountId,
+      asg: assigneeId,
       pendingBefore: new Date(nowMs - DRAFT_PENDING_MS).toISOString(),
       cAt: cursor?.at ?? null,
       cId: cursor?.id ?? null,
@@ -748,7 +909,8 @@ export function createDashboard(ctx, opts = {}) {
       .prepare(
         `SELECT d.*, ${DRAFT_OC('d.')} AS oc, c.id AS conv_exists, c.contact_name, c.contact_number
            FROM draft_outcomes d LEFT JOIN conversations c ON c.id = d.conversation_id
-          WHERE d.created_at >= @from AND d.created_at <= @to AND ${accEq('d.account_id')} AND ${DRAFT_OC('d.')} IN (${wanted})
+          WHERE d.created_at >= @from AND d.created_at <= @to AND ${accEq('d.account_id')} AND ${assigneeScope(assigneeId).conv('d.conversation_id')}
+            AND ${DRAFT_OC('d.')} IN (${wanted})
             AND (@cAt IS NULL OR d.created_at < @cAt OR (d.created_at = @cAt AND d.id < @cId))
           ORDER BY d.created_at DESC, d.id DESC LIMIT @limit`,
       )

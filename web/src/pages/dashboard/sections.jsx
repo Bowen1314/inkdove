@@ -77,7 +77,7 @@ export function Stat({ label, value, unit, foot, tone }) {
 
 export const Empty = ({ title, desc, action }) => <EmptyState compact title={title} desc={desc} action={action} />;
 
-/** 选了某个号时，给不按号筛选的块标一句 */
+/** 选了某个号或业务员时，给不按它筛选的块标一句 */
 export function NotFiltered({ text = '不按号筛选', help }) {
   return (
     <span className="dash-card__note">
@@ -97,6 +97,28 @@ function MetricCell(props) {
   );
 }
 
+/**
+ * 知识库这类完全不筛的块的说明：选了号、选了业务员、两个都选时各说一句；都没选时 null。
+ * @param {{account: boolean, assignee: string}} filter
+ */
+function notFilteredText(filter) {
+  if (filter?.account && filter?.assignee) return '不按号和业务员筛选';
+  if (filter?.assignee) return '不按业务员筛选';
+  if (filter?.account) return '不按号筛选';
+  return null;
+}
+
+/** 选了业务员时，号码表、成员表标一句：数字只算他的客户 */
+function AssigneeNote({ assignee }) {
+  if (!assignee) return null;
+  return (
+    <NotFiltered
+      text={assignee === '未分配' ? '只算未分配的客户' : `只算${assignee}的客户`}
+      help="按业务员筛选按的是会话现在的负责人：改派过的客户，以前的消息和回复也跟着算到新负责人名下。"
+    />
+  );
+}
+
 /** 分钟 → Metric 的 value + unit */
 function minutesMetric(m) {
   if (m == null || !Number.isFinite(Number(m))) return { value: '—' };
@@ -106,12 +128,31 @@ function minutesMetric(m) {
   return { value: (n / 60).toFixed(1).replace(/\.0$/, ''), unit: '小时' };
 }
 
-export function KpiRow({ kpi = {}, accountId }) {
+/** 平均回复时间的算法（成员表的说明） */
+const REPLY_RULES = (
+  <>
+    客户发来消息、到我们有人回复，算一次。客户连着发几条从第一条算；机器人先回了的不算；发送失败的不算回复，撤回的照算；
+    后台发的算发送人，手机上回的、WhatsApp 转发的各算一行。导入的历史聊天和外联群发不算。客户开始等的时间在所选时间段内才算。
+  </>
+);
+
+/** 「待处理」点开去会话页：带上号和负责人筛选（会话页的「未分配」是 none） */
+function chatsLink(accountId, assigneeId) {
+  const q = new URLSearchParams();
+  if (accountId) q.set('account', accountId);
+  if (assigneeId) q.set('assignee', assigneeId === 'unassigned' ? 'none' : assigneeId);
+  const s = q.toString();
+  return s ? `/whatsapp/chats?${s}` : '/whatsapp/chats';
+}
+
+export function KpiRow({ kpi = {}, accountId, assigneeId }) {
   const turns = kpi.turns || {};
   const replied = num(turns.replied);
   const denom = replied + num(turns.handoff) + num(turns.blocked);
   const open = kpi.openNeedsHuman;
-  const median = minutesMetric(kpi.medianResponseMinutes);
+  const avg = minutesMetric(kpi.avgReplyMinutes);
+  const replyTurns = num(kpi.replyTurns);
+  const handoffMedian = fmtMinutes(kpi.medianResponseMinutes);
   return (
     <>
       <MetricCell label="客户消息" value={kpi.inboundMessages == null ? '—' : fmtNum(kpi.inboundMessages)} />
@@ -121,15 +162,24 @@ export function KpiRow({ kpi = {}, accountId }) {
         value={fmtPct(kpi.autoReplyRate)}
         foot={denom > 0 ? `已回复 ${fmtNum(replied)} / ${fmtNum(denom)}` : '离题不计入'}
       />
-      <MetricCell label="转人工次数" value={kpi.handoffs == null ? '—' : fmtNum(kpi.handoffs)} />
+      <MetricCell
+        label="转人工次数"
+        value={kpi.handoffs == null ? '—' : fmtNum(kpi.handoffs)}
+        foot={kpi.medianResponseMinutes == null ? undefined : `转人工后首次回复 中位 ${handoffMedian}`}
+      />
       <MetricCell
         label="待处理"
         value={open == null ? '—' : fmtNum(open)}
         tone={num(open) > 0 ? 'danger' : undefined}
         foot="实时，点开去处理"
-        to={accountId ? `/whatsapp/chats?account=${enc(accountId)}` : '/whatsapp/chats'}
+        to={chatsLink(accountId, assigneeId)}
       />
-      <MetricCell label="人工中位响应" value={median.value} unit={median.unit} foot="转人工到首次人工回复" />
+      <MetricCell
+        label="平均回复时间"
+        value={avg.value}
+        unit={avg.unit}
+        foot={replyTurns > 0 ? `中位 ${fmtMinutes(kpi.medianReplyMinutes)} · ${fmtNum(replyTurns)} 次` : '客户发消息到有人回复'}
+      />
     </>
   );
 }
@@ -195,7 +245,8 @@ export function HandoffReasonsCard({ reasons }) {
 
 /* ================= 知识库健康度 ================= */
 
-export function KbCard({ kb = {}, filtered }) {
+export function KbCard({ kb = {}, filter }) {
+  const note = notFilteredText(filter);
   const gaps = arr(kb.topGaps).map((g, i) => ({ key: g.gapId || `g${i}`, label: g.question, count: g.count }));
   const entries = arr(kb.topEntries).map((e, i) => ({
     key: e.entryId || `e${i}`,
@@ -208,7 +259,7 @@ export function KbCard({ kb = {}, filtered }) {
   const redFailed = num(lr?.redlineFailed);
 
   return (
-    <Card title="知识库健康度" span="span-6" aside={filtered && <NotFiltered />}>
+    <Card title="知识库健康度" span="span-6" aside={note && <NotFiltered text={note} />}>
       <div className="dash-stats">
         <Stat
           label="没被用过的条目"
@@ -355,7 +406,7 @@ export function LeadDistributionCard({ leads = {} }) {
 
 /* ================= 号码表、成员表 ================= */
 
-export function AccountsCard({ accounts }) {
+export function AccountsCard({ accounts, assignee }) {
   const rows = arr(accounts);
   const columns = [
     {
@@ -411,7 +462,7 @@ export function AccountsCard({ accounts }) {
     },
   ];
   return (
-    <Card title="号码" span="span-12" flush className="dash-table">
+    <Card title="号码" span="span-12" flush className="dash-table" aside={<AssigneeNote assignee={assignee} />}>
       <DataTable
         label="号码"
         columns={columns}
@@ -424,9 +475,10 @@ export function AccountsCard({ accounts }) {
   );
 }
 
-export function MembersCard({ members }) {
+export function MembersCard({ members, assignee }) {
   const rows = arr(members);
   const isPerson = (m) => !m.kind || m.kind === 'user';
+  const minutes = (v) => (v == null ? null : Number(v));
   const columns = [
     {
       key: 'name',
@@ -441,19 +493,37 @@ export function MembersCard({ members }) {
       ),
     },
     {
+      key: 'reply',
+      header: '平均回复时间',
+      align: 'num',
+      shrink: true,
+      sortValue: (m) => minutes(m.avgReplyMinutes),
+      render: (m) =>
+        m.avgReplyMinutes == null ? (
+          <span className="muted">—</span>
+        ) : (
+          <span title={`中位 ${fmtMinutes(m.medianReplyMinutes)} · 回复了 ${fmtNum(m.replyTurns)} 次`}>
+            {fmtMinutes(m.avgReplyMinutes)}
+            <span className="dash-table__sub num">{fmtNum(m.replyTurns)} 次</span>
+          </span>
+        ),
+    },
+    {
       key: 'handled',
       header: '处理转人工',
       align: 'num',
       shrink: true,
+      hide: 'sm',
       sortValue: (m) => num(m.handled),
       render: (m) => fmtNum(m.handled),
     },
     {
       key: 'median',
-      header: '中位响应',
+      header: '转人工后首次回复',
       align: 'num',
       shrink: true,
-      sortValue: (m) => (m.medianResponseMinutes == null ? null : Number(m.medianResponseMinutes)),
+      hide: 'md',
+      sortValue: (m) => minutes(m.medianResponseMinutes),
       render: (m) => fmtMinutes(m.medianResponseMinutes),
     },
     {
@@ -467,7 +537,22 @@ export function MembersCard({ members }) {
     },
   ];
   return (
-    <Card title="成员" span="span-12" flush className="dash-table">
+    <Card
+      title="成员"
+      span="span-12"
+      flush
+      className="dash-table"
+      aside={
+        assignee ? (
+          <AssigneeNote assignee={assignee} />
+        ) : (
+          <span className="dash-card__note">
+            回复时间怎么算
+            <HintIcon label="平均回复时间怎么算">{REPLY_RULES}</HintIcon>
+          </span>
+        )
+      }
+    >
       <DataTable
         label="成员"
         columns={columns}
@@ -482,7 +567,7 @@ export function MembersCard({ members }) {
 
 /* ================= 成本 ================= */
 
-export function CostCard({ cost = {}, filtered }) {
+export function CostCard({ cost = {}, filter }) {
   const rows = arr(cost.byPurpose).filter((p) => num(p.calls) > 0 || num(p.inputTokens) > 0 || num(p.outputTokens) > 0);
   const hasCost = cost.estimatedCostUsd != null;
   const anyRowCost = rows.some((p) => p.costUsd != null);
@@ -493,11 +578,13 @@ export function CostCard({ cost = {}, filtered }) {
       title="成本"
       span="span-4"
       aside={
-        filtered && (
+        filter?.account ? (
           <NotFiltered
-            text="部分按号筛选"
-            help="和会话有关的调用（回复、审核、草稿等）按号筛选；整理知识库、红线体检这类不属于某个号的调用不筛选。"
+            text={filter.assignee ? '部分按号、不按业务员筛选' : '部分按号筛选'}
+            help="和会话有关的调用（回复、审核、草稿等）按号筛选；整理知识库、红线体检这类不属于某个号的调用不筛选。成本不按业务员筛选。"
           />
+        ) : (
+          filter?.assignee && <NotFiltered text="不按业务员筛选" />
         )
       }
     >

@@ -243,13 +243,14 @@ export const api = {
 
   // 看板（F12，admin）：range 取 today | 7d | 30d；accountId 空为全部号码；tz 是浏览器的 IANA 时区
   /** → {range, kpi, handoffReasons, kb, leads, trend, accounts, members, cost, abuse, heatmap, outreach, drafts}，结构见 SPEC-phase2 F12 */
-  getDashboard: ({ range, accountId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, tz } }),
+  /** assigneeId：空为全部业务员，unassigned 是未分配，其余是成员 id（按会话现在的负责人筛） */
+  getDashboard: ({ range, accountId, assigneeId, tz } = {}, o) => get('/api/dashboard', { ...o, query: { range, accountId, assigneeId, tz } }),
   /**
    * 推荐回复列表（改得多的和没用的）：filter 取 all | edited | own | dismissed | replaced | unsent，cursor 是上一页的 nextCursor
    * → {items, nextCursor}
    */
-  getDashboardDrafts: ({ range, accountId, tz, filter, cursor, limit } = {}, o) =>
-    get('/api/dashboard/drafts', { ...o, query: { range, accountId, tz, filter, cursor, limit } }),
+  getDashboardDrafts: ({ range, accountId, assigneeId, tz, filter, cursor, limit } = {}, o) =>
+    get('/api/dashboard/drafts', { ...o, query: { range, accountId, assigneeId, tz, filter, cursor, limit } }),
 
   // 首页 AI 助手（所有人都能用，对话只有本人看得到）：提问在后台进行，前端轮询那条消息，直到 status 不是 running
   /** → {chats:[{id, title, createdAt, updatedAt}]（新到旧）, usage:{used, limit}}（今天问了几次、每天最多几次） */
