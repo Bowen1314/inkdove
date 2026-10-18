@@ -6,8 +6,8 @@
 2. **WAHA 配置只在变了时才 PUT**。inkdove 管理的那部分 session 配置（webhook 和代理）算一个指纹（`HMAC-SHA256(INKDOVE_SESSION_SECRET, 配置)`），存在 `accounts.waha_config_hash`。start 时 session 已存在且指纹没变、中继也没重启，就不 PUT，避免 WAHA 读回来的配置把密码打码后每次都判成"变了"。PUT 时只覆盖 webhooks 和 proxy，session 配置里的其他字段原样保留。中继重启时即使指纹没变（中继地址和凭证不变）也会 PUT 一次，让 WAHA 重连到新的上游。
 3. **https 上游的中继没有自动化测试**。测试用自签名证书时 TLS 校验会失败；socks4、socks5 两条路径有完整测试（假上游 + 假目标服务）。中继的随机凭证明文存在 SQLite 里。
 4. **只用于测试的覆盖项**：
-   - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
-   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）、进入 WORKING 后等多久再导入已有聊天（`historyImportDelayMs`）、客户线索的扫描间隔（`leadsScanIntervalMs`，0 表示不启动定时扫描，测试里手动调 `ctx.leads.scan()`）、看板的时钟（`dashboardNow`）只能通过 `createApp` 的选项覆盖。
+   - 环境变量 `INKDOVE_META_GRAPH_URL`（默认 `https://graph.facebook.com`）、`INKDOVE_LINE_API_URL`（默认 `https://api.line.me`）、`INKDOVE_LINE_DATA_API_URL`（默认 `https://api-data.line.me`）和 `INKDOVE_RESEND_API_URL`（默认 `https://api.resend.com/emails`）；
+   - 代理测试的目标地址、拟真等待时长、通知重试间隔、中继监听地址、配对码等会话就绪的时长和轮询间隔（`wahaPairWaitMs`、`wahaPollMs`）、进入 WORKING 后等多久再导入已有聊天（`historyImportDelayMs`）、客户线索的扫描间隔（`leadsScanIntervalMs`，0 表示不启动定时扫描，测试里手动调 `ctx.leads.scan()`）、看板的时钟（`dashboardNow`）、LINE 的 reply token 用多久（`lineReplyWindowMs`）和下载 LINE 客户文件返回 202 后隔多久再取（`lineContentRetryMs`）只能通过 `createApp` 的选项覆盖。
 5. **LLM 参数**：
    - openai 格式不发 `max_tokens`，因为 OpenAI 的新模型只认 `max_completion_tokens`，而很多兼容接口只认 `max_tokens`；
    - anthropic 格式的 `max_tokens` 是：回复 2048、审核 512、蒸馏 8192、客户线索提取 1024、知识库检索词改写 300；

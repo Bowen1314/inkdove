@@ -29,7 +29,7 @@
 
 ## ⚠️ Before you start
 
-- **QR-code login can get your number banned.** The QR option (WAHA) uses WhatsApp Web's unofficial protocol, and the number may be restricted or banned. For numbers that matter, use Meta's official Cloud API. See [the two connection methods and their risks](docs/channels-and-security.md#两种接入方式的区别和风险) (Chinese).
+- **QR-code login can get your number banned.** The QR option (WAHA) uses WhatsApp Web's unofficial protocol, and the number may be restricted or banned. For numbers that matter, use Meta's official Cloud API. See [the three connection methods and their risks](docs/channels-and-security.md#三种接入方式的区别和风险) (Chinese).
 - **Don't use it for spam.** Don't send marketing messages to people who haven't agreed to hear from you. Follow WhatsApp's terms and your local laws.
 - **Whoever sends an AI draft is responsible for it.** AI can get prices, lead times and promises wrong. Check before you send.
 
@@ -64,7 +64,7 @@
 - **Dashboard.** Admins see message volume, new customers, handoff reasons and response times, how much each team member handled, how long customers wait for a human reply, model spend, outreach results, and how many suggested replies were sent as is, edited or not used. Filter by number or by salesperson. [Details](docs/features.md#数据看板管理员) (Chinese)
 - **Blocked words and AI conduct check.** Once an admin sets a blocked-word list, any message to a customer containing one of those words isn't sent (messages typed on the owner's phone can't be stopped, only flagged), and every admin gets a pop-up right away, with a button to disable that salesperson's account. You can also turn on the AI conduct check, which has the AI look at what was sent for abuse, threats, discrimination or harassment; it only alerts and never blocks. Both are off by default. [Details](docs/features.md#屏蔽词管理员默认关闭) (Chinese)
 - **Activity log.** Admins can see who did what and when: changes to numbers, settings and the knowledge base, chat assignments, team members, exports, sign-ins and failed sign-ins, with before and after values, the IP address and the device (for example "Chrome · Windows 电脑"). Messages to customers aren't logged, and passwords and keys are only recorded as "changed". The log can be read but not edited or deleted. [Details](docs/features.md#操作日志管理员) (Chinese)
-- **Multiple numbers, two connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API, each with its own optional proxy; an optional global proxy can also send model, translation and email requests, and QR-code numbers, through an airport node from a Clash subscription. New versions install with one click in the web console, or on a schedule (say, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
+- **Multiple numbers, three connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API; it can also connect a LINE Official Account (customers add it as a friend and chat in LINE, for markets such as Japan, Taiwan and Thailand). QR-code numbers can each use their own proxy; an optional global proxy can also send model, translation and email requests, and QR-code numbers, through an airport node from a Clash subscription. New versions install with one click in the web console, or on a schedule (say, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
 
 Full feature details: [docs/features.md](docs/features.md) (Chinese).
 
@@ -101,7 +101,7 @@ The recommended setup is the official image with docker compose. Building the im
 
 - A Linux server or Mac with Docker and Docker Compose v2, amd64 or arm64. The three containers' memory limits add up to about 1.4 GB.
 - An API key for a large language model: OpenAI, Anthropic and Gemini API formats are supported, as are OpenAI-compatible APIs.
-- A WhatsApp number: for QR login, a phone with WhatsApp installed; for Meta's Cloud API, a Meta developer account and a public HTTPS address.
+- A WhatsApp number: for QR login, a phone with WhatsApp installed; for Meta's Cloud API, a Meta developer account and a public HTTPS address. For a LINE Official Account, an account with the Messaging API enabled and a public HTTPS address ([steps](docs/deploy.md#line-官方帐号要的公网-https), Chinese).
 
 ### Steps
 
@@ -155,7 +155,7 @@ If you have salespeople: **Members → Invite member** (成员 → 邀请成员)
 
 ### Exposing it over HTTPS
 
-The console only listens on `127.0.0.1:8794`. To let salespeople use it from elsewhere, or to use Meta's Cloud API, put it behind a reverse proxy such as nginx with HTTPS, set `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com` and `INKDOVE_COOKIE_SECURE=1` in `.env`, and run `docker compose up -d` again. Meta's webhook must be a public HTTPS URL. An nginx example is in [docs/deploy.md](docs/deploy.md#对外访问https-反代示例) (Chinese).
+The console only listens on `127.0.0.1:8794`. To let salespeople use it from elsewhere, or to use Meta's Cloud API or a LINE Official Account, put it behind a reverse proxy such as nginx with HTTPS, set `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com` and `INKDOVE_COOKIE_SECURE=1` in `.env`, and run `docker compose up -d` again. Meta's and LINE's webhooks must be public HTTPS URLs. An nginx example is in [docs/deploy.md](docs/deploy.md#对外访问https-反代示例) (Chinese).
 
 ### Upgrading
 
@@ -197,8 +197,8 @@ All in Chinese:
 - [Deployment and configuration](docs/deploy.md): building the image yourself, containers and data directories, an HTTPS reverse-proxy example, every environment variable
 - [Upgrade notes](docs/upgrade.md): data and behavior changes between versions, by feature, and what to watch for when rolling back
 - [In-app updates](docs/online-update.md): how one-click updates work, security, pinning a version, backups and rollback
-- [Connection methods, safety design and proxies](docs/channels-and-security.md): QR vs. Meta's official API and their risks, the four layers of reply checks, the proxy relay, the global proxy
-- [Compliance guide](docs/compliance.md) (in Chinese): where data is stored and who receives it, notices for employees and customers, and the main rules in China, the EU, the US and WhatsApp's terms
+- [Connection methods, safety design and proxies](docs/channels-and-security.md): QR, Meta's official API and LINE Official Accounts, and their risks, the four layers of reply checks, the proxy relay, the global proxy
+- [Compliance guide](docs/compliance.md) (in Chinese): where data is stored and who receives it, notices for employees and customers, and the main rules in China, the EU, the US, and WhatsApp's and LINE's terms
 - [Features](docs/features.md): full description of every feature, plus implementation details and API contracts
 - [Development](docs/development.md): project layout, local development and tests, cutting a release
 - [Deviations from the spec](docs/deviations.md): where the implementation differs from the SPEC

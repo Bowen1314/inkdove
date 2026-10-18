@@ -2938,6 +2938,8 @@ export function createWaService(ctx, opts = {}) {
         results.push(await handleLineEvent(accounts.get(acc.id), ev));
       } catch (err) {
         log.error(`[line] 处理号 ${acc.id} 的事件出错：${err?.stack || err}`);
+        // 没处理完的事件不算处理过：LINE 重发（开了 Webhook redelivery 时）还能再处理一次，存过的消息照样按消息 id 去重
+        if (ev?.webhookEventId) seenLineEvents.delete(`${acc.id}|${ev.webhookEventId}`);
         results.push('error');
       }
     }

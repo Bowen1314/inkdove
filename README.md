@@ -27,7 +27,7 @@
 
 ## ⚠️ 使用前须知
 
-- **扫码接入有封号风险。** 扫码（WAHA）走的是 WhatsApp 网页版的非官方协议，号码可能被限制或封禁。重要的号建议用 Meta 官方 Cloud API，见[两种接入方式的区别和风险](docs/channels-and-security.md#两种接入方式的区别和风险)。
+- **扫码接入有封号风险。** 扫码（WAHA）走的是 WhatsApp 网页版的非官方协议，号码可能被限制或封禁。重要的号建议用 Meta 官方 Cloud API，见[三种接入方式的区别和风险](docs/channels-and-security.md#三种接入方式的区别和风险)。
 - **不要拿来群发骚扰。** 不要给没同意过的人发营销消息，遵守 WhatsApp 的条款和当地法律。
 - **AI 起草的内容由发送人负责。** AI 可能写错价格、交期和承诺，发出前请核对。
 
@@ -62,7 +62,7 @@
 - **看板。** 管理员看消息量、新客户、转人工原因和响应时间、每个成员处理了多少、客户平均等多久才有人回、模型花了多少钱、外联效果，以及推荐回复有多少是直接用、改了再发或没用；可以按号和业务员筛选。[详细](docs/features.md#数据看板管理员)
 - **屏蔽词和 AI 发言检查。** 管理员设好屏蔽词后，我方发给客户的话里有屏蔽词就发不出去（机主在手机上发的拦不住，只提醒），所有管理员马上收到弹窗，弹窗里能一键停用这个业务员。还可以打开「AI 发言检查」，让 AI 看发出去的话里有没有辱骂、威胁、歧视、骚扰，只提醒不拦。两个都默认关闭。[详细](docs/features.md#屏蔽词管理员默认关闭)
 - **操作日志。** 管理员能看到谁在什么时候做了什么：改号、改设置、改知识库、分配会话、成员、导出、登录和登录失败，带改之前和改之后、IP 和设备（比如「Chrome · Windows 电脑」）。给客户发的消息不记，密码和密钥只记「已修改」。只能看，不能改也不能删。[详细](docs/features.md#操作日志管理员)
-- **多号、两种接入、在线更新。** 一套部署接多个号，扫码（WAHA）或 Meta 官方 Cloud API 都行，每个号可以单独走代理；也可以开全局代理，让模型、翻译、发信这些请求和扫码号都经机场节点（Clash 订阅）出去。出了新版本，在网页上点一下就能更新，也可以预约到夜里自动更新。[接入和代理](docs/channels-and-security.md) · [在线更新](docs/online-update.md)
+- **多号、三种接入、在线更新。** 一套部署接多个号，扫码（WAHA）或 Meta 官方 Cloud API 都行，也能接 LINE 官方帐号（客户加好友后在 LINE 里聊，适合日本、台湾、泰国这些用 LINE 的市场），扫码号可以单独走代理；也可以开全局代理，让模型、翻译、发信这些请求和扫码号都经机场节点（Clash 订阅）出去。出了新版本，在网页上点一下就能更新，也可以预约到夜里自动更新。[接入和代理](docs/channels-and-security.md) · [在线更新](docs/online-update.md)
 
 每个功能的完整说明见 [docs/features.md](docs/features.md)。
 
@@ -99,7 +99,7 @@
 
 - 一台装了 Docker 和 Docker Compose v2 的 Linux 服务器或 Mac，amd64、arm64 都行。三个容器的内存上限加起来约 1.4GB。
 - 一个大模型的 API key：OpenAI、Anthropic、Gemini 三种接口格式都行，兼容 OpenAI 接口的也可以。
-- 一个 WhatsApp 号：扫码接入要一部装了 WhatsApp 的手机；用 Meta 官方 Cloud API 要 Meta 开发者账号和公网 HTTPS 地址。
+- 一个 WhatsApp 号：扫码接入要一部装了 WhatsApp 的手机；用 Meta 官方 Cloud API 要 Meta 开发者账号和公网 HTTPS 地址。接 LINE 官方帐号要一个开通了 Messaging API 的官方帐号和公网 HTTPS 地址（[步骤](docs/deploy.md#line-官方帐号要的公网-https)）。
 
 ### 步骤
 
@@ -153,7 +153,7 @@
 
 ### 对外访问（HTTPS）
 
-后台只监听本机的 `127.0.0.1:8794`。要让业务员在外面用、或者接 Meta Cloud API，用 nginx 之类反代成 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`，再执行一次 `docker compose up -d`。Meta 回调必须是公网 HTTPS 地址。nginx 配置示例见 [docs/deploy.md](docs/deploy.md#对外访问https-反代示例)。
+后台只监听本机的 `127.0.0.1:8794`。要让业务员在外面用、或者接 Meta Cloud API、LINE 官方帐号，用 nginx 之类反代成 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`，再执行一次 `docker compose up -d`。Meta 和 LINE 的回调必须是公网 HTTPS 地址。nginx 配置示例见 [docs/deploy.md](docs/deploy.md#对外访问https-反代示例)。
 
 ### 升级
 
@@ -193,8 +193,8 @@ docker compose start inkdove
 - [部署和配置](docs/deploy.md)：自己编译镜像、容器和数据目录、HTTPS 反代示例、全部环境变量
 - [升级说明](docs/upgrade.md)：跨版本时数据或行为的变化，按功能列出，以及回滚时要注意什么
 - [在线更新](docs/online-update.md)：网页上一键更新怎么工作、安全、钉版本号、备份和回滚
-- [两种接入方式、安全设计和代理](docs/channels-and-security.md)：扫码和 Meta 官方 API 的区别和风险、机器人回复的四层把关、代理中继、全局代理
-- [合规指南](docs/compliance.md)：数据存在哪、发给谁，怎么告知员工和客户，中国、欧盟、美国的法规和 WhatsApp 的规则要点
+- [三种接入方式、安全设计和代理](docs/channels-and-security.md)：扫码、Meta 官方 API 和 LINE 官方帐号的区别和风险、机器人回复的四层把关、代理中继、全局代理
+- [合规指南](docs/compliance.md)：数据存在哪、发给谁，怎么告知员工和客户，中国、欧盟、美国的法规和 WhatsApp、LINE 的规则要点
 - [功能说明](docs/features.md)：每个功能的完整说明，以及实现细节和接口约定
 - [开发](docs/development.md)：项目结构、本地开发和测试、发新版
 - [偏离规格](docs/deviations.md)：开发中和 SPEC 不一致的地方

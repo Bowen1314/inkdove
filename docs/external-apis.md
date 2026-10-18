@@ -1,6 +1,6 @@
 # 已核实的外部接口
 
-代码里用到的 WAHA、Meta、Resend、SMTP、三种 LLM 接口、向量接口、重排接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
+代码里用到的 WAHA、Meta、LINE、Resend、SMTP、三种 LLM 接口、向量接口、重排接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
@@ -49,6 +49,21 @@
   - 入站图片和语音的 webhook 结构，见 [image](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/image)、[audio](https://developers.facebook.com/docs/whatsapp/cloud-api/webhooks/reference/messages/audio)；视频（`video`）、文件（`document`，多一个 `filename`）、贴纸（`sticker`）也是 `{id, mime_type, …}`，下载方式同上；
   - 模板消息（F11，按文档写的，还没真机发过）：`POST /{ver}/{phone-number-id}/messages`，体 `{messaging_product: "whatsapp", recipient_type: "individual", to, type: "template", template: {name, language: {code}}}`，返回 `messages[0].id`。主动发起会话（24 小时窗口外）只能用审核通过的模板。见 [send message templates](https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates)；
   - 撤回已发的消息：Cloud API 的消息接口只有发送和标已读，没有撤回或删除（见 [messages](https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages)；第三方的 [DelightChat](https://www.delightchat.io/help-center/whatsapp-api-delete-message) 也这么说，没在 Meta 的更新日志里逐条核对），所以 Meta 号不能撤回。客户撤回消息时 Meta 会不会推 webhook、推什么没核实，这里不处理。
+- **LINE**（LINE 官方帐号；按文档写的，2026-10 查的，测试只用了本地假服务（`server/test/line.test.js`），还没用真帐号试过。代码在 `server/src/wa/line.js`，文件开头也记了依据；回调在 `server/src/routes/webhooks.js`）：
+  - 回调签名：`X-Line-Signature` 是用 Channel secret 对原始 body 算的 HMAC-SHA256，base64 编码。先校验再解析 JSON；LINE 要求 2 秒内回 200，所以先回再处理。控制台的「Verify」发的是签过名的 `{destination, events: []}`。见 [signature validation](https://developers.line.biz/en/reference/messaging-api/#signature-validation)、[receiving messages](https://developers.line.biz/en/docs/messaging-api/receiving-messages/)；
+  - 事件：用到 `message`、`follow`、`unfollow`、`unsend`，其他忽略。共同字段 `webhookEventId`（开了 Webhook redelivery 时重发的事件 id 不变）、`mode`（`active` / `standby`，standby 是别的模块在处理这个帐号的聊天）、`source.type`（`user` / `group` / `room`）、`replyToken`、`timestamp`（毫秒）。见 [webhook event objects](https://developers.line.biz/en/reference/messaging-api/#webhook-event-objects)；
+  - 消息事件：`text`、`image`、`video`、`audio`（`duration` 毫秒）、`file`（`fileName`、`fileSize`）、`location`（`title`、`address`、`latitude`、`longitude`）、`sticker`；还有 `markAsReadToken`、`quotedMessageId`。图片、视频、语音的 `contentProvider.type` 是 `external` 时带 `originalContentUrl`（放在别的服务器上的）。见 [message event](https://developers.line.biz/en/reference/messaging-api/#message-event)；
+  - 回复：`POST https://api.line.me/v2/bot/message/reply`，体 `{replyToken, messages}`（一次最多 5 条）。reply token 收到后 1 分钟内用、只能用一次；无效时 400，message 是 `Invalid reply token`。见 [send reply message](https://developers.line.biz/en/reference/messaging-api/#send-reply-message)；
+  - 推送：`POST https://api.line.me/v2/bot/message/push`，体 `{to, messages}`。回复和推送成功都返回 `{sentMessages: [{id, quoteToken}]}`。见 [send push message](https://developers.line.biz/en/reference/messaging-api/#send-push-message)；
+  - 额度：推送计入每月的消息数，回复不计；超过时返回错误、一条都不发（实际是 429，message 是 `You have reached your monthly limit.`，代码按这两样判断；LINE 说错误正文的文字不保证不变）。方案和价格各国家、地区不同。见 [Messaging API pricing](https://developers.line.biz/en/docs/messaging-api/pricing/)；
+  - 图片消息：`{type: "image", originalContentUrl, previewImageUrl}`，地址要 HTTPS（TLS 1.2 及以上），JPEG 或 PNG，原图最大 10MB、预览图最大 1MB，LINE 自己来取。没有文件（document）消息类型，也没有上传接口，所以其他文件只能发链接。见 [image message](https://developers.line.biz/en/reference/messaging-api/#image-message)、[development guidelines](https://developers.line.biz/en/docs/partner-docs/development-guidelines/)；
+  - 客户资料：`GET https://api.line.me/v2/bot/profile/{userId}` → `{displayName, userId, pictureUrl?, statusMessage?, language?}`，不是好友（没加、拉黑了）时 404。见 [get profile](https://developers.line.biz/en/reference/messaging-api/#get-profile)；
+  - 正在输入：`POST https://api.line.me/v2/bot/chat/loading/start`，体 `{chatId, loadingSeconds}`（5–60 秒、5 的倍数），只能一对一聊天，我方发出消息时消失，没有停止接口。见 [display a loading indicator](https://developers.line.biz/en/reference/messaging-api/#display-a-loading-indicator)；
+  - 标已读：`POST https://api.line.me/v2/bot/chat/markAsRead`，体 `{markAsReadToken}`（消息事件里的，不过期），这条和更早的都算已读。要在 LINE Official Account Manager 里开着「聊天」功能才有用，关着时客户的消息自动算已读。见 [mark messages as read](https://developers.line.biz/en/docs/messaging-api/mark-as-read/)。出错（比如 403）时代码只记警告；什么情况下会 403 没有实测；
+  - 客户发来的图片、视频、语音、文件：`GET https://api-data.line.me/v2/bot/message/{messageId}/content`，返回二进制。视频、语音还没准备好时返回 202，过一会儿再取；内容过一段时间会被 LINE 删掉（没写多久），所以收到就下。见 [get content](https://developers.line.biz/en/reference/messaging-api/#get-content)；
+  - 撤回：没有撤回已发消息的接口。客户撤回时推 `unsend` 事件（`unsend.messageId`），LINE 建议尊重用户撤回的意图，被撤回的消息以后不让人看到、不再使用。见 [unsend event](https://developers.line.biz/en/reference/messaging-api/#unsend-event)；
+  - 没核实的：在 LINE Official Account Manager 里人工直接回的消息会不会推到 webhook、推成什么样，没查到文档也没实测，代码不处理（只收客户发来的）；
+  - 仅测试用的 `INKDOVE_LINE_API_URL`、`INKDOVE_LINE_DATA_API_URL` 覆盖 `https://api.line.me` 和 `https://api-data.line.me`。
 - **Resend**：
   - `POST https://api.resend.com/emails`，`Authorization: Bearer <key>`，体 `{from, to[], subject, text, html?}`，返回 `{id}`，见 [send email](https://resend.com/docs/api-reference/emails/send-email)；
   - 错误（422 参数错误、403 域名未验证）和限流（429，带 `retry-after`，这里重试 1 次），见 [errors](https://resend.com/docs/api-reference/errors)、[rate limit](https://resend.com/docs/api-reference/rate-limit)。

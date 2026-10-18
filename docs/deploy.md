@@ -18,7 +18,7 @@ docker compose up -d --build
 
 ## 部署说明
 
-- `inkdove` 只监听宿主的 `127.0.0.1:8794`，对外请用 nginx 之类反代到 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`。Meta 回调必须是公网 HTTPS 地址。
+- `inkdove` 只监听宿主的 `127.0.0.1:8794`，对外请用 nginx 之类反代到 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`。Meta 和 LINE 的回调必须是公网 HTTPS 地址，LINE 还要从这个地址取墨鸽发出的图片（见[LINE 官方帐号要的公网 HTTPS](#line-官方帐号要的公网-https)）。
 - `waha` 用 `devlikeapro/waha:gows`，不映射宿主端口，只有 inkdove 能访问。登录态存在 `./waha-sessions`，重建容器不用重新扫码。
 - `inkdove` 的主机名固定为 `inkdove`，WAHA 经 `inkdove:<端口>` 连代理中继（见[代理中继](channels-and-security.md#代理中继f13)），选了「用全局代理」的号经 `inkdove:17890` 连全局代理。这些端口都不映射到宿主。
 - 数据在 `./data`，备份这个目录即可：SQLite 数据库、上传的文件（`files/`）、客户发来的图片视频语音文件（`media/`，单个最大 64MB，不自动清理，客户发得多时留意磁盘）。
@@ -37,7 +37,7 @@ docker compose up -d --build
 
 ## 对外访问：HTTPS 反代示例
 
-`inkdove` 只监听本机的 `127.0.0.1:8794`。要让业务员在外面用、或者接 Meta Cloud API，就在同一台机器上用 nginx（或 Caddy 等）反代成 HTTPS。nginx 的例子，域名和证书路径换成你自己的：
+`inkdove` 只监听本机的 `127.0.0.1:8794`。要让业务员在外面用、或者接 Meta Cloud API、LINE 官方帐号，就在同一台机器上用 nginx（或 Caddy 等）反代成 HTTPS。nginx 的例子，域名和证书路径换成你自己的：
 
 ```nginx
 server {
@@ -70,6 +70,25 @@ INKDOVE_COOKIE_SECURE=1
 
 再执行 `docker compose up -d` 让它生效。
 
+## LINE 官方帐号要的公网 HTTPS
+
+接 LINE 官方帐号时，`INKDOVE_PUBLIC_BASE_URL` 必须是 `https://` 开头、公网能访问的地址，也就是按上面的例子配好域名、证书和反代：
+
+- LINE 只接受 https:// 的 Webhook URL。号的「连接」里显示的回调地址是 `<INKDOVE_PUBLIC_BASE_URL>/webhooks/line/<号 id>`。
+- LINE 没有上传接口：发图片时墨鸽给 LINE 一个 `<INKDOVE_PUBLIC_BASE_URL>/internal/files/<id>?token=…` 的签名地址，由 LINE 的服务器来取（要求 TLS 1.2 及以上）；其他文件发给客户的下载链接也是这种地址。这些地址 30 天有效、不用登录，安全上的考虑见[这里](channels-and-security.md#安全设计)。反代要把 `/webhooks/` 和 `/internal/files/` 都转给墨鸽，上面的例子是整站转发，不用另配。
+- 不是 https:// 时号的「连接」里有提醒；LINE 填不进这个回调地址，发图片和文件也会直接失败、不发出去。
+- 换了域名、改了 `INKDOVE_PUBLIC_BASE_URL` 以后，要到 LINE Developers Console 把 Webhook URL 改成新地址；之前发出去的图片和链接还是旧地址，旧域名停了就打不开。
+
+接入步骤：
+
+1. 按上面配好 HTTPS 反代，`.env` 里设好 `INKDOVE_PUBLIC_BASE_URL`（https://）和 `INKDOVE_COOKIE_SECURE=1`，执行 `docker compose up -d`。
+2. 在 LINE Official Account Manager 给官方帐号启用 Messaging API；到 [LINE Developers Console](https://developers.line.biz/console/) 打开这个 channel，「Basic settings」里有 Channel ID 和 Channel secret，「Messaging API」页最下面签发长期的 Channel access token。
+3. 墨鸽「号码 → 添加号」选「LINE 官方帐号」，填这三项（也可以建好后在号的「连接」里填）。
+4. 把号「连接」里的 Webhook URL 填到 LINE Developers Console 的「Messaging API → Webhook URL」，打开「Use webhook」，点「Verify」试一下。
+5. 在 LINE Official Account Manager 的回应设定里关掉「自动回应讯息」，免得客户收到两份回复。
+
+LINE 号和 WhatsApp 号的区别、费用和限制见[LINE 官方帐号](channels-and-security.md#line-官方帐号)。
+
 ## 环境变量
 
 只读 `INKDOVE_` 开头的变量。完整列表和注释见 [.env.example](../.env.example)。
@@ -84,7 +103,7 @@ INKDOVE_COOKIE_SECURE=1
 | `INKDOVE_UPDATER_TOKEN` | compose 里必填 | 更新助手的口令，compose 同时传给 updater 容器。像其他密钥一样用 `openssl rand -hex 32` 生成；删掉 updater 服务时留空，网页上改为显示更新命令 |
 | `INKDOVE_PORT` | | 默认 8794 |
 | `INKDOVE_DATA_DIR` | | 默认 `./data`，compose 里是 `/app/data` |
-| `INKDOVE_PUBLIC_BASE_URL` | | 对外地址：Meta 回调地址、邀请链接、通知里的后台链接都用它 |
+| `INKDOVE_PUBLIC_BASE_URL` | | 对外地址：Meta 和 LINE 的回调地址、LINE 号发出的图片和文件链接、邀请链接、通知里的后台链接都用它。接 LINE 官方帐号时必须是 https:// 开头的公网地址 |
 | `INKDOVE_COOKIE_SECURE` | | 经 HTTPS 对外时设 1 |
 | `INKDOVE_WAHA_URL` | | 默认 `http://127.0.0.1:3000`，compose 里是 `http://waha:3000` |
 | `INKDOVE_WAHA_WEBHOOK_URL` | | WAHA 回调本服务的地址，compose 里是 `http://inkdove:8794/webhooks/waha` |
@@ -100,4 +119,4 @@ INKDOVE_COOKIE_SECURE=1
 | `INKDOVE_UPDATER_URL` | | 更新助手的地址，默认 `http://updater:8080`（compose 内网） |
 | `INKDOVE_IMAGE_TAG` | | 应用镜像的标签，默认 `latest`；compose 用它拼镜像名，也传给应用判断能不能一键升级 |
 | `INKDOVE_AUDIT_RETENTION_DAYS` | | 操作日志保留多少天，默认 365（1–36500 的整数），过期的每天自动清掉 |
-| `INKDOVE_META_GRAPH_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |
+| `INKDOVE_META_GRAPH_URL`、`INKDOVE_LINE_API_URL`、`INKDOVE_LINE_DATA_API_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |

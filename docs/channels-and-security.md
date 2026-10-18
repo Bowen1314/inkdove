@@ -1,18 +1,45 @@
-# 两种接入方式、安全设计和代理
+# 三种接入方式、安全设计和代理
 
 数据存在哪、发给谁，以及员工监控、客户告知和各地法规，见[合规指南](compliance.md)。
 
-## 两种接入方式的区别和风险
+## 三种接入方式的区别和风险
 
-| | 扫码（WAHA） | Meta 官方 Cloud API |
-|---|---|---|
-| 原理 | 模拟 WhatsApp 网页版 / 关联设备，走**非官方协议** | Meta 官方的企业接口 |
-| 准备 | 一部装了 WhatsApp 的手机，扫码即可 | Meta 开发者账号、企业验证、专用号码、公网 HTTPS 回调 |
-| 风险 | **有封号风险**：WhatsApp 不允许非官方客户端，号码可能被限制或封禁。批量群发、短时间大量回复、新号都会加大风险 | 走正规渠道，没有协议层面的封号风险；但要遵守 Meta 的商业政策和 24 小时客服窗口（客户 24 小时内没发过消息时，只能发模板消息） |
-| 费用 | 自建 WAHA，不按消息计费（WAHA 分免费的 Core 版和付费的 Plus 版） | 按 Meta 的定价计费 |
-| 适合 | 自用号、小规模、试用 | 正式的客服号 |
+| | 扫码（WAHA） | Meta 官方 Cloud API | LINE 官方帐号 |
+|---|---|---|---|
+| 原理 | 模拟 WhatsApp 网页版 / 关联设备，走**非官方协议** | Meta 官方的企业接口 | LINE 官方的 Messaging API，客户加你的官方帐号为好友后在 LINE 里聊 |
+| 准备 | 一部装了 WhatsApp 的手机，扫码即可 | Meta 开发者账号、企业验证、专用号码、公网 HTTPS 回调 | LINE 官方帐号、在 LINE Developers 开通 Messaging API、公网 HTTPS 回调 |
+| 风险 | **有封号风险**：WhatsApp 不允许非官方客户端，号码可能被限制或封禁。批量群发、短时间大量回复、新号都会加大风险 | 走正规渠道，没有协议层面的封号风险；但要遵守 Meta 的商业政策和 24 小时客服窗口（客户 24 小时内没发过消息时，只能发模板消息） | 走正规渠道，没有协议层面的封号风险；但只能和加了好友的人聊，不能按手机号找人，所以没有外联群发；要遵守 LINE 官方帐号的使用规定 |
+| 费用 | 自建 WAHA，不按消息计费（WAHA 分免费的 Core 版和付费的 Plus 版） | 按 Meta 的定价计费 | 收到消息 1 分钟内的回复不计数；之后发的（人工回复基本都是）算「推送」，计入官方帐号方案的每月额度。免费方案每月只有几百则（各地区不同，大约 200–300 则），付费方案的额度和超出后的价格各地区不同、也会调整（比如台湾的方案 2026-11-01 起调整），以 LINE 官网为准 |
+| 适合 | 自用号、小规模、试用 | 正式的客服号 | 客户主要用 LINE 的市场（日本、台湾、泰国等） |
 
 扫码号建议用单独的号码，开着拟真发送（默认开），并保留每会话每小时的回复上限。
+
+### LINE 官方帐号
+
+**怎么接**：
+
+1. 在 LINE Official Account Manager 开好官方帐号，在「设定 → Messaging API」里启用 Messaging API，会在 LINE Developers 建一个 channel。
+2. 在 [LINE Developers Console](https://developers.line.biz/console/) 打开这个 channel：「Basic settings」里有 Channel ID 和 Channel secret；「Messaging API」页最下面发一个长期的 Channel access token（long-lived）。
+3. 墨鸽「号码 → 添加号」选「LINE 官方帐号」，填这三项（也可以先建号，之后在号的「连接」里填）。
+4. 把号的「连接」里显示的 Webhook URL（`<INKDOVE_PUBLIC_BASE_URL>/webhooks/line/<号 id>`）填到 LINE Developers Console 这个 channel 的「Messaging API → Webhook URL」，打开「Use webhook」，可以点「Verify」试一下。
+5. 建议在 LINE Official Account Manager 的回应设定里关掉「自动回应讯息」，不然客户会同时收到 LINE 自己的自动回应和墨鸽的回复。
+
+**Channel access token**：墨鸽只支持长期 token，填一次一直用，不会自己换新的。LINE 的开发指南不推荐长期 token（推荐 30 天有效的短期 token 或无状态 token，定期重新签发），墨鸽现在没做自动签发。token 泄露或怀疑泄露时，在 LINE Developers Console 重新签发，旧的作废，再把新的填进号的「连接」里。
+
+**要公网 HTTPS**：LINE 只接受 https:// 的 Webhook URL；发图片时给 LINE 的也是墨鸽的地址，由 LINE 自己来取（LINE 要求放图片的服务器支持 TLS 1.2 及以上）。所以 `INKDOVE_PUBLIC_BASE_URL` 必须是 https:// 开头、公网能访问的地址，墨鸽要放在带证书的反向代理后面（见[部署说明](deploy.md#line-官方帐号要的公网-https)）。不是 https:// 时号的「连接」里有提醒，发图片和文件会直接失败、不发出去。
+
+**回复和推送**：客户每发来一条消息，LINE 给一个 reply token，1 分钟内能用一次，用它回复不计数。墨鸽收到后 50 秒内（留点余量）的第一次发送用它，过了时间、已经用过、或者 LINE 说它无效时改用推送（push），推送算进每月额度。一次回复分成几条发的，只有第一条用 reply token，后面几条和随后发的文件都是推送；人工回复一般超过 1 分钟，基本都是推送；自动回复要等防抖、生成回复和拟真等待，加起来超过 50 秒的也是推送。额度用完时推送发不出去，消息记为发送失败，号的连接状态显示「LINE 本月可推送的消息数用完了…」，下一次推送成功后自动消失；这期间 1 分钟内的回复不受影响。
+
+**发图片和文件**：LINE 没有文件消息，也没有上传接口。1MB 以内的 jpg、png 按图片发（文件说明另发一条文字，在同一次请求里）；其他文件（PDF、Excel、大图等）发成一条文字：文件名和下载链接。图片地址和下载链接都是墨鸽的签名地址，30 天有效，期间拿到链接的人不用登录就能下载这一个文件，见下面「安全设计」。
+
+**和 WhatsApp 号的不同**：
+
+- 客户没有手机号，只有 LINE 的 userId（会话里显示「LINE」，名字从 LINE 的资料取，取不到时显示「LINE 用户」）。号码相关的功能都用不上：回复范围固定是全部客户（没有白名单、黑名单），不能外联群发，转人工的 WhatsApp 通知不能用（用邮件通知）。
+- 只处理一对一聊天；群组、多人聊天的消息，以及另一个 channel 当主处理时转来的待命（standby）事件，一律不处理。
+- 不能撤回已发出的消息（Messaging API 没有撤回接口）。客户撤回消息时 LINE 推 `unsend` 事件，会话里标「客户已撤回」，和扫码号一样不再给 AI 看，但原文还留给业务员看（LINE 建议撤回的消息以后不再被看到、被使用，见[合规指南](compliance.md#line-官方帐号的规则)）。
+- 客户加好友时刷新名字；取消好友或封锁只记日志（之后推送会失败）。贴纸显示成 [贴纸]，位置显示成「[位置] 名称（地址）」。
+- 拟真发送开着时，回复前标已读、显示「正在输入」动画（20 秒，发出消息时消失）。标已读要在 LINE Official Account Manager 里开着「聊天」功能才有用（关着时客户的消息自动算已读）；标已读出错（比如 403）时只记一条警告，照常回复。
+- 在 LINE Official Account Manager 的聊天里直接回的消息，墨鸽不一定收得到（没有实测过 LINE 会不会把这些发到 Webhook）。建议都在墨鸽后台回，聊天记录才完整。
 
 ## 安全设计
 
@@ -29,8 +56,9 @@
 
 - 登录：邮箱 + 密码（scrypt 加盐哈希），服务端存储的会话 token，httpOnly + SameSite=Lax cookie；同一 IP、同一邮箱每分钟失败 5 次后限流。邀请和重置链接一次性、会过期。停用、删除或改密码时立即踢掉这个人的会话。
 - 权限全部在服务端判断：业务员访问没分给自己的号、没分给自己的会话（包括未分配的）和这些会话的线索一律 403。号级别的操作只有管理员能做，业务员调用一律 403：改号的设置（`PUT /api/accounts/:id` 整个拒绝，含回复方式、人设、回复范围、名单、通知）、扫码连接 / 取二维码 / 配对码 / 登出、测试通知、导出客户线索 CSV。业务员读号时，Meta 的 `verifyToken` 返回 null，通知的收件邮箱和号码返回空，客户名单和联系方式不经业务员流出。
-- Webhook：WAHA 校验 `X-Webhook-Hmac`（HMAC-SHA512），Meta 校验每个号自己的 `X-Hub-Signature-256`。
-- 密钥（LLM key、向量服务的 key、重排服务的 key、翻译服务的密钥和 DeepLX 的地址、Meta token 和 app secret、SMTP 密码、Resend key、代理密码、全局代理的订阅地址和节点）存在 SQLite 里，接口不回传明文、不写日志。所以要保护好 `./data` 和它的备份。
+- Webhook：WAHA 校验 `X-Webhook-Hmac`（HMAC-SHA512），Meta 校验每个号自己的 `X-Hub-Signature-256`，LINE 校验每个号自己的 `X-Line-Signature`（用这个号的 Channel secret 对原始请求体算 HMAC-SHA256，base64）。LINE 号没填 Channel secret 时拒绝接收。
+- 密钥（LLM key、向量服务的 key、重排服务的 key、翻译服务的密钥和 DeepLX 的地址、Meta token 和 app secret、LINE 的 Channel secret 和 Channel access token、SMTP 密码、Resend key、代理密码、全局代理的订阅地址和节点）存在 SQLite 里，接口不回传明文、不写日志。所以要保护好 `./data` 和它的备份。
+- 文件下载链接：`/internal/files/<id>?token=…` 不要求登录，靠 token（`INKDOVE_SESSION_SECRET` 算的 HMAC 签名，只对这一个文件、过期前有效）。给 WAHA 取文件的是 compose 内网地址、10 分钟有效；LINE 号发图片和文件时用的是公网地址（`INKDOVE_PUBLIC_BASE_URL` 开头）、**30 天有效**：链接发给了客户，客户转给别人，别人 30 天内也能下载。想提前作废，只能在「文件」页删掉这个文件，或者换 `INKDOVE_SESSION_SECRET`（影响大：所有人都要重新登录，所有链接一起作废）。别把不想外传的文件用 LINE 发。
 - 网址抓取有 SSRF 防护（每一跳重定向都重新解析、拒绝内网地址）。
 - 操作日志（「管理 → 操作日志」，[详细规则](features.md#操作日志)）：
   - **记什么**：成员在后台做的所有改动（号、会话分配、知识库、产品资料、客户线索、外联、设置、成员、在线更新），导出号码配置和客户线索 CSV，登录成功和失败、退出、改密码、接受邀请。每条记时间、谁（当时的名字、邮箱、角色）、做了什么、对象、改之前和改之后、成功还是失败（失败原因和状态码，越权的 403 也记）、IP。
