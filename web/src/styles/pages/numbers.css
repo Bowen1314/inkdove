@@ -7,10 +7,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 添加号码：接入方式二选一 */
+/* 添加号码：接入方式三选一 */
 .numbers-channel {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--sp-3);
 }
 .numbers-channel > .option-card {

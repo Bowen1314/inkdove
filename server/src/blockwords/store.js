@@ -135,11 +135,14 @@ export function createBlockwords(ctx) {
   /** 写一行（record、recordAi 共用）：号名、联系人名、发送人名按当时的存一份；extra 是各自的列 */
   function insert({ source, accountId = null, accountName = '', conversationId = null, campaign = null, user = null, text }, extra) {
     const conv = conversationId
-      ? db.prepare('SELECT account_id, contact_name, contact_number, chat_id FROM conversations WHERE id = ?').get(conversationId)
+      ? db.prepare('SELECT account_id, channel, contact_name, contact_number, chat_id FROM conversations WHERE id = ?').get(conversationId)
       : null;
     const accId = accountId || conv?.account_id || null;
     const acc = accId ? ctx.accounts.get(accId) : null;
-    const contact = conv ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.chat_id || '') : '';
+    // LINE 的客户没有号码，没名字时记「LINE 用户」（不记 userId）
+    const contact = conv
+      ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.channel === 'line' ? 'LINE 用户' : conv.chat_id || '')
+      : '';
     const id = newId();
     const row = {
       id,

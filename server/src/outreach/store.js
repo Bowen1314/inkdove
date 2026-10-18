@@ -224,6 +224,8 @@ export function createOutreach(ctx, opts = {}) {
     const accs = accountIds.map((id) => {
       const a = accounts.get(id);
       if (!a) throw badRequest('选的号不存在或已删除', 'account_not_found');
+      // LINE 官方帐号只能给加了好友的人发消息，号码文件里的手机号对不上 LINE 用户
+      if (a.channel === 'line') throw badRequest(`「${a.name}」是 LINE 官方帐号，不能外联群发：LINE 只能给加了好友的人发消息，按手机号找不到人`, 'line_unsupported');
       return a;
     });
     const defaultCountry = textField(b.defaultCountry, 'defaultCountry', 10).toUpperCase() || 'CN';
@@ -418,7 +420,9 @@ export function createOutreach(ctx, opts = {}) {
   async function connected(acc) {
     try {
       const st = await ctx.wa.getStatus(acc, { maxAgeMs: 5000, timeoutMs: 3000 });
-      return acc.channel === 'meta' ? st.state === 'configured' : st.state === 'working';
+      if (acc.channel === 'meta') return st.state === 'configured';
+      if (acc.channel === 'waha') return st.state === 'working';
+      return false;
     } catch {
       return false;
     }

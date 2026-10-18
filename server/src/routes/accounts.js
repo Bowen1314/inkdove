@@ -50,7 +50,7 @@ export function accountsRouter(ctx, auth) {
     if (!isPlainObject(body)) throw badRequest('请求体必须是对象');
     const name = str(body.name ?? '', 'name', 100).trim();
     if (!name) throw badRequest('name 不能为空');
-    if (!CHANNELS.includes(body.channel)) throw badRequest('channel 只能是 waha 或 meta');
+    if (!CHANNELS.includes(body.channel)) throw badRequest('channel 只能是 waha、meta 或 line');
     const acc = accounts.create({ name, channel: body.channel });
     ctx.log.info(`[accounts] ${req.user.email} 新建了号 ${acc.id}（${acc.channel}）`);
     res.json(await view(acc, { timeoutMs: 2000 }));

@@ -917,9 +917,187 @@ function MetaPanel({ account, setAccount, isAdmin }) {
   );
 }
 
-/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号显示凭证；业务员只看状态 */
+/* ---------- LINE 官方帐号 ---------- */
+
+/**
+ * LINE 官方帐号的「连接」：回调地址、Channel ID、Channel secret、Channel access token。
+ * 状态里的 error 是最近一次推送失败的原因（每月额度用完、token 不对），推送成功后服务端会清掉
+ */
+function LinePanel({ account, setAccount, isAdmin }) {
+  const line = account.line || {};
+  const [channelId, setChannelId] = useState(line.channelId || '');
+  const [channelSecret, setChannelSecret] = useState('');
+  const [accessToken, setAccessToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(null);
+
+  const webhookUrl = line.webhookUrl || '';
+  // LINE 只接受 https 的回调地址，发图片、文件给的也是这个域名下的地址
+  const httpsOk = /^https:\/\//i.test(webhookUrl);
+  const idError = channelId.trim() && !/^\d+$/.test(channelId.trim()) ? 'Channel ID 只能是数字' : null;
+  const dirty = channelId !== (line.channelId || '') || channelSecret.trim() !== '' || accessToken.trim() !== '';
+
+  const discard = () => {
+    setChannelId(line.channelId || '');
+    setChannelSecret('');
+    setAccessToken('');
+  };
+
+  const save = async (e) => {
+    e?.preventDefault();
+    if (saving || idError) return;
+    const patch = { channelId: channelId.trim() };
+    // 密钥：只在输入了新值时提交，留空不改
+    if (channelSecret.trim()) patch.channelSecret = channelSecret.trim();
+    if (accessToken.trim()) patch.accessToken = accessToken.trim();
+    setSaving(true);
+    try {
+      const res = await api.putAccount(account.id, { line: patch });
+      if (res && res.id) setAccount(res);
+      setChannelId(res?.line?.channelId ?? patch.channelId);
+      setChannelSecret('');
+      setAccessToken('');
+      toast.success('已保存');
+      api
+        .getAccount(account.id, { silent: true })
+        .then((a) => a && setAccount((prev) => ({ ...prev, ...a })))
+        .catch(() => {});
+    } catch {
+      // 已提示
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearSecret = async (field) => {
+    setClearing(field);
+    try {
+      const res = await api.putAccount(account.id, { line: { [field]: '' } });
+      if (res && res.id) setAccount(res);
+      toast.success('已清除');
+    } catch {
+      // 已提示
+    } finally {
+      setClearing(null);
+    }
+  };
+
+  const errorBlock = account.status?.error && (
+    <div className="numbers-block">
+      <Callout tone="danger">{account.status.error}</Callout>
+    </div>
+  );
+  const limits = (
+    <div className="numbers-block muted text-sm">
+      LINE 和 WhatsApp 不一样的地方：只能给加了好友的人发消息，客户没有手机号；客户来消息 1 分钟内的回复不算每月额度，
+      更晚的回复、人工发的消息按推送算进每月额度；发不了文件，图片以外的文件会发成下载链接；已发出的消息不能撤回；不能外联群发。
+    </div>
+  );
+
+  // LINE 的凭证只有 admin 能看和改
+  if (!isAdmin) {
+    return (
+      <SettingsSection title="连接">
+        <StatusRow label="接口状态" account={account} />
+        {errorBlock}
+        <div className="numbers-block muted">这个号是 LINE 官方帐号，接口凭证由管理员配置。</div>
+        {limits}
+      </SettingsSection>
+    );
+  }
+
+  return (
+    <SettingsSection title="连接" as="form" onSubmit={save}>
+      <StatusRow label="接口状态" account={account} />
+      {errorBlock}
+      {!httpsOk && (
+        <div className="numbers-block">
+          <Callout tone="warning">
+            LINE 只接受 https:// 开头的回调地址，现在的地址收不到消息，也发不了图片和文件。请按部署文档（docs/deploy.md）给墨鸽配好域名和
+            HTTPS 反向代理，并把 INKDOVE_PUBLIC_BASE_URL 设成 https:// 开头的公网地址。
+          </Callout>
+        </div>
+      )}
+
+      <SettingsRow
+        label="Webhook URL"
+        htmlFor={`line-hook-${account.id}`}
+        hint="每个号各有一个地址。在 LINE Developers Console → 这个 channel 的 Messaging API 页面填到 Webhook URL，并打开「Use webhook」。"
+      >
+        <div className="numbers-inline">
+          <input
+            id={`line-hook-${account.id}`}
+            className="input input--mono"
+            value={webhookUrl}
+            readOnly
+            onFocus={(e) => e.target.select()}
+          />
+          <CopyButton text={webhookUrl} size="md" />
+        </div>
+      </SettingsRow>
+
+      <SettingsRow label="Channel ID" htmlFor="line-channel-id" hint="在 Basic settings 页面。">
+        <input
+          id="line-channel-id"
+          className="input input--mono"
+          value={channelId}
+          inputMode="numeric"
+          placeholder="一串数字"
+          onChange={(e) => setChannelId(e.target.value)}
+          autoComplete="off"
+          aria-invalid={idError ? true : undefined}
+          aria-describedby={idError ? 'line-channel-id-err' : undefined}
+        />
+        {idError && (
+          <div className="field__error" id="line-channel-id-err">
+            {idError}
+          </div>
+        )}
+      </SettingsRow>
+
+      <SettingsRow label="Channel secret" htmlFor="line-secret">
+        <SecretField
+          id="line-secret"
+          hint="在 Basic settings 页面。用于校验消息确实来自 LINE，未设置时不会接收任何消息。"
+          isSet={!!line.channelSecretSet}
+          value={channelSecret}
+          onChange={setChannelSecret}
+          onClear={() => clearSecret('channelSecret')}
+          clearing={clearing === 'channelSecret'}
+        />
+      </SettingsRow>
+
+      <SettingsRow label="Channel access token" htmlFor="line-token">
+        <SecretField
+          id="line-token"
+          hint="在 Messaging API 页面最下面签发长期的（long-lived）token。"
+          isSet={!!line.accessTokenSet}
+          value={accessToken}
+          onChange={setAccessToken}
+          onClear={() => clearSecret('accessToken')}
+          clearing={clearing === 'accessToken'}
+        />
+      </SettingsRow>
+
+      {limits}
+      <SaveBar dirty={dirty} saving={saving} onDiscard={discard} />
+    </SettingsSection>
+  );
+}
+
+/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号、LINE 官方帐号显示凭证；业务员只看状态 */
 export default function ConnectSection({ account, setAccount, isAdmin }) {
   if (account.channel === 'meta') return <MetaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
+  if (account.channel === 'line') return <LinePanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
+  if (account.channel !== 'waha') {
+    return (
+      <SettingsSection title="连接">
+        <div className="numbers-block">
+          <Callout tone="warning">不认识这个号的接入方式（{String(account.channel || '空')}），请升级墨鸽后再看。</Callout>
+        </div>
+      </SettingsSection>
+    );
+  }
   if (!isAdmin) return <WahaReadOnly account={account} />;
   return <WahaPanel account={account} setAccount={setAccount} />;
 }

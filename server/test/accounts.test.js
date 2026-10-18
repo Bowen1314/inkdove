@@ -366,7 +366,7 @@ describe('号码配置导出 / 导入（admin）', () => {
   let wahaAcc;
   let metaAcc;
   const EMAIL = { provider: 'smtp', from: 'bot@example.com', smtp: { host: 'smtp.example.com' } };
-  const EXPORT_KEYS = ['allowlist', 'blocklist', 'channel', 'meta', 'name', 'notify', 'persona', 'replyMode', 'scope', 'waha'];
+  const EXPORT_KEYS = ['allowlist', 'blocklist', 'channel', 'line', 'meta', 'name', 'notify', 'persona', 'replyMode', 'scope', 'waha'];
   const fileOf = (doc, raw) => {
     const fd = new FormData();
     fd.append('file', new Blob([raw ?? JSON.stringify(doc)], { type: 'application/json' }), 'inkdove-accounts.json');

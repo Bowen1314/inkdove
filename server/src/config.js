@@ -58,6 +58,9 @@ export function loadConfig(env = process.env) {
     auditRetentionDays: num('INKDOVE_AUDIT_RETENTION_DAYS', 365),
     // 仅测试用：覆盖 Meta Graph API 基址
     metaGraphUrl: (get('INKDOVE_META_GRAPH_URL').trim() || 'https://graph.facebook.com').replace(/\/+$/, ''),
+    // 仅测试用：覆盖 LINE Messaging API 的两个基址（发消息、资料等走 api.line.me；下载客户发来的图片视频语音文件走 api-data.line.me）
+    lineApiUrl: (get('INKDOVE_LINE_API_URL').trim() || 'https://api.line.me').replace(/\/+$/, ''),
+    lineDataApiUrl: (get('INKDOVE_LINE_DATA_API_URL').trim() || 'https://api-data.line.me').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Resend API 地址
     resendApiUrl: get('INKDOVE_RESEND_API_URL').trim() || 'https://api.resend.com/emails',
   };

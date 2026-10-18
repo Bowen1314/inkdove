@@ -21,7 +21,7 @@ function settle(p) {
   );
 }
 
-const convName = (c) => c?.contactName || c?.contactNumber || c?.id || '未知联系人';
+const convName = (c) => c?.contactName || c?.contactNumber || (c?.channel === 'line' ? 'LINE 用户' : c?.id) || '未知联系人';
 const chatLink = (id) => `/whatsapp/chats?${new URLSearchParams({ chat: id })}`;
 
 /** 指标卡外面套一层栅格格子（Metric 自己不接 className） */

@@ -113,8 +113,9 @@ const CSV_COLUMNS = [
   ['公司', (l) => l.company],
   ['国家', (l) => l.country],
   ['邮箱', (l) => l.email],
-  ['WhatsApp 号码', (l) => (l.contactNumber ? `+${l.contactNumber}` : '')],
-  ['WhatsApp 昵称', (l) => l.contactName],
+  // LINE 官方帐号的客户没有号码，这一列是空的；昵称是 WhatsApp 或 LINE 上的名字
+  ['号码', (l) => (l.contactNumber ? `+${l.contactNumber}` : '')],
+  ['昵称', (l) => l.contactName],
   ['所属号', (l) => l.accountName],
   ['意向产品', (l) => l.interest],
   ['数量', (l) => l.quantity],

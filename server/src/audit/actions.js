@@ -57,7 +57,7 @@ export const TARGET_TYPES = {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_LABELS = { admin: '管理员', agent: '业务员' };
-const CHANNEL_LABELS = { waha: '扫码连接', meta: 'Meta 官方接口' };
+const CHANNEL_LABELS = { waha: '扫码连接', meta: 'Meta 官方接口', line: 'LINE 官方帐号' };
 const STATUS_VALUES = { active: '启用中', disabled: '已停用' };
 
 /* ---------------- 小工具 ---------------- */
@@ -128,6 +128,9 @@ const ACCOUNT_SPECS = {
   'meta.verifyToken': { label: 'Verify Token', kind: 'secret' },
   'meta.accessToken': { label: 'Access Token', kind: 'secret' },
   'meta.appSecret': { label: 'App Secret', kind: 'secret' },
+  'line.channelId': { label: 'LINE Channel ID' },
+  'line.channelSecret': { label: 'LINE Channel secret', kind: 'secret' },
+  'line.accessToken': { label: 'LINE Channel access token', kind: 'secret' },
   'notify.email.enabled': { label: '邮件通知' },
   'notify.email.to': { label: '通知邮箱', kind: 'list' },
   'notify.whatsapp.enabled': { label: 'WhatsApp 通知' },

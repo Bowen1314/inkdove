@@ -1,11 +1,12 @@
-// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式、回复方式（人工回复 / 自动回复）、回复范围、通知和代理；
+// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式（扫码、Meta 官方接口、LINE 官方帐号）、
+// 回复方式（人工回复 / 自动回复）、回复范围、通知和代理；
 // 会话 id 是 <accountId>:<chatId>。四层防滥用的第 4 层（会话级闸门）在这里，回复拟真（F1/F14）和
 // 在 WhatsApp 里处理转人工（F3）也在这里。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { conversationIdOf, DELETED_ACCOUNT_NAME, metaConfigured } from '../accounts.js';
+import { conversationIdOf, DELETED_ACCOUNT_NAME, lineConfigured, metaConfigured } from '../accounts.js';
 import { hitMessage, quoteWords } from '../blockwords/store.js';
-import { internalFileUrl } from '../files/signed.js';
+import { internalFileUrl, publicFileUrl } from '../files/signed.js';
 import { MAX_FILES_PER_REPLY } from '../files/store.js';
 import { ENTRY_TYPES, normalizeTags } from '../kb/store.js';
 import { llmScope } from '../records.js';
@@ -27,6 +28,19 @@ import {
   wahaVoiceSeconds,
 } from './media.js';
 import { createMediaStore } from './media-store.js';
+import {
+  isInvalidReplyToken,
+  isLineQuotaError,
+  LineError,
+  lineDownloadContent,
+  lineGetProfile,
+  lineMarkAsRead,
+  lineOpenContent,
+  lineOpenExternal,
+  linePush,
+  lineReply,
+  lineStartLoading,
+} from './line.js';
 import {
   metaDownloadMedia,
   metaMarkRead,
@@ -89,6 +103,21 @@ export const WHATSAPP_REVOKE_LIMIT_MS = 60 * 3600 * 1000;
 export const REVOKE_WINDOW_MS = WHATSAPP_REVOKE_LIMIT_MS - 3600 * 1000;
 /** 客户撤回了还没处理的消息时记的处理原因 */
 export const REVOKED_SKIP_REASON = '客户撤回了这条消息';
+
+/**
+ * LINE 官方帐号：reply token 在收到 webhook 后 1 分钟内有效、只能用一次（回复不算每月额度）。留 10 秒余量：
+ * 客户的消息 50 秒内的 token 拿来回复，再晚就推送（算每月额度）
+ */
+export const LINE_REPLY_WINDOW_MS = 50 * 1000;
+/** LINE 图片消息的预览图最大 1MB（原图 10MB）。墨鸽不缩图、预览图就用原图，所以只有 1MB 以内的 jpeg/png 按图片发，更大的按链接发 */
+export const LINE_IMAGE_MAX_BYTES = 1024 * 1024;
+/** 推送超出每月额度时消息上记的原因（号的状态里也显示） */
+export const LINE_QUOTA_TEXT = 'LINE 本月可推送的消息数用完了，升级套餐或等下个月；1 分钟内的回复不受影响';
+/** 处理过的 LINE webhookEventId、取过的客户名字留多久 */
+const LINE_EVENT_KEEP_MS = 3600 * 1000;
+const LINE_NAME_CACHE_MS = 3600 * 1000;
+/** handleInbound 的这些结果表示客户消息存下了（LINE 这时才记它的 reply token 和 markAsReadToken） */
+const LINE_STORED = new Set(['scheduled', 'archived', 'archived_media', 'converting']);
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -316,6 +345,78 @@ export function parseMetaMessage(msg, names) {
   };
 }
 
+const LINE_MEDIA_KIND = { image: 'image', video: 'video', audio: 'voice', file: 'document' };
+
+/**
+ * LINE webhook 的 message 事件 → 统一的入站结构，chatId 是客户的 userId（LINE 不给手机号）。
+ * 图片、视频、语音、文件按消息 id 走 content 接口下载（别的服务器托管的图片、视频、语音带 originalContentUrl，直接取它），
+ * mime 下载时才知道；F4 只识别图片和语音。贴图不下载，只记「[贴纸]」；位置记成「[位置] 名称（地址）」
+ * https://developers.line.biz/en/reference/messaging-api/#message-event
+ */
+export function parseLineMessage(ev) {
+  const msg = ev?.message;
+  if (!msg || typeof msg !== 'object') return null;
+  const type = msg.type;
+  let text = '';
+  let label = null;
+  let media = null;
+  switch (type) {
+    case 'text':
+      text = String(msg.text || '');
+      break;
+    case 'image':
+    case 'video':
+    case 'audio':
+    case 'file': {
+      const kind = LINE_MEDIA_KIND[type];
+      label = MEDIA_LABELS[kind];
+      const external = msg.contentProvider?.type === 'external' ? msg.contentProvider.originalContentUrl : null;
+      const ms = Number(msg.duration);
+      if (msg.id) {
+        media = {
+          type: kind,
+          f4Type: type === 'image' ? 'image' : type === 'audio' ? 'voice' : null,
+          mime: '',
+          id: String(msg.id),
+          url: typeof external === 'string' && external ? external : null,
+          filename: type === 'file' ? cleanFilename(msg.fileName) : null,
+          seconds: type === 'audio' && Number.isFinite(ms) && ms > 0 ? ms / 1000 : null,
+        };
+      }
+      break;
+    }
+    case 'sticker':
+      label = MEDIA_LABELS.sticker;
+      break;
+    case 'location': {
+      const title = String(msg.title || '').trim();
+      const address = String(msg.address || '').trim();
+      const lat = Number(msg.latitude);
+      const lng = Number(msg.longitude);
+      const where = title && address && title !== address ? `${title}（${address}）` : title || address;
+      label = where ? `[位置] ${clip(where, 300)}` : Number.isFinite(lat) && Number.isFinite(lng) ? `[位置] ${lat}, ${lng}` : '[位置]';
+      break;
+    }
+    default:
+      label = '[非文字消息]';
+  }
+  text = text.trim();
+  const ts = Number(ev.timestamp);
+  return {
+    channel: 'line',
+    externalId: msg.id ? String(msg.id) : null,
+    chatId: String(ev.source?.userId || ''),
+    fromMe: false,
+    timestampMs: Number.isFinite(ts) && ts > 0 ? ts : Date.now(),
+    text,
+    mediaLabel: text ? null : label || '[非文字消息]',
+    media,
+    contactName: '',
+    // 客户引用了某条消息回复：quotedMessageId 是被引用消息的 id
+    replyToId: msg.quotedMessageId ? String(msg.quotedMessageId) : null,
+  };
+}
+
 /**
  * 配对码要关联的手机号：去掉空格、横线、括号，允许开头 + 或 00，剩下是 8–15 位、不以 0 开头的数字（带国家码）。
  * 返回纯数字号码，不合格返回 null。
@@ -377,11 +478,14 @@ export const draftEntryIds = (raw, entries) => {
  *   onDecision?: (row:any) => void,
  *   onDeclined?: (p:{accountId:string, conversationId:string, ts:string}) => void,
  *   wahaInlineMaxBytes?: number,
+ *   lineReplyWindowMs?: number,
+ *   lineContentRetryMs?: number,
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
  * }} [opts]
- *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）
+ *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）；
+ *   lineReplyWindowMs：LINE 的 reply token 多久以内拿来回复；lineContentRetryMs：下载 LINE 客户文件返回 202 后隔多久再取（测试里调小）
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -411,6 +515,16 @@ export function createWaService(ctx, opts = {}) {
   const revokeAttempts = new Map();
   /** @type {Set<string>} 正在撤回的消息（墨鸽的消息 id），同一条不同时撤两次 */
   const revoking = new Set();
+  /** @type {Map<string, {token:string, at:number}>} LINE：会话 id → 客户最近一条消息的 reply token 和收到的时间（用一次就删） */
+  const lineReplyTokens = new Map();
+  /** @type {Map<string, string>} LINE：会话 id → 客户最近一条消息的 markAsReadToken（标过已读就删） */
+  const lineReadTokens = new Map();
+  /** @type {Map<string, number>} LINE：处理过的 `<号 id>|<webhookEventId>`（重发的事件 id 不变） */
+  const seenLineEvents = new Map();
+  /** @type {Map<string, {name:string, at:number}>} LINE：`<号 id>|<userId>` → 客户资料里的名字（取不到记空，免得每条消息都去取） */
+  const lineNames = new Map();
+  const lineReplyWindowMs = opts.lineReplyWindowMs ?? LINE_REPLY_WINDOW_MS;
+  const lineContentRetryMs = opts.lineContentRetryMs ?? 2000;
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
   /** 客户媒体单个文件的上限（测试里可以调小） */
   const mediaMaxBytes = opts.mediaStoreMaxBytes ?? MEDIA_STORE_MAX_BYTES;
@@ -443,7 +557,8 @@ export function createWaService(ctx, opts = {}) {
   function state(accountId) {
     let s = accState.get(accountId);
     if (!s) {
-      s = { lastWahaStatus: null, connectedAt: 0, lastWebhookAt: null, statusCache: null, replies: [], usageHintAt: 0, pairCodeAt: 0 };
+      // linePushError：LINE 官方帐号最近一次推送失败、而且是整个号的问题（每月额度用完、token 不对）{at, message}，推送成功后清掉
+      s = { lastWahaStatus: null, connectedAt: 0, lastWebhookAt: null, statusCache: null, replies: [], usageHintAt: 0, pairCodeAt: 0, linePushError: null };
       accState.set(accountId, s);
     }
     return s;
@@ -512,6 +627,7 @@ export function createWaService(ctx, opts = {}) {
     let id;
     if (acc.channel === 'waha') id = await waha.sendText(acc.sessionName, chatId, text);
     else if (acc.channel === 'meta') id = await metaSendText(config.metaGraphUrl, acc.meta, chatId, text);
+    else if (acc.channel === 'line') id = await lineSend(acc, chatId, [{ type: 'text', text }]);
     else throw new Error('未知的接入方式');
     entry.id = id || null;
     entry.short = id ? shortMessageId(id) : null;
@@ -519,8 +635,65 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
+   * LINE：发一组消息（最多 5 个）。这个客户的消息 50 秒内、reply token 还没用过时用回复（不算每月额度），否则推送（算额度）。
+   * token 只能用一次：发请求之前就删掉；回复报 token 无效（过期、用过了）时改推送一次，别的错直接抛。
+   * 推送超出每月额度、token 不对（401、403）这种整个号的问题记到号的状态上（号详情页显示），之后推送成功就清掉
+   * @returns {Promise<string|null>} 发出的第一个消息的 id
+   */
+  async function lineSend(acc, chatId, messages) {
+    const convId = conversationIdOf(acc.id, chatId);
+    const t = lineReplyTokens.get(convId);
+    lineReplyTokens.delete(convId);
+    if (t && Date.now() - t.at < lineReplyWindowMs) {
+      try {
+        return await lineReply(config.lineApiUrl, acc.line, t.token, messages);
+      } catch (err) {
+        if (!isInvalidReplyToken(err)) throw err;
+        log.warn(`[line] 号 ${acc.id} 的 reply token 已失效，改用推送：${err.message}`);
+      }
+    }
+    const st = state(acc.id);
+    try {
+      const id = await linePush(config.lineApiUrl, acc.line, chatId, messages);
+      if (st.linePushError) {
+        st.linePushError = null;
+        st.statusCache = null;
+      }
+      return id;
+    } catch (err) {
+      const quota = isLineQuotaError(err);
+      if (quota || (err instanceof LineError && (err.status === 401 || err.status === 403))) {
+        st.linePushError = { at: nowIso(), message: quota ? LINE_QUOTA_TEXT : `推送失败：${err.message}` };
+        st.statusCache = null;
+      }
+      if (quota) throw new Error(LINE_QUOTA_TEXT);
+      throw err;
+    }
+  }
+
+  /**
+   * LINE 发文件：没有文件消息、也没有上传接口，只能给 LINE 一个公网 HTTPS 地址（30 天有效的签名地址，见 files/signed.js）。
+   * 1MB 以内的 jpeg/png 发图片消息，预览图用同一个地址（LINE 的预览图不能超过 1MB，墨鸽不缩图），有说明文字时同一次再带一条文字；
+   * 其他文件和更大的图片发一条文字：说明文字、文件名、下载链接（是发给客户的，不加中文）。
+   * INKDOVE_PUBLIC_BASE_URL 不是 https 时 LINE 取不到，直接报错，不发打不开的地址
+   */
+  function lineFileMessages(file, caption) {
+    if (!/^https:\/\//i.test(config.publicBaseUrl)) {
+      throw new Error('LINE 发图片和文件要用公网 HTTPS 地址：INKDOVE_PUBLIC_BASE_URL 现在不是 https://，没有发送');
+    }
+    const url = publicFileUrl(config, file.id);
+    if ((file.mime === 'image/jpeg' || file.mime === 'image/png') && file.size <= LINE_IMAGE_MAX_BYTES) {
+      const msgs = [{ type: 'image', originalContentUrl: url, previewImageUrl: url }];
+      if (caption) msgs.push({ type: 'text', text: caption });
+      return msgs;
+    }
+    return [{ type: 'text', text: `${caption ? `${caption}\n\n` : ''}${file.filename}\n${url}` }];
+  }
+
+  /**
    * F15：发一个文件（不落库）。WAHA：jpeg/png 用 sendImage，其余用 sendFile；15MB 以内传 base64，更大的给签名下载地址。
    * Meta：先上传拿 media id（按号码缓存 25 天），jpeg/png 且不超过 5MB 的发 image，其余发 document；缓存的 id 失效时重传一次。
+   * LINE：图片给签名地址，其他文件发下载链接（见 lineFileMessages）。
    */
   async function sendFileRaw(acc, chatId, file, caption = '') {
     if (!acc) throw new Error('这个号已删除');
@@ -562,6 +735,8 @@ export function createWaService(ctx, opts = {}) {
       } else {
         id = await send(await upload());
       }
+    } else if (acc.channel === 'line') {
+      id = await lineSend(acc, chatId, lineFileMessages(file, caption));
     } else {
       throw new Error('未知的接入方式');
     }
@@ -570,8 +745,11 @@ export function createWaService(ctx, opts = {}) {
     return id;
   }
 
-  /** 给某个号码发文本（通知、F3 回执用） */
-  const sendToNumber = (acc, number, text) => sendRaw(acc, acc.channel === 'waha' ? `${number}@c.us` : number, text);
+  /** 给某个号码发文本（通知、F3 回执用）。LINE 官方帐号只能给加了好友的 userId 发，没有号码可发 */
+  const sendToNumber = async (acc, number, text) => {
+    if (acc?.channel === 'line') throw new Error('LINE 官方帐号不能给手机号发消息');
+    return sendRaw(acc, acc?.channel === 'waha' ? `${number}@c.us` : number, text);
+  };
 
   const notifier = createNotifier({
     getSettings: ctx.getSettings,
@@ -599,6 +777,8 @@ export function createWaService(ctx, opts = {}) {
       id: r.id,
       accountId: r.account_id,
       accountName: r.account_name ?? DELETED_ACCOUNT_NAME,
+      // 接入方式（waha / meta / line）：LINE 的客户没有手机号，前端据此显示「LINE 用户」
+      channel: r.channel,
       contactName: r.contact_name,
       contactNumber: r.contact_number,
       lastMessage: r.lm_ts ? { text: r.lm_text || attachmentLabel(r.lm_attachment), direction: r.lm_direction, ts: r.lm_ts } : null,
@@ -616,7 +796,7 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 我方这条消息最晚能撤回到什么时候（ISO），不能撤回时为 null：扫码号发送成功、有 WhatsApp 消息 id、还没撤回、
-   * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号没有撤回接口
+   * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号、LINE 官方帐号没有撤回接口
    */
   function revocableUntil(r, acc) {
     if (r.direction !== 'out' || r.status !== 'sent' || !r.external_id || r.revoked_at || acc?.channel !== 'waha') return null;
@@ -663,7 +843,9 @@ export function createWaService(ctx, opts = {}) {
     return r ? rowToConversation(r) : null;
   }
 
-  const displayName = (conv) => conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.chat_id || conv.id);
+  /** 客户的称呼：名字，没有就是 +号码；LINE 的客户没有号码，叫「LINE 用户」（不露 userId） */
+  const displayName = (conv) =>
+    conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.channel === 'line' ? 'LINE 用户' : conv.chat_id || conv.id);
 
   function cancelTimer(convId) {
     const t = timers.get(convId);
@@ -919,6 +1101,8 @@ export function createWaService(ctx, opts = {}) {
 
   async function resolveNumber(acc, m) {
     if (m.channel === 'meta') return m.chatId.replace(/\D+/g, '') || null;
+    // LINE 只给 userId，没有手机号
+    if (m.channel === 'line') return null;
     const at = m.chatId.lastIndexOf('@');
     const user = at >= 0 ? m.chatId.slice(0, at) : m.chatId;
     const server = at >= 0 ? m.chatId.slice(at + 1).toLowerCase() : '';
@@ -944,6 +1128,8 @@ export function createWaService(ctx, opts = {}) {
 
   /** 4.1 黑白名单（按号） */
   function inScope(acc, number, chatId) {
+    // LINE 官方帐号的客户只有 userId、没有手机号，按号码的白名单、黑名单用不上，都算在范围内（发得进来的本来就是加了好友的人）
+    if (acc.channel === 'line') return true;
     if (number && acc.blocklist.includes(number)) return false;
     if (acc.scope === 'allowlist') {
       // F11：这个号发过外联的对象算在范围内（黑名单仍然优先）
@@ -1193,7 +1379,8 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 下载一条客户消息里的媒体存进 <dataDir>/media/，结果写回消息的 media 列。不抛错。
-   * WAHA 用事件里的 media.url（WAHA 默认只留 180 秒，所以收到就下）；Meta 用 media id 走 Graph API（下载地址 5 分钟有效）。
+   * WAHA 用事件里的 media.url（WAHA 默认只留 180 秒，所以收到就下）；Meta 用 media id 走 Graph API（下载地址 5 分钟有效）；
+   * LINE 用消息 id 走 content 接口（过一段时间就删，返回 202 时等一会儿再取），别的服务器托管的直接取 originalContentUrl。
    * @returns {Promise<{stored:'ok'|'too_large'|'failed', fileKey?:string, size?:number|null, mime?:string, error?:string}>}
    */
   async function storeMedia(acc, msgId, media, signal) {
@@ -1205,7 +1392,7 @@ export function createWaService(ctx, opts = {}) {
         if (media.error) throw new Error(`WAHA 下载媒体出错：${media.error}`);
         if (!media.url) throw new Error('WAHA 没有提供下载地址（检查 WAHA_EVENTS_DOWNLOAD_MEDIA）');
         res = await waha.fetchMedia(media.url, { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS, signal });
-      } else {
+      } else if (acc.channel === 'meta') {
         if (!media.id) throw new Error('消息里没有 media id');
         const opened = await metaOpenMedia(config.metaGraphUrl, acc.meta, media.id, {
           maxBytes: mediaMaxBytes,
@@ -1214,6 +1401,16 @@ export function createWaService(ctx, opts = {}) {
         });
         res = opened.res;
         mime = mime || opened.mime;
+      } else if (acc.channel === 'line') {
+        const o = { maxBytes: mediaMaxBytes, timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS, signal };
+        let opened;
+        if (media.url) opened = await lineOpenExternal(media.url, o);
+        else if (media.id) opened = await lineOpenContent(config.lineDataApiUrl, acc.line, media.id, { ...o, retryDelayMs: lineContentRetryMs });
+        else throw new Error('消息里没有消息 id');
+        res = opened.res;
+        mime = mime || opened.mime;
+      } else {
+        throw new Error('未知的接入方式');
       }
       // res 是 node:http 的 IncomingMessage（媒体下载不走 fetch，见 media-download.js）
       mime = mime || baseMime(res.headers['content-type']);
@@ -1272,7 +1469,9 @@ export function createWaService(ctx, opts = {}) {
       if (!media.url) throw new Error('WAHA 没有提供媒体地址（检查 WAHA_EVENTS_DOWNLOAD_MEDIA）');
       return waha.downloadMedia(media.url, { maxBytes });
     }
-    return metaDownloadMedia(config.metaGraphUrl, acc.meta, media.id, { maxBytes });
+    if (acc.channel === 'meta') return metaDownloadMedia(config.metaGraphUrl, acc.meta, media.id, { maxBytes });
+    if (acc.channel === 'line') return lineDownloadContent(config.lineDataApiUrl, acc.line, media, { maxBytes, retryDelayMs: lineContentRetryMs });
+    throw new Error('未知的接入方式');
   }
 
   /**
@@ -1813,11 +2012,28 @@ export function createWaService(ctx, opts = {}) {
   // ---------------- F1 / F14：拟真发送 ----------------
   async function markRead(acc, chatId, ids) {
     // Meta 的标已读和"正在输入"是同一个请求，在 typing() 里一起发
+    if (acc.channel === 'line') return lineMarkRead(acc, chatId);
     if (acc.channel !== 'waha') return;
     try {
       await waha.sendSeen(acc.sessionName, chatId, ids);
     } catch (err) {
       log.warn(`[wa] 标已读失败（${chatId}）：${err?.message || err}`);
+    }
+  }
+
+  /**
+   * LINE：用客户最近一条消息的 markAsReadToken 标已读（标到这条为止的都算已读）。
+   * 有的帐号没有这个权限（403），只记警告
+   */
+  async function lineMarkRead(acc, chatId) {
+    const convId = conversationIdOf(acc.id, chatId);
+    const token = lineReadTokens.get(convId);
+    if (!token) return;
+    lineReadTokens.delete(convId);
+    try {
+      await lineMarkAsRead(config.lineApiUrl, acc.line, token);
+    } catch (err) {
+      log.warn(`[line] 标已读失败（号 ${acc.id}）${err?.status === 403 ? '，这个 LINE 官方帐号可能没有标已读的权限' : ''}：${err?.message || err}`);
     }
   }
 
@@ -1827,6 +2043,9 @@ export function createWaService(ctx, opts = {}) {
       else if (acc.channel === 'meta' && on && lastInboundId) {
         // Meta 没有单独的停止接口：发出回复或 25 秒后自动消失
         await metaMarkRead(config.metaGraphUrl, acc.meta, lastInboundId, { typing: true });
+      } else if (acc.channel === 'line' && on) {
+        // LINE 的「正在输入」也没有停止接口：我方发出消息时消失，最长显示 20 秒
+        await lineStartLoading(config.lineApiUrl, acc.line, chatId, 20);
       }
     } catch (err) {
       log.warn(`[wa] "正在输入"${on ? '开启' : '关闭'}失败（${chatId}）：${err?.message || err}`);
@@ -2161,6 +2380,11 @@ export function createWaService(ctx, opts = {}) {
     const st = state(acc.id);
     const base = { state: 'not_configured', me: null, error: null, lastWebhookAt: st.lastWebhookAt };
     if (acc.channel === 'meta') return { ...base, state: metaConfigured(acc) ? 'configured' : 'not_configured' };
+    // LINE 没有查连接状态的接口：三项都填了就是已配置；最近一次推送失败（额度用完、token 不对）放在 error 里
+    if (acc.channel === 'line') {
+      return { ...base, state: lineConfigured(acc) ? 'configured' : 'not_configured', error: st.linePushError?.message ?? null };
+    }
+    if (acc.channel !== 'waha') return { ...base, error: '未知的接入方式' };
     const relayError = relays.error(acc.id);
     try {
       const sess = await waha.getSession(acc.sessionName, timeoutMs);
@@ -2471,10 +2695,15 @@ export function createWaService(ctx, opts = {}) {
     for (const r of db.prepare('SELECT id FROM conversations WHERE account_id = ?').all(acc.id)) {
       cancelTimer(r.id);
       abortSending(r.id, 'account_deleted');
+      lineReplyTokens.delete(r.id);
+      lineReadTokens.delete(r.id);
     }
     accounts.delete(acc.id, by);
     accState.delete(acc.id);
     recentSent.delete(acc.id);
+    for (const map of [seenLineEvents, lineNames]) {
+      for (const k of map.keys()) if (k.startsWith(`${acc.id}|`)) map.delete(k);
+    }
   }
 
   // ---------------- 消息撤回 ----------------
@@ -2559,6 +2788,14 @@ export function createWaService(ctx, opts = {}) {
       markRevoked(row.id, 'phone', null, at);
       return 'revoked_phone';
     }
+    return customerRevoked(row, at);
+  }
+
+  /**
+   * 客户撤回了他的一条消息（扫码号的 message.revoked、LINE 的 unsend 共用）：标「客户已撤回」。
+   * 还没处理的（在防抖、识别中）记为 skipped，正在拟真等待的发送取消
+   */
+  function customerRevoked(row, at) {
     db.transaction(() => {
       markRevoked(row.id, 'customer', null, at);
       if (!row.handled) {
@@ -2603,7 +2840,9 @@ export function createWaService(ctx, opts = {}) {
     if (row.status !== 'sent') throw badRequest('这条消息没有发出去，客户没收到，不用撤回', 'not_sent');
     const acc = conv.account_id ? accounts.get(conv.account_id) : null;
     if (!acc) throw badRequest('这个会话所属的号已删除，不能再撤回', 'account_deleted');
-    if (acc.channel !== 'waha') throw badRequest('Meta 官方接口的号不能撤回消息（WhatsApp Cloud API 没有撤回功能）', 'revoke_unsupported');
+    if (acc.channel === 'meta') throw badRequest('Meta 官方接口的号不能撤回消息（WhatsApp Cloud API 没有撤回功能）', 'revoke_unsupported');
+    if (acc.channel === 'line') throw badRequest('LINE 官方帐号不能撤回已发出的消息（LINE Messaging API 没有撤回功能）', 'revoke_unsupported');
+    if (acc.channel !== 'waha') throw badRequest('这个号不能撤回消息', 'revoke_unsupported');
     if (!row.external_id) throw badRequest('这条消息没有记下 WhatsApp 的消息 id，不能撤回', 'no_message_id');
     if (!revocableUntil(row, acc)) throw badRequest('已经超过 WhatsApp 允许撤回的时间（发出后约两天半），不能再撤回', 'revoke_expired');
     if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '正在撤回这条消息，请稍等');
@@ -2675,6 +2914,102 @@ export function createWaService(ctx, opts = {}) {
     return results;
   }
 
+  /**
+   * LINE 官方帐号的 webhook（routes/webhooks.js 验过签名、已经回了 200）：{destination, events:[…]}。
+   * - mode 为 standby（这个帐号的聊天交给了别的模块）的事件不处理；只处理一对一聊天（source.type 为 user），群、多人聊天忽略；
+   * - 没收到 200 时 LINE 可能重发（开了 Webhook redelivery 的话），重发的 webhookEventId 不变：处理过的跳过，消息再按消息 id 去重；
+   * - message：客户名字从资料接口取（缓存 1 小时）；存下以后记住这条的 reply token 和 markAsReadToken，回复、标已读时用；
+   * - follow（加好友、解除封锁）：取一次资料，已有的会话更新名字，没聊过的不建空会话；unfollow 只记日志；
+   * - unsend：客户撤回了消息，和扫码号的客户撤回一样标上
+   * 返回每个事件的处理结果（测试用）
+   */
+  async function handleLineWebhook(accountId, body) {
+    const acc = accounts.get(accountId);
+    if (!acc || acc.channel !== 'line') return [];
+    const st = state(acc.id);
+    st.lastWebhookAt = nowIso();
+    st.statusCache = null;
+    const now = Date.now();
+    for (const [k, t] of seenLineEvents) if (now - t > LINE_EVENT_KEEP_MS) seenLineEvents.delete(k);
+    for (const [k, v] of lineNames) if (now - v.at > LINE_NAME_CACHE_MS) lineNames.delete(k);
+    const results = [];
+    for (const ev of Array.isArray(body?.events) ? body.events : []) {
+      try {
+        results.push(await handleLineEvent(accounts.get(acc.id), ev));
+      } catch (err) {
+        log.error(`[line] 处理号 ${acc.id} 的事件出错：${err?.stack || err}`);
+        results.push('error');
+      }
+    }
+    return results;
+  }
+
+  async function handleLineEvent(acc, ev) {
+    if (closed) return 'closed';
+    if (!acc) return 'ignored_account';
+    if (!ev || typeof ev !== 'object') return 'ignored_event';
+    if (ev.mode === 'standby') return 'ignored_standby';
+    if (ev.source?.type !== 'user' || !ev.source.userId) return 'ignored_non_private';
+    const userId = String(ev.source.userId);
+    const eventKey = ev.webhookEventId ? `${acc.id}|${ev.webhookEventId}` : null;
+    if (eventKey && seenLineEvents.has(eventKey)) return 'ignored_duplicate';
+    if (eventKey) seenLineEvents.set(eventKey, Date.now());
+    switch (ev.type) {
+      case 'message': {
+        const receivedAt = Date.now();
+        const m = parseLineMessage(ev);
+        if (!m) return 'ignored_event';
+        m.contactName = await lineName(acc, userId);
+        const r = await handleInbound(acc, m);
+        if (LINE_STORED.has(r)) {
+          const convId = conversationIdOf(acc.id, userId);
+          if (ev.replyToken) lineReplyTokens.set(convId, { token: String(ev.replyToken), at: receivedAt });
+          if (ev.message.markAsReadToken) lineReadTokens.set(convId, String(ev.message.markAsReadToken));
+        }
+        return r;
+      }
+      case 'follow': {
+        lineNames.delete(`${acc.id}|${userId}`);
+        const name = await lineName(acc, userId);
+        const convId = conversationIdOf(acc.id, userId);
+        if (name && getConvRow(convId)) db.prepare('UPDATE conversations SET contact_name = ? WHERE id = ?').run(name, convId);
+        return 'follow';
+      }
+      case 'unfollow':
+        log.info(`[line] 号 ${acc.id} 有客户取消了好友或封锁了这个帐号，之后发不到他了`);
+        return 'unfollow';
+      case 'unsend': {
+        const mid = ev.unsend?.messageId ? String(ev.unsend.messageId) : '';
+        if (!mid) return 'ignored_revoke';
+        const row = db
+          .prepare("SELECT * FROM messages WHERE conversation_id = ? AND direction = 'in' AND external_id = ?")
+          .get(conversationIdOf(acc.id, userId), mid);
+        if (!row) return 'ignored_revoke_unknown';
+        if (row.revoked_at) return 'ignored_duplicate';
+        const ts = Number(ev.timestamp);
+        return customerRevoked(row, Number.isFinite(ts) && ts > 0 ? new Date(ts).toISOString() : nowIso());
+      }
+      default:
+        return 'ignored_event';
+    }
+  }
+
+  /** LINE 客户资料里的名字（缓存 1 小时；不是好友时为空）。取失败的不缓存，下条消息再取 */
+  async function lineName(acc, userId) {
+    const key = `${acc.id}|${userId}`;
+    const hit = lineNames.get(key);
+    if (hit && Date.now() - hit.at < LINE_NAME_CACHE_MS) return hit.name;
+    try {
+      const p = await lineGetProfile(config.lineApiUrl, acc.line, userId);
+      const name = clip(String(p?.displayName || '').trim(), 100);
+      lineNames.set(key, { name, at: Date.now() });
+      return name;
+    } catch (err) {
+      log.warn(`[line] 取客户资料失败（号 ${acc.id}）：${err?.message || err}`);
+      return '';
+    }
+  }
+
   return {
     getStatus,
     wahaStart,
@@ -2685,6 +3020,7 @@ export function createWaService(ctx, opts = {}) {
     deleteAccount,
     handleWahaWebhook,
     handleMetaWebhook,
+    handleLineWebhook,
     handleInbound,
     revokeMessage,
     notifier,
@@ -2960,6 +3296,8 @@ export function createWaService(ctx, opts = {}) {
       let externalId;
       if (acc.channel === 'waha') externalId = await waha.sendText(acc.sessionName, chatId, text);
       else if (acc.channel === 'meta') externalId = await metaSendTemplate(config.metaGraphUrl, acc.meta, chatId, template);
+      // LINE 只能给加了好友的人发，手里只有手机号找不到人（创建外联时已经拦下，这里兜底）
+      else if (acc.channel === 'line') throw new Error('LINE 官方帐号不能外联群发');
       else throw new Error('未知的接入方式');
       entry.id = externalId || null;
       entry.short = externalId ? shortMessageId(externalId) : null;

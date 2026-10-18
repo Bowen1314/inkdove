@@ -26,6 +26,11 @@ export const CHANNEL_OPTIONS = [
     title: 'Meta 官方接口',
     desc: '适合已开通 WhatsApp Business Platform 的企业，需要在 Meta 开发者后台配置。',
   },
+  {
+    value: 'line',
+    title: 'LINE 官方帐号',
+    desc: '接 LINE 官方帐号（Messaging API），客户加好友后来聊。需要在 LINE Developers Console 配置。',
+  },
 ];
 
 /** status.me.id（如 8613800138000@c.us）→ +8613800138000 */
@@ -68,19 +73,27 @@ const CHANNEL_FILTERS = [
   { value: '', label: '全部接入方式' },
   { value: 'waha', label: CHANNEL_LABEL.waha },
   { value: 'meta', label: CHANNEL_LABEL.meta },
+  { value: 'line', label: CHANNEL_LABEL.line },
 ];
+
+const EMPTY_LINE = { channelId: '', channelSecret: '', accessToken: '' };
 
 function AddAccountModal({ open, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [channel, setChannel] = useState('waha');
+  // LINE 官方帐号的三项配置：可以先空着，添加后在号详情的「连接」里再填
+  const [line, setLine] = useState(EMPTY_LINE);
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
 
   const reset = () => {
     setName('');
     setChannel('waha');
+    setLine(EMPTY_LINE);
     setTouched(false);
   };
+  const setLineField = (k, v) => setLine((l) => ({ ...l, [k]: v }));
+  const lineIdError = channel === 'line' && line.channelId.trim() && !/^\d+$/.test(line.channelId.trim()) ? 'Channel ID 只能是数字' : null;
 
   const close = () => {
     if (busy) return;
@@ -91,10 +104,20 @@ function AddAccountModal({ open, onClose, onCreated }) {
   const submit = async (e) => {
     e?.preventDefault();
     setTouched(true);
-    if (!name.trim() || busy) return;
+    if (!name.trim() || lineIdError || busy) return;
     setBusy(true);
     try {
-      const acc = await api.createAccount({ name: name.trim(), channel });
+      let acc = await api.createAccount({ name: name.trim(), channel });
+      // LINE：号建好后再存填了的配置。存失败（已提示）时号照样建好了，到号详情里改
+      const linePatch = Object.fromEntries(Object.entries(line).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+      if (channel === 'line' && Object.keys(linePatch).length) {
+        try {
+          const res = await api.putAccount(acc.id, { line: linePatch });
+          if (res && res.id) acc = res;
+        } catch {
+          // 已提示
+        }
+      }
       invalidateAccounts();
       toast.success('号码已添加，接下来完成连接');
       reset();
@@ -124,7 +147,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
       open={open}
       onClose={close}
       title="添加号码"
-      width={560}
+      width={640}
       footer={
         <>
           <button type="button" className="btn" onClick={close} disabled={busy}>
@@ -175,6 +198,47 @@ function AddAccountModal({ open, onClose, onCreated }) {
           <div className="field__hint">添加后不能更改。要换接入方式，需要删除这个号再重新添加。</div>
           <div className="field__hint">每个扫码号大约占用 100–200MB 内存</div>
         </div>
+        {channel === 'line' && (
+          <>
+            <Callout tone="info">
+              在 LINE Developers Console 打开这个官方帐号的 Messaging API channel：Basic settings 页面有 Channel ID 和 Channel
+              secret；Messaging API 页面最下面签发长期的 Channel access token。添加后把号详情「连接」里的 Webhook URL 填到 Messaging API
+              页面的 Webhook URL，并打开「Use webhook」。三项可以先空着，之后在「连接」里填。
+            </Callout>
+            <Field label="Channel ID" htmlFor="acc-line-id" error={lineIdError} optional>
+              <input
+                {...fieldProps('acc-line-id', lineIdError)}
+                className="input input--mono"
+                value={line.channelId}
+                inputMode="numeric"
+                autoComplete="off"
+                onChange={(e) => setLineField('channelId', e.target.value)}
+              />
+            </Field>
+            <Field label="Channel secret" htmlFor="acc-line-secret" optional>
+              <input
+                id="acc-line-secret"
+                type="password"
+                className="input input--mono"
+                value={line.channelSecret}
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={(e) => setLineField('channelSecret', e.target.value)}
+              />
+            </Field>
+            <Field label="Channel access token（长期）" htmlFor="acc-line-token" optional>
+              <input
+                id="acc-line-token"
+                type="password"
+                className="input input--mono"
+                value={line.accessToken}
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={(e) => setLineField('accessToken', e.target.value)}
+              />
+            </Field>
+          </>
+        )}
       </form>
     </Modal>
   );
@@ -216,6 +280,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
   const items = pick.items || [];
   const hasWaha = items.some((a) => a.channel === 'waha');
   const hasMeta = items.some((a) => a.channel === 'meta');
+  const hasLine = items.some((a) => a.channel === 'line');
 
   const close = () => {
     if (!busy) onClose();
@@ -319,6 +384,11 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
         {hasMeta && (
           <div className="field__hint">
             Meta 号导入后回调地址会变成新地址，要到 Meta 开发者后台改一下；phoneNumberId 和已有的号重复的会跳过。
+          </div>
+        )}
+        {hasLine && (
+          <div className="field__hint">
+            LINE 官方帐号导入后 Webhook URL 会变成新地址，要到 LINE Developers Console 改一下；Channel ID 和已有的号重复的会跳过。
           </div>
         )}
       </div>
@@ -528,7 +598,7 @@ export default function NumbersTab() {
   const exportAll = async () => {
     const ok = await confirm({
       title: '导出号码配置',
-      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、代理密码等密钥的明文，请妥善保管。`,
+      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、LINE 的 channel secret 和 access token、代理密码等密钥的明文，请妥善保管。`,
       confirmText: '导出',
     });
     if (!ok) return;

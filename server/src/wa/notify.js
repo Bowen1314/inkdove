@@ -91,8 +91,10 @@ export function createNotifier(deps) {
     const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
     if (!conv) return null;
     const chatId = conv.chat_id || conv.id;
-    const num = conv.contact_number ? `+${conv.contact_number}` : chatId;
-    const who = conv.contact_name ? `${conv.contact_name}（${num}）` : num;
+    // LINE 的客户没有手机号：不露 userId，写「LINE」
+    const isLine = conv.channel === 'line';
+    const num = conv.contact_number ? `+${conv.contact_number}` : isLine ? 'LINE' : chatId;
+    const who = conv.contact_name ? `${conv.contact_name}（${num}）` : isLine ? 'LINE 用户' : num;
     const recent = db
       .prepare("SELECT text FROM messages WHERE conversation_id = ? AND author = 'customer' ORDER BY seq DESC LIMIT 20")
       .all(conversationId)
@@ -113,7 +115,7 @@ export function createNotifier(deps) {
       (reason === 'handoff' || reason === 'blocked') && detail ? clip(detail, 200) : `${label}${detail ? `（${clip(detail, 120)}）` : ''}`;
     const draft = safeJsonParse(conv.draft, null);
     const last = recent[0] || '';
-    const subject = `[待人工] 客户 ${num}：${clip(last.replace(/\s+/g, ' '), 30) || label}`;
+    const subject = `[待人工] 客户 ${isLine ? who : num}：${clip(last.replace(/\s+/g, ' '), 30) || label}`;
     const lines = [
       `号：${acc.name}`,
       `客户：${who}`,
@@ -142,16 +144,17 @@ export function createNotifier(deps) {
     findNotice,
     rememberNotice,
 
-    /** 转人工通知：各通道独立发送，失败只写日志。 */
+    /** 转人工通知：各通道独立发送，失败只写日志。LINE 官方帐号没有号码可发，只发邮件 */
     async notifyHandoff(acc, conversationId, reason, detail = '') {
       const n = acc.notify;
       const emailOn = n.email.enabled && emailConfigured(getSettings());
-      if (!emailOn && !n.whatsapp.enabled) return;
+      const waOn = n.whatsapp.enabled && acc.channel !== 'line';
+      if (!emailOn && !waOn) return;
       const notice = buildNotice(acc, conversationId, reason, detail);
       if (!notice) return;
       const jobs = [];
       if (emailOn) jobs.push(withRetry('邮件', () => sendEmailTo(acc, notice.subject, notice.text)));
-      if (n.whatsapp.enabled) {
+      if (waOn) {
         jobs.push(
           withRetry('WhatsApp', () => sendWhatsapp(acc, `${notice.subject}\n\n${notice.text}\n\n${F3_USAGE_FOOTER}`)).then((r) => {
             if (r.ok) rememberNotice(acc.id, r.value, conversationId);
@@ -178,7 +181,7 @@ export function createNotifier(deps) {
       };
       const [email, whatsapp] = await Promise.all([
         n.email.enabled ? run(() => sendEmailTo(acc, subject, text)) : null,
-        n.whatsapp.enabled ? run(() => sendWhatsapp(acc, `${subject}\n\n${text}`)) : null,
+        n.whatsapp.enabled && acc.channel !== 'line' ? run(() => sendWhatsapp(acc, `${subject}\n\n${text}`)) : null,
       ]);
       return { email, whatsapp };
     },

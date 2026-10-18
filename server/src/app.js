@@ -214,6 +214,8 @@ export function createApp(config, options = {}) {
     wahaPairWaitMs: options.wahaPairWaitMs,
     wahaPollMs: options.wahaPollMs,
     historyImportDelayMs: options.historyImportDelayMs,
+    lineReplyWindowMs: options.lineReplyWindowMs,
+    lineContentRetryMs: options.lineContentRetryMs,
   });
   // F6：每 2 分钟扫一遍会话提取客户线索。leadsScanIntervalMs 为 0 时不启动定时器（测试里手动调 ctx.leads.scan()）
   ctx.leads = createLeadStore(ctx);
@@ -247,7 +249,8 @@ export function createApp(config, options = {}) {
 
   app.use('/webhooks', webhooksRouter(ctx));
 
-  // F15：给 WAHA 拉大文件用的内部下载地址，不要求登录，靠 token（HMAC 签名、10 分钟、只对这一个文件）。token 不写日志
+  // F15：给 WAHA 拉大文件用的内部下载地址，不要求登录，靠 token（HMAC 签名、10 分钟、只对这一个文件）。token 不写日志。
+  // LINE 官方帐号发的图片和文件链接也走这里（公网地址、30 天有效，见 files/signed.js 的 publicFileUrl）
   app.get('/internal/files/:id', (req, res) => {
     const id = String(req.params.id);
     if (!verifyFileToken(config.sessionSecret, id, req.query.token)) {

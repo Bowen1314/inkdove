@@ -67,6 +67,7 @@ export const waState = (s) => WA_STATE[s] || { label: s || '未知', tone: 'gray
 export const CHANNEL_LABEL = {
   waha: '扫码连接',
   meta: 'Meta 官方接口',
+  line: 'LINE 官方帐号',
 };
 
 // 消息作者（author）。owner = 机主在手机上直接回复（F12）

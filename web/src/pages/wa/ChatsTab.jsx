@@ -76,7 +76,8 @@ function readChatParam(params) {
   return id;
 }
 
-export const convName = (c) => c?.contactName || c?.contactNumber || c?.id || '未知联系人';
+/** 会话里客户的称呼：名字、号码；LINE 的客户没有号码，没名字时叫「LINE 用户」（不显示 userId） */
+export const convName = (c) => c?.contactName || c?.contactNumber || (c?.channel === 'line' ? 'LINE 用户' : c?.id) || '未知联系人';
 
 function sortConvs(list) {
   // needsHuman 置顶，其余按 updatedAt 倒序
@@ -1033,8 +1034,17 @@ function CustomerInfo({ conv }) {
       <div className="info__section">
         <h3 className="info__title">联系方式</h3>
         <dl className="kv">
-          <dt>号码</dt>
-          <dd className="num">{conv.contactNumber || '—'}</dd>
+          {conv.channel === 'line' ? (
+            <>
+              <dt>渠道</dt>
+              <dd>LINE（没有手机号）</dd>
+            </>
+          ) : (
+            <>
+              <dt>号码</dt>
+              <dd className="num">{conv.contactNumber || '—'}</dd>
+            </>
+          )}
           <dt>所属号</dt>
           <dd>{conv.accountName || '—'}</dd>
         </dl>
@@ -1364,6 +1374,7 @@ function ChatPane({
           <div className="chat-head__name">{name}</div>
           <div className="chat-head__sub">
             {conv?.contactNumber && conv.contactName && <span className="num">{conv.contactNumber}</span>}
+            {conv?.channel === 'line' && <span>LINE</span>}
             {conv?.accountName && <span className="chat-head__acct">经 {conv.accountName}</span>}
             {conv && !isAdmin && <AssigneeText assignee={conv.assignee} />}
             {conv && <ConvState conv={conv} showActive replyMode={replyMode} />}

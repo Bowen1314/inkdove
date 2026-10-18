@@ -207,6 +207,12 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
           )}
         </div>
 
+        {/* LINE 没有文件消息：1MB 以内的 jpg、png 按图片发，其他文件发成下载链接（30 天有效） */}
+        {conv.channel === 'line' && (
+          <div className="field__hint">
+            LINE 发不了文件：1MB 以内的 jpg、png 按图片发，其他文件会发成一条带文件名和下载链接的消息，链接 30 天内有效。
+          </div>
+        )}
         {/* 人工回复的号没有机器人可暂停 */}
         {!conv.botPaused && !manual && <div className="field__hint">发送后机器人会暂停这个会话。</div>}
       </div>

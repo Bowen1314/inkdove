@@ -1,8 +1,11 @@
 // F15：给 WAHA 拉大文件用的内部签名下载地址 http://<inkdove 主机名>:<端口>/internal/files/<id>?token=<过期秒>.<签名>
 // 签名是 HMAC-SHA256(INKDOVE_SESSION_SECRET, "inkdove-file:<id>:<过期秒>")，只对这一个文件、在过期前有效（默认 10 分钟）。
+// LINE 官方帐号发图片、文件用的是同一个路由的公网地址（publicFileUrl）：INKDOVE_PUBLIC_BASE_URL 开头，30 天有效。
+// LINE 在客户打开聊天时才去取图片，可能是几天以后，10 分钟不够。
 import crypto from 'node:crypto';
 
 export const SIGNED_URL_TTL_MS = 10 * 60 * 1000;
+export const PUBLIC_FILE_URL_TTL_MS = 30 * 24 * 3600 * 1000;
 
 const mac = (secret, fileId, exp) =>
   crypto.createHmac('sha256', String(secret)).update(`inkdove-file:${fileId}:${exp}`).digest('base64url');
@@ -28,4 +31,13 @@ export function verifyFileToken(secret, fileId, token, { now = Date.now() } = {}
 export function internalFileUrl(config, fileId, opts) {
   const token = signFileToken(config.sessionSecret, fileId, opts);
   return `http://${config.proxyRelayHost}:${config.port}/internal/files/${encodeURIComponent(fileId)}?token=${token}`;
+}
+
+/**
+ * 公网能访问的签名地址（INKDOVE_PUBLIC_BASE_URL 开头，默认 30 天有效）：LINE 官方帐号发图片时给 LINE 去取，
+ * 发其他文件时作为下载链接发给客户。token 和 internalFileUrl 的一样，同一个 /internal/files 路由校验
+ */
+export function publicFileUrl(config, fileId, { now = Date.now(), ttlMs = PUBLIC_FILE_URL_TTL_MS } = {}) {
+  const token = signFileToken(config.sessionSecret, fileId, { now, ttlMs });
+  return `${config.publicBaseUrl}/internal/files/${encodeURIComponent(fileId)}?token=${token}`;
 }

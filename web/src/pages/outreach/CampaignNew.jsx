@@ -165,7 +165,10 @@ export default function CampaignNew() {
   const navigate = useNavigate();
   const confirm = useConfirm();
   const { isAdmin } = useAuth();
-  const { accounts } = useAccounts();
+  const { accounts: allAccounts } = useAccounts();
+  // LINE 官方帐号只能给加了好友的人发消息，按手机号找不到人，不能外联群发：不列出来（服务端也会拒绝）
+  const accounts = useMemo(() => (allAccounts == null ? allAccounts : allAccounts.filter((a) => a.channel !== 'line')), [allAccounts]);
+  const lineCount = (allAccounts || []).length - (accounts || []).length;
   const fileRef = useRef(null);
 
   const [step, setStep] = useState(0);
@@ -452,6 +455,8 @@ export default function CampaignNew() {
         <Spinner /> 正在加载号码…
       </div>
     );
+  } else if (!accounts.length && lineCount > 0) {
+    accountsBody = <div className="muted">LINE 官方帐号不能外联群发（LINE 只能给加了好友的人发消息），没有可以用来外联的号。</div>;
   } else if (!accounts.length) {
     accountsBody = (
       <div className="muted">
@@ -488,6 +493,9 @@ export default function CampaignNew() {
       mode === 'single'
         ? `${fmtNum(file.lines)} 个号码都由这个号发。`
         : `每个号约分到 ${fmtNum(perAccount)} 个（共 ${fmtNum(file.lines)} 行号码，去掉无效和跳过的之后平均分）。`;
+  }
+  if (lineCount > 0 && accounts?.length) {
+    accountsHint = `${accountsHint ? `${accountsHint}` : ''}LINE 官方帐号不能外联群发（只能给加了好友的人发消息），没有列出。`;
   }
 
   const step2 = (

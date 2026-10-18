@@ -64,10 +64,14 @@ const MODE_OPTIONS = REPLY_MODES.map(({ value, label }) => ({ value, label }));
 const modeDesc = (m) => REPLY_MODES.find((x) => x.value === m)?.desc || '';
 const scopeLabel = (s) => REPLY_SCOPES.find((x) => x.value === (s === 'allowlist' ? 'allowlist' : 'all'))?.label;
 
+/** LINE 官方帐号的客户只有 userId、没有手机号：按号码的回复范围、白名单、黑名单都用不上（服务端也一律当范围内） */
+const LINE_SCOPE_TEXT = '全部客户。LINE 官方帐号只收得到加了好友的人发来的消息，客户没有手机号，白名单和黑名单用不上。';
+
 /**
  * 号详情的「回复」分组。admin：回复方式（Segmented，即时生效）、persona、回复范围、黑白名单（走保存栏）；
  * agent：同样几项只读展示（PUT /api/accounts/:id 对 agent 一律 403）。
  * 回复范围和名单对两种回复方式都生效（范围外的消息不保存），persona 自动回复和推荐回复都用，所以一直显示。
+ * LINE 官方帐号没有回复范围和名单，只显示一句说明。
  * globalSettings：admin 才拿得到，用来在 persona 占位里显示全局设置。
  */
 export default function ReplySection({ account, setAccount, globalSettings, isAdmin }) {
@@ -92,17 +96,25 @@ function ReplyReadOnly({ account }) {
           <div className="muted numbers-readonly">使用全局设置</div>
         )}
       </SettingsRow>
-      <SettingsRow inline label="回复范围">
-        <span>{scopeLabel(account.scope)}</span>
-      </SettingsRow>
-      {account.scope === 'allowlist' && (
-        <SettingsRow inline label="白名单">
-          <span className="num">{allowCount} 个号码</span>
+      {account.channel === 'line' ? (
+        <SettingsRow label="回复范围">
+          <div className="muted numbers-readonly">{LINE_SCOPE_TEXT}</div>
         </SettingsRow>
+      ) : (
+        <>
+          <SettingsRow inline label="回复范围">
+            <span>{scopeLabel(account.scope)}</span>
+          </SettingsRow>
+          {account.scope === 'allowlist' && (
+            <SettingsRow inline label="白名单">
+              <span className="num">{allowCount} 个号码</span>
+            </SettingsRow>
+          )}
+          <SettingsRow inline label="黑名单">
+            <span className="num">{blockCount} 个号码</span>
+          </SettingsRow>
+        </>
       )}
-      <SettingsRow inline label="黑名单">
-        <span className="num">{blockCount} 个号码</span>
-      </SettingsRow>
     </SettingsSection>
   );
 }
@@ -215,69 +227,77 @@ function ReplyForm({ account, setAccount, globalSettings }) {
         />
       </SettingsRow>
 
-      <SettingsRow label="回复范围" hint="范围外的号码，消息不会被回复，也不会保存到后台。群聊一律不回复。">
-        <div className="choice-list" role="radiogroup" aria-label="回复范围">
-          {REPLY_SCOPES.map((o) => (
-            <label key={o.value} className="choice">
-              <input
-                type="radio"
-                className="radio"
-                name={`scope-${account.id}`}
-                value={o.value}
-                checked={draft.scope === o.value}
-                onChange={() => set('scope', o.value)}
-              />
-              <span className="choice__text">
-                <span>{o.label}</span>
-                <span className="choice__desc">{o.desc}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </SettingsRow>
-
-      {draft.scope === 'allowlist' && (
-        <SettingsRow label="白名单" htmlFor="rp-allow" hint="每行一个号码，带国家码，例如 8613800138000 或 +1 415 555 0100。">
-          <textarea
-            id="rp-allow"
-            className="textarea input--mono"
-            rows={6}
-            value={draft.allowlist}
-            placeholder={'8613800138000\n+1 415 555 0100'}
-            onChange={(e) => set('allowlist', e.target.value)}
-            spellCheck={false}
-            aria-describedby="rp-allow-meta"
-          />
-          <div className="numbers-list-meta" id="rp-allow-meta">
-            {allowCount === 0 ? (
-              <span className="text-warning">白名单是空的，机器人不会回复任何人（外联对象除外）。</span>
-            ) : (
-              <span />
-            )}
-            <span className="num">{allowCount} 个号码</span>
-          </div>
+      {account.channel === 'line' ? (
+        <SettingsRow label="回复范围" hint="群聊、多人聊天一律不回复。">
+          <div className="muted numbers-readonly">{LINE_SCOPE_TEXT}</div>
         </SettingsRow>
-      )}
+      ) : (
+        <>
+          <SettingsRow label="回复范围" hint="范围外的号码，消息不会被回复，也不会保存到后台。群聊一律不回复。">
+            <div className="choice-list" role="radiogroup" aria-label="回复范围">
+              {REPLY_SCOPES.map((o) => (
+                <label key={o.value} className="choice">
+                  <input
+                    type="radio"
+                    className="radio"
+                    name={`scope-${account.id}`}
+                    value={o.value}
+                    checked={draft.scope === o.value}
+                    onChange={() => set('scope', o.value)}
+                  />
+                  <span className="choice__text">
+                    <span>{o.label}</span>
+                    <span className="choice__desc">{o.desc}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </SettingsRow>
 
-      <SettingsRow
-        label="黑名单"
-        htmlFor="rp-block"
-        hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复，适合填家人、朋友。"
-      >
-        <textarea
-          id="rp-block"
-          className="textarea input--mono"
-          rows={6}
-          value={draft.blocklist}
-          placeholder="8613900139000"
-          onChange={(e) => set('blocklist', e.target.value)}
-          spellCheck={false}
-        />
-        <div className="numbers-list-meta">
-          <span />
-          <span className="num">{blockCount} 个号码</span>
-        </div>
-      </SettingsRow>
+          {draft.scope === 'allowlist' && (
+            <SettingsRow label="白名单" htmlFor="rp-allow" hint="每行一个号码，带国家码，例如 8613800138000 或 +1 415 555 0100。">
+              <textarea
+                id="rp-allow"
+                className="textarea input--mono"
+                rows={6}
+                value={draft.allowlist}
+                placeholder={'8613800138000\n+1 415 555 0100'}
+                onChange={(e) => set('allowlist', e.target.value)}
+                spellCheck={false}
+                aria-describedby="rp-allow-meta"
+              />
+              <div className="numbers-list-meta" id="rp-allow-meta">
+                {allowCount === 0 ? (
+                  <span className="text-warning">白名单是空的，机器人不会回复任何人（外联对象除外）。</span>
+                ) : (
+                  <span />
+                )}
+                <span className="num">{allowCount} 个号码</span>
+              </div>
+            </SettingsRow>
+          )}
+
+          <SettingsRow
+            label="黑名单"
+            htmlFor="rp-block"
+            hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复，适合填家人、朋友。"
+          >
+            <textarea
+              id="rp-block"
+              className="textarea input--mono"
+              rows={6}
+              value={draft.blocklist}
+              placeholder="8613900139000"
+              onChange={(e) => set('blocklist', e.target.value)}
+              spellCheck={false}
+            />
+            <div className="numbers-list-meta">
+              <span />
+              <span className="num">{blockCount} 个号码</span>
+            </div>
+          </SettingsRow>
+        </>
+      )}
 
       <SaveBar dirty={dirty} saving={saving} onDiscard={() => setDraft(replyDraft(account))} />
     </SettingsSection>
@@ -342,9 +362,11 @@ function NotifyReadOnly({ account }) {
       <SettingsRow inline label="邮件通知">
         <OnOff on={!!account.notify?.email?.enabled} />
       </SettingsRow>
-      <SettingsRow inline label="WhatsApp 通知">
-        <OnOff on={!!account.notify?.whatsapp?.enabled} />
-      </SettingsRow>
+      {account.channel !== 'line' && (
+        <SettingsRow inline label="WhatsApp 通知">
+          <OnOff on={!!account.notify?.whatsapp?.enabled} />
+        </SettingsRow>
+      )}
     </SettingsSection>
   );
 }
@@ -369,6 +391,8 @@ function NotifyForm({ account, setAccount, globalSettings }) {
   const errOf = (k) => (showErrors ? errors[k] : undefined);
   const savedEmailOn = !!account.notify?.email?.enabled;
   const savedWaOn = !!account.notify?.whatsapp?.enabled;
+  // LINE 官方帐号发不了 WhatsApp 通知（服务端拒绝开启）；万一已经开着，开关留着让人关掉
+  const isLine = account.channel === 'line';
   const anyNotify = draft.emailEnabled || draft.waEnabled;
   // null = 不知道（全局设置还没拿到）
   const emailConfigured = globalSettings ? !!globalSettings.email?.provider : emailBlocked ? false : null;
@@ -489,11 +513,21 @@ function NotifyForm({ account, setAccount, globalSettings }) {
         </SettingsRow>
       )}
 
-      <SettingsRow inline label="WhatsApp 通知" hint="用这个号发给下面的号码；这个号码发来的消息不会被自动回复">
-        <Switch checked={draft.waEnabled} onChange={(v) => set('waEnabled', v)} label="开启 WhatsApp 通知" />
-      </SettingsRow>
+      {isLine && !draft.waEnabled ? (
+        <SettingsRow inline label="WhatsApp 通知" hint="WhatsApp 通知要由这个号发给一个手机号，LINE 官方帐号发不了，请用邮件通知">
+          <span className="muted nowrap">不支持</span>
+        </SettingsRow>
+      ) : (
+        <SettingsRow
+          inline
+          label="WhatsApp 通知"
+          hint={isLine ? 'LINE 官方帐号发不了 WhatsApp 通知，请关掉，改用邮件通知' : '用这个号发给下面的号码；这个号码发来的消息不会被自动回复'}
+        >
+          <Switch checked={draft.waEnabled} onChange={(v) => set('waEnabled', v)} label="开启 WhatsApp 通知" />
+        </SettingsRow>
+      )}
 
-      {draft.waEnabled && (
+      {draft.waEnabled && !isLine && (
         <SettingsRow
           label="接收通知的号码"
           htmlFor="nt-wa"

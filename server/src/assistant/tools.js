@@ -47,7 +47,7 @@ const STATE_LABEL = {
   failed: '连接失败',
   configured: '已配置',
 };
-const CHANNEL_LABEL = { waha: '扫码连接', meta: 'Meta 官方接口' };
+const CHANNEL_LABEL = { waha: '扫码连接', meta: 'Meta 官方接口', line: 'LINE 官方帐号' };
 const REPLY_MODE_LABEL = { off: '人工回复', auto: '自动回复' };
 const UNASSIGNED = '未分配';
 const DELETED_MEMBER = '已删除的成员';

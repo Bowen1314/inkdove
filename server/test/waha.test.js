@@ -157,6 +157,7 @@ describe('WAHA 号', () => {
       'assignedAt',
       'assignee',
       'botPaused',
+      'channel',
       'contactName',
       'contactNumber',
       'draft',

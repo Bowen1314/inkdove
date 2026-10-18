@@ -6,7 +6,8 @@ import { DEFAULT_META_API_VERSION, boolField, normalizeEmails, normalizeNumbers,
 import { badRequest, HttpError, isPlainObject, nowIso, safeJsonParse } from './util.js';
 import { releaseLostAccess } from './wa/assign.js';
 
-export const CHANNELS = ['waha', 'meta'];
+/** 接入方式：waha 扫码、meta Meta 官方 Cloud API、line LINE 官方帐号（LINE Messaging API） */
+export const CHANNELS = ['waha', 'meta', 'line'];
 /**
  * 回复方式：off 人工回复（只存消息，不调用模型；业务员需要时在会话页手动要推荐回复）、auto 自动回复。
  * v0.3.0 还有 suggest（客户来消息自动起草推荐回复），已取消：库里存的、PUT 收到的、导入文件里的 suggest 都按 off
@@ -35,6 +36,8 @@ function defaultConfig(channel) {
       channel === 'meta'
         ? { phoneNumberId: '', apiVersion: DEFAULT_META_API_VERSION, verifyToken: '', accessToken: '', appSecret: '' }
         : null,
+    // LINE Developers Console 里 Messaging API channel 的 Channel ID、Channel secret、长期 Channel access token
+    line: channel === 'line' ? { channelId: '', channelSecret: '', accessToken: '' } : null,
     notify: { email: { enabled: false, to: [] }, whatsapp: { enabled: false, number: '' } },
   };
 }
@@ -57,6 +60,7 @@ export function rowToAccount(r) {
     replyMode: REPLY_MODES.includes(replyMode) ? replyMode : replyModeOfLegacy(autoReply),
     waha: base.waha ? { proxy: { ...base.waha.proxy, ...(c.waha?.proxy || {}) } } : null,
     meta: base.meta ? { ...base.meta, ...(c.meta || {}) } : null,
+    line: base.line ? { ...base.line, ...(c.line || {}) } : null,
     notify: {
       email: { ...base.notify.email, ...(c.notify?.email || {}) },
       whatsapp: { ...base.notify.whatsapp, ...(c.notify?.whatsapp || {}) },
@@ -80,9 +84,15 @@ export function metaConfigured(acc) {
   return !!(m && m.phoneNumberId && m.accessToken && m.appSecret && m.verifyToken);
 }
 
+/** LINE 官方帐号：Channel ID、Channel secret、Channel access token 三项都填了视为 configured */
+export function lineConfigured(acc) {
+  const l = acc.line;
+  return !!(l && l.channelId && l.channelSecret && l.accessToken);
+}
+
 /**
- * 对外视图：密钥不回传。viewer 是 agent 时再去掉 Meta 的 verifyToken 和通知的收件人（邮箱、号码），
- * 这些只有 admin 能看能改
+ * 对外视图：密钥不回传（Meta 的 token、app secret，LINE 的 channel secret、access token 只给「设没设」）。
+ * viewer 是 agent 时再去掉 Meta 的 verifyToken 和通知的收件人（邮箱、号码），这些只有 admin 能看能改
  * @param {any} acc
  * @param {any} config
  * @param {any} status
@@ -127,6 +137,14 @@ export function publicAccount(acc, config, status, viewer = null) {
           webhookUrl: `${config.publicBaseUrl}/webhooks/meta/${acc.id}`,
         }
       : null,
+    line: acc.line
+      ? {
+          channelId: acc.line.channelId,
+          channelSecretSet: !!acc.line.channelSecret,
+          accessTokenSet: !!acc.line.accessToken,
+          webhookUrl: `${config.publicBaseUrl}/webhooks/line/${acc.id}`,
+        }
+      : null,
     notify: {
       email: { enabled: acc.notify.email.enabled, to: hide ? [] : [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: hide ? '' : acc.notify.whatsapp.number },
@@ -144,6 +162,7 @@ function storedConfig(acc) {
     blocklist: acc.blocklist,
     waha: acc.waha,
     meta: acc.meta,
+    line: acc.line,
     notify: acc.notify,
   });
 }
@@ -194,7 +213,8 @@ const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
 
 /**
  * 号的部分更新。接口层面整个 PUT 只有 admin 能调（agent 一律 403，见 routes/accounts.js）；
- * isAdmin=false 时 name、waha.proxy、meta.* 仍然拒绝，留作第二道防线。
+ * isAdmin=false 时 name、waha.proxy、meta.*、line.* 仍然拒绝，留作第二道防线。
+ * LINE 官方帐号不能开 WhatsApp 通知（通知要由这个号发给一个 WhatsApp 号码，LINE 发不了），只拦「开启」。
  * 回复方式：replyMode（off / auto）；suggest 按 off 处理（兼容 v0.3.0 的客户端），其他值 400。
  * 也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
  * @param {any} current 内部对象
@@ -258,6 +278,19 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (m.accessToken !== undefined) a.meta.accessToken = str(m.accessToken, 'meta.accessToken', 2000).trim();
     if (m.appSecret !== undefined) a.meta.appSecret = str(m.appSecret, 'meta.appSecret', 500).trim();
   }
+  if (patch.line !== undefined && patch.line !== null) {
+    const l = patch.line;
+    if (!isPlainObject(l)) throw badRequest('line 必须是对象');
+    adminOnly();
+    if (a.channel !== 'line') throw badRequest('只有 LINE 官方帐号才有这些字段');
+    if (l.channelId !== undefined) {
+      const v = str(l.channelId, 'line.channelId', 100).trim();
+      if (v && !/^\d+$/.test(v)) throw badRequest('Channel ID 只能是数字');
+      a.line.channelId = v;
+    }
+    if (l.channelSecret !== undefined) a.line.channelSecret = str(l.channelSecret, 'line.channelSecret', 500).trim();
+    if (l.accessToken !== undefined) a.line.accessToken = str(l.accessToken, 'line.accessToken', 2000).trim();
+  }
   if (patch.notify !== undefined) {
     const p = patch.notify;
     if (!isPlainObject(p)) throw badRequest('notify 必须是对象');
@@ -276,7 +309,13 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (p.whatsapp !== undefined) {
       const w = p.whatsapp;
       if (!isPlainObject(w)) throw badRequest('notify.whatsapp 必须是对象');
-      if (w.enabled !== undefined) a.notify.whatsapp.enabled = boolField(w.enabled, 'notify.whatsapp.enabled');
+      if (w.enabled !== undefined) {
+        const on = boolField(w.enabled, 'notify.whatsapp.enabled');
+        if (on && !a.notify.whatsapp.enabled && a.channel === 'line') {
+          throw badRequest('LINE 官方帐号发不了 WhatsApp 通知，请用邮件通知', 'whatsapp_notify_unsupported');
+        }
+        a.notify.whatsapp.enabled = on;
+      }
       if (w.number !== undefined) {
         if (typeof w.number !== 'string' && typeof w.number !== 'number') throw badRequest('notify.whatsapp.number 必须是字符串');
         a.notify.whatsapp.number = String(w.number).replace(/\D+/g, '');
@@ -294,6 +333,7 @@ export const ACCOUNTS_EXPORT_VERSION = 1;
 export function exportAccount(acc) {
   const px = acc.waha?.proxy;
   const m = acc.meta;
+  const l = acc.line;
   return {
     name: acc.name,
     channel: acc.channel,
@@ -324,6 +364,7 @@ export function exportAccount(acc) {
           appSecret: m.appSecret,
         }
       : null,
+    line: l ? { channelId: l.channelId, channelSecret: l.channelSecret, accessToken: l.accessToken } : null,
     notify: {
       email: { enabled: acc.notify.email.enabled, to: [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: acc.notify.whatsapp.number },
@@ -341,7 +382,7 @@ export function exportAccount(acc) {
  * 都在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON
  * @param {{emailReady:boolean, globalProxyReady?:boolean}} o
- * @returns {{name:string, channel:'waha'|'meta', config:any, notices?:string[]}[]}
+ * @returns {{name:string, channel:'waha'|'meta'|'line', config:any, notices?:string[]}[]}
  */
 export function parseAccountsExport(doc, { emailReady, globalProxyReady = false }) {
   if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
@@ -358,10 +399,11 @@ export function parseAccountsExport(doc, { emailReady, globalProxyReady = false 
       const name = str(item.name ?? '', 'name', 100).trim();
       if (!name) throw badRequest('name 不能为空');
       label += `（${name}）`;
-      if (!CHANNELS.includes(item.channel)) throw badRequest('channel 只能是 waha 或 meta');
-      // applyAccountPatch 在这两种情况下的提示不带字段名，先拦下来
-      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，Meta 号应为 null');
-      if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，扫码号应为 null');
+      if (!CHANNELS.includes(item.channel)) throw badRequest('channel 只能是 waha、meta 或 line');
+      // applyAccountPatch 在这几种情况下的提示不带字段名，先拦下来
+      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，其他接入方式应为 null');
+      if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，其他接入方式应为 null');
+      if (item.channel !== 'line' && item.line != null) throw badRequest('line 只有 LINE 官方帐号才有，其他接入方式应为 null');
       const draft = { name, channel: item.channel, ...defaultConfig(item.channel) };
       // 没配发信方式时，开着的邮件通知先关掉再校验（拷一份，不改解析出来的原文件内容）；
       // notify 不是对象之类的格式问题仍交给 applyAccountPatch 报错
@@ -411,7 +453,7 @@ export function createAccountStore(db, config) {
     bySession(name) {
       return rowToAccount(db.prepare("SELECT * FROM accounts WHERE channel = 'waha' AND session_name = ?").get(name));
     },
-    /** @param {{name:string, channel:'waha'|'meta', sessionName?:string, config?:any}} p */
+    /** @param {{name:string, channel:'waha'|'meta'|'line', sessionName?:string, config?:any}} p */
     create({ name, channel, sessionName, config: cfg }) {
       const id = newAccountId();
       const acc = { ...defaultConfig(channel), ...(cfg || {}) };
@@ -434,33 +476,43 @@ export function createAccountStore(db, config) {
     },
     /**
      * 导入：在一个事务里逐个新建（新 id、新 session 名，不启动 WAHA）。名称可以重复；
-     * Meta 号的 phoneNumberId 和已有的号、或文件里前面的号重复时跳过（空的不算重复）。
-     * @param {{name:string, channel:'waha'|'meta', config:any, notices?:string[]}[]} items 已经过 parseAccountsExport 校验；
+     * Meta 号的 phoneNumberId、LINE 官方帐号的 Channel ID 和已有的号、或文件里前面的号重复时跳过（空的不算重复）。
+     * @param {{name:string, channel:'waha'|'meta'|'line', config:any, notices?:string[]}[]} items 已经过 parseAccountsExport 校验；
      *   notices 是导入时自动调整过什么的说明，原样带到返回的 created 项里
      */
     importMany(items) {
       return db.transaction(() => {
+        // 去重的键：meta:<phoneNumberId>、line:<channelId>
+        const keyOf = (channel, cfg) =>
+          channel === 'meta' && cfg.meta?.phoneNumberId
+            ? `meta:${cfg.meta.phoneNumberId}`
+            : channel === 'line' && cfg.line?.channelId
+              ? `line:${cfg.line.channelId}`
+              : '';
         /** @type {Map<string, {name:string, inFile:boolean}>} */
-        const pnids = new Map();
+        const seen = new Map();
         for (const a of store.list()) {
-          if (a.channel === 'meta' && a.meta.phoneNumberId) pnids.set(a.meta.phoneNumberId, { name: a.name, inFile: false });
+          const k = keyOf(a.channel, a);
+          if (k) seen.set(k, { name: a.name, inFile: false });
         }
         const created = [];
         const skipped = [];
         for (const it of items) {
-          const pnid = it.channel === 'meta' ? it.config.meta.phoneNumberId : '';
-          const dup = pnid && pnids.get(pnid);
+          const key = keyOf(it.channel, it.config);
+          const dup = key && seen.get(key);
           if (dup) {
+            const isLine = it.channel === 'line';
+            const what = isLine ? `Channel ID ${it.config.line.channelId}` : `phoneNumberId ${it.config.meta.phoneNumberId}`;
             skipped.push({
               name: it.name,
               reason: dup.inFile
-                ? `phoneNumberId ${pnid} 和文件里前面的号「${dup.name}」重复，只导入了前面那个`
-                : `phoneNumberId ${pnid} 已经被号「${dup.name}」使用，同一个 Meta 号码不重复导入`,
+                ? `${what} 和文件里前面的号「${dup.name}」重复，只导入了前面那个`
+                : `${what} 已经被号「${dup.name}」使用，同一个${isLine ? ' LINE 官方帐号' : ' Meta 号码'}不重复导入`,
             });
             continue;
           }
           const acc = store.create(it);
-          if (pnid) pnids.set(pnid, { name: acc.name, inFile: true });
+          if (key) seen.set(key, { name: acc.name, inFile: true });
           created.push({ id: acc.id, name: acc.name, ...(it.notices?.length ? { notices: it.notices } : {}) });
         }
         return { created, skipped };
