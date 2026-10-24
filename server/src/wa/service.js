@@ -38,6 +38,7 @@ import {
   wahaVoiceSeconds,
 } from './media.js';
 import { createMediaStore } from './media-store.js';
+import { createDocExtractor, DOC_CONTEXT_CHARS, DOC_CONTEXT_FILES, DOC_EXTRACT_MAX_BYTES, DOC_TEXT_MAX_CHARS, docKindOf, DocExtractError, EXTRACT_ERRORS } from './doc-extract.js';
 import {
   isInvalidReplyToken,
   isLineQuotaError,
@@ -670,6 +671,10 @@ export function createWaService(ctx, opts = {}) {
   const mediaStore = createMediaStore(config.dataDir);
   /** @type {Set<{promise:Promise<any>, ac:AbortController}>} 正在下载存盘的媒体（关闭时中止） */
   const mediaJobs = new Set();
+  /** 客户发来的文件提取文字（worker 线程里解析） */
+  const docs = createDocExtractor({ timeoutMs: opts.docExtractTimeoutMs, workerUrl: opts.docExtractWorkerUrl });
+  /** @type {Set<Promise<void>>} 正在提取文字的文件（关闭时等它们收尾） */
+  const docJobs = new Set();
   // 上次进程退出时没下完的：半截文件删掉，消息记为下载失败
   try {
     mediaStore.cleanTmp();
@@ -677,6 +682,11 @@ export function createWaService(ctx, opts = {}) {
       `UPDATE messages SET media = json_set(media, '$.stored', 'failed', '$.error', '下载被中断（服务重启），请在手机上查看')
        WHERE media IS NOT NULL AND json_valid(media) AND json_extract(media, '$.stored') = 'pending'`,
     ).run();
+    // 提取文字到一半进程退出了的：记为失败（文件还在，业务员可以下载了看）
+    db.prepare(
+      `UPDATE messages SET media = json_set(media, '$.extract', json(?))
+       WHERE media IS NOT NULL AND json_valid(media) AND json_extract(media, '$.extract.status') = 'pending'`,
+    ).run(JSON.stringify({ status: 'failed', error: '提取被中断（服务重启）' }));
   } catch (err) {
     log.warn(`[wa] 清理没下完的媒体出错：${err?.message || err}`);
   }
@@ -1615,9 +1625,81 @@ export function createWaService(ctx, opts = {}) {
         log.error(`[wa] 媒体存盘出错：${err?.stack || err}`);
         return { stored: 'failed', error: String(err?.message || err) };
       })
+      .then((result) => {
+        if (result.stored === 'ok' && media.type === 'document' && !closed) startDocExtract(msgId, media, result);
+        return result;
+      })
       .finally(() => mediaJobs.delete(job));
     mediaJobs.add(job);
     return job.promise;
+  }
+
+  // ---------------- 客户发来的文件提取文字 ----------------
+  // 文件存下以后在 worker 线程里解析（doc-extract.js），不调模型，回复方式是什么都提取。文字存进 doc_text（最多 DOC_TEXT_MAX_CHARS 字），
+  // 结果记在 media.extract：{status: pending | ok | no_text | failed | too_large | unsupported | skipped, chars?, truncated?, error?}。
+  // 给业务员在会话里看，也放进推荐回复和转人工草稿（见 customerFilesFor）；自动回复不看，客户发文件照旧转人工。
+  // 日志里不写文件名和文件内容
+
+  function patchExtract(msgId, extract) {
+    db.prepare("UPDATE messages SET media = json_set(media, '$.extract', json(?)) WHERE id = ? AND media IS NOT NULL AND json_valid(media)").run(
+      JSON.stringify(extract),
+      msgId,
+    );
+  }
+
+  function startDocExtract(msgId, media, saved) {
+    const kind = docKindOf(media.filename, saved.mime || media.mime);
+    if (!kind) return void patchExtract(msgId, { status: 'unsupported' });
+    if ((saved.size ?? 0) > DOC_EXTRACT_MAX_BYTES) return void patchExtract(msgId, { status: 'too_large' });
+    patchExtract(msgId, { status: 'pending' });
+    const job = (async () => {
+      let extract;
+      let text = null;
+      try {
+        // 客户在下载期间撤回了的，不再提取
+        if (db.prepare('SELECT revoked_at FROM messages WHERE id = ?').get(msgId)?.revoked_at) {
+          extract = { status: 'skipped' };
+        } else {
+          const full = await docs.extract(await mediaStore.read(saved.fileKey), kind);
+          text = clip(full, DOC_TEXT_MAX_CHARS);
+          extract = { status: 'ok', chars: text.length, truncated: full.length > text.length };
+        }
+      } catch (err) {
+        const known = err instanceof DocExtractError;
+        extract = known && err.status === 'no_text' ? { status: 'no_text' } : { status: 'failed', error: known ? err.message : EXTRACT_ERRORS.failed };
+        if (!known) log.warn(`[wa] 消息 ${msgId} 的文件提取文字出错：${err?.message || err}`);
+      }
+      // 关闭时被杀掉的：留在 pending，下次启动时记为中断
+      if (closed) return;
+      if (extract.status !== 'ok') log.info(`[wa] 消息 ${msgId} 的文件没有提取到文字（${extract.status}）`);
+      db.prepare("UPDATE messages SET doc_text = ?, media = json_set(media, '$.extract', json(?)) WHERE id = ? AND media IS NOT NULL AND json_valid(media)").run(
+        text,
+        JSON.stringify(extract),
+        msgId,
+      );
+    })()
+      .catch((err) => log.warn(`[wa] 记录消息 ${msgId} 的文件提取结果出错：${err?.message || err}`))
+      .finally(() => docJobs.delete(job));
+    docJobs.add(job);
+  }
+
+  /**
+   * 推荐回复、转人工草稿带上的客户文件：会话最近 30 条消息里提取到文字、没撤回的客户文件，最多最近 DOC_CONTEXT_FILES 个，
+   * 每个最多 DOC_CONTEXT_CHARS 字。按时间先后，[{name, text, truncated}]
+   */
+  function customerFilesFor(convId) {
+    return db
+      .prepare(
+        `SELECT media, doc_text FROM (SELECT seq, media, doc_text, revoked_at FROM messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 30)
+         WHERE doc_text IS NOT NULL AND revoked_at IS NULL ORDER BY seq DESC LIMIT ?`,
+      )
+      .all(convId, DOC_CONTEXT_FILES)
+      .reverse()
+      .map((r) => {
+        const media = safeJsonParse(r.media, null) || {};
+        const text = clip(r.doc_text, DOC_CONTEXT_CHARS);
+        return { name: media.filename || '未命名文件', text, truncated: text.length < r.doc_text.length || !!media.extract?.truncated };
+      });
   }
 
   // ---------------- F4：语音、图片转文字 ----------------
@@ -1990,7 +2072,8 @@ export function createWaService(ctx, opts = {}) {
    * 「我方的消息」只认发送成功的（status=sent，和清推荐、F12 首次回复一样）：发送失败的客户没收到，不算我方回过，
    * 也不进最近对话和 ourMessages——客户问了、业务员回的那条没发出去时，照旧按「客户这次的消息」起草，不当成跟进。
    * 撤回过的消息两边都当没有：客户撤回的不算客户说过的话，我方撤回的客户看不到了，也不算我方回过。
-   * @returns {{message:string, history:any[], followUp:boolean, ourMessages:string[]}|null}
+   * customerFiles 是客户最近发来、提取到文字的文件（见 customerFilesFor）。
+   * @returns {{message:string, history:any[], followUp:boolean, ourMessages:string[], customerFiles:any[]}|null}
    */
   function suggestInput(convId) {
     const lastOut = db
@@ -2012,6 +2095,7 @@ export function createWaService(ctx, opts = {}) {
         history: historyBefore(convId, rows[0].seq, { sentOnly: true }),
         followUp: false,
         ourMessages: [],
+        customerFiles: customerFilesFor(convId),
       };
     }
     const lastIn = db
@@ -2037,6 +2121,7 @@ export function createWaService(ctx, opts = {}) {
       history: historyBefore(convId, Number.MAX_SAFE_INTEGER, { sentOnly: true }),
       followUp: true,
       ourMessages: ours,
+      customerFiles: customerFilesFor(convId),
     };
   }
 
@@ -2108,6 +2193,7 @@ export function createWaService(ctx, opts = {}) {
       previous,
       followUp,
       ourMessages: c.extra,
+      customerFiles: input.customerFiles || [],
     });
     const active = new Set(c.activeFiles.map((f) => f.id));
     const fileIds = normalizeFileIds(out?.fileIds)
@@ -2159,6 +2245,7 @@ export function createWaService(ctx, opts = {}) {
         persona: acc.persona && acc.persona.trim() ? acc.persona : settings().reply.persona,
         agentProfile,
         reason,
+        customerFiles: customerFilesFor(convId),
       });
       const active = new Set(c.activeFiles.map((f) => f.id));
       const fileIds = normalizeFileIds(out?.fileIds)
@@ -3910,6 +3997,17 @@ export function createWaService(ctx, opts = {}) {
     },
 
     /**
+     * 客户发来的文件提取出的文字（GET …/messages/:messageId/doc-text 用）→ {text, chars, truncated}。没有这条消息、不是这个会话的、
+     * 没提取到文字的 404
+     */
+    docText(convId, messageId) {
+      const row = db.prepare('SELECT media, doc_text FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
+      if (!row || row.doc_text == null) throw notFound('这条消息没有提取到的文字');
+      const extract = safeJsonParse(row.media, null)?.extract || {};
+      return { text: row.doc_text, chars: row.doc_text.length, truncated: !!extract.truncated };
+    },
+
+    /**
      * 标为已处理（人工回复的号的会话页用）：只清待处理和待处理原因，还开着的转人工记录填上 resumedAt（F12：这次转人工结束了）。
      * 不动暂停状态和草稿（恢复机器人会清草稿，人工回复的号正靠草稿干活）
      */
@@ -3989,7 +4087,7 @@ export function createWaService(ctx, opts = {}) {
     },
     /** 测试用：防抖和处理都结束了 */
     idle() {
-      return timers.size === 0 && processing.size === 0 && converting.size === 0 && mediaJobs.size === 0;
+      return timers.size === 0 && processing.size === 0 && converting.size === 0 && mediaJobs.size === 0 && docJobs.size === 0;
     },
     async close() {
       closed = true;
@@ -4002,6 +4100,9 @@ export function createWaService(ctx, opts = {}) {
       const jobs = [...mediaJobs];
       for (const j of jobs) j.ac.abort(new Error('closing'));
       await Promise.allSettled(jobs.map((j) => j.promise));
+      // 正在提取文字的 worker 杀掉（留在 pending，下次启动时记为中断）
+      await docs.close();
+      await Promise.allSettled([...docJobs]);
       await tgSyncChain;
       await Promise.allSettled([...tgPollers.keys()].map((id) => tgStop(id)));
       for (const t of tgTypingTimers.values()) clearInterval(t);

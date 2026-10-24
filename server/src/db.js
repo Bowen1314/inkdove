@@ -441,6 +441,8 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
   // 老库启动时自动加列，没编辑过的为 NULL ----
   ensureColumn(db, 'messages', 'edited_at', 'TEXT');
   ensureColumn(db, 'messages', 'edit_history', 'TEXT');
+// ---- 客户发来的文件提取出的文字（wa/service.js 的 startDocExtract），最多 2 万字；提取的状态记在 media.extract。老库启动时自动加列 ----
+ensureColumn(db, 'messages', 'doc_text', 'TEXT');
 
   // ---- 可选的向量检索（后台计算和检索见 kb/vectors.js） ----
   // 每个条目按 kb/vectors.js 的 entrySegments 分成一段或几段，每段一行（chunk 从 0 起）。kind 现在只有 entry。

@@ -227,11 +227,11 @@ export function createRealAi(getSettings, opts = {}) {
      * F2a：给人工起草回复（agentProfile 是会话负责人的「我的资料」，没有就不带）。返回 {text, fileIds, entryIds}
      * （entryIds 是模型给的 used_entry_ids 原样，调用方再规整、只留这次放进提示词的条目）；解析不了时抛错
      */
-    async draft({ message, history, entries, files = [], filesTruncated = false, profile, persona, agentProfile = null, reason }) {
+    async draft({ message, history, entries, files = [], filesTruncated = false, profile, persona, agentProfile = null, reason, customerFiles = [] }) {
       const { text } = await call(
         'draft',
         buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, agentProfile }),
-        buildDraftUserPrompt({ message, history, reason }),
+        buildDraftUserPrompt({ message, history, reason, customerFiles }),
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('草稿输出无法解析');
@@ -240,7 +240,7 @@ export function createRealAi(getSettings, opts = {}) {
 
     /**
      * 推荐回复：草稿的提示词骨架，加公司话术、个人话术和点按钮那个人的「我的资料」（agentProfile）；previous 是「换一条」时的
-     * 上一条推荐；followUp / ourMessages 是跟进（我方说的是最后一条）时的说法和我方后来发的消息。
+     * 上一条推荐；followUp / ourMessages 是跟进（我方说的是最后一条）时的说法和我方后来发的消息；customerFiles 是客户最近发来的文件里提取的文字。
      * 返回 {text, fileIds, entryIds}（同 draft）；解析不了时抛错
      */
     async suggest({
@@ -257,11 +257,12 @@ export function createRealAi(getSettings, opts = {}) {
       previous = '',
       followUp = false,
       ourMessages = [],
+      customerFiles = [],
     }) {
       const { text } = await call(
         'suggest',
         buildDraftSystemPrompt({ profile, persona, entries, files, filesTruncated, companyPrompt, stylePrompt, agentProfile }),
-        buildSuggestUserPrompt({ message, history, previous, followUp, ourMessages }),
+        buildSuggestUserPrompt({ message, history, previous, followUp, ourMessages, customerFiles }),
       );
       const data = extractJson(text);
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('推荐回复输出无法解析');

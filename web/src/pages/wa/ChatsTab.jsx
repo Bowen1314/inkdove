@@ -5,6 +5,7 @@ import {
   BookPlus,
   Check,
   CornerDownLeft,
+  FileText,
   Languages,
   ListChecks,
   MessagesSquare,
@@ -49,7 +50,7 @@ import {
   suggestErrorText,
   translationProviderLabel,
 } from '../../lib/labels.js';
-import { fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
+import { fmtChars, fmtDay, fmtHm, fmtShortTime, fmtTime } from '../../lib/format.js';
 import { SaveToKbModal } from './SaveToKbModal.jsx';
 import { AttachmentCard, SendFileButton, sendFilesInOrder } from './ChatFiles.jsx';
 import { DraftBasis } from './DraftBasis.jsx';
@@ -456,6 +457,91 @@ function revokedText(r) {
   return [head, r.by === 'member' ? r.name : '', fmtTime(r.at)].filter(Boolean).join(' · ');
 }
 
+/** 文件提取文字没成的原因（不支持的类型、撤回前没提取的不显示） */
+const DOC_EXTRACT_NOTE = {
+  no_text: '文件里没有可提取的文字（可能是扫描件或图片）',
+  too_large: '文件超过 10MB，没有提取文字',
+};
+
+/**
+ * 客户发来的文件提取出的文字（服务端存下文件后在后台提取，列表轮询会带回新状态）：提取中、提取到了（点开再取文字）、没提取到的原因。
+ * 提取到的文字也会放进推荐回复和转人工草稿
+ */
+function DocText({ convId, msg }) {
+  const ex = msg.media.extract;
+  const [open, setOpen] = useState(false);
+  const [st, setSt] = useState({ loading: false, error: null, data: null });
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+  const load = async () => {
+    setSt({ loading: true, error: null, data: null });
+    try {
+      const data = await api.messageDocText(convId, msg.id, { silent: true });
+      if (aliveRef.current) setSt({ loading: false, error: null, data });
+    } catch (e) {
+      // 401 已经跳登录页
+      if (aliveRef.current) setSt({ loading: false, error: e?.status === 401 ? null : e, data: null });
+    }
+  };
+
+  if (ex.status === 'pending') {
+    return (
+      <div className="msg__doc-note">
+        <Spinner size={12} />
+        正在提取文件里的文字…
+      </div>
+    );
+  }
+  if (ex.status !== 'ok') {
+    const note = ex.status === 'failed' ? `没能提取文字：${ex.error || '文件解析失败'}` : DOC_EXTRACT_NOTE[ex.status];
+    return note ? <div className="msg__doc-note">{note}</div> : null;
+  }
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !st.data && !st.loading) load();
+  };
+  return (
+    <>
+      <button type="button" className={`msg__link msg__doc-toggle${open ? ' is-on' : ''}`} onClick={toggle} aria-expanded={open}>
+        <FileText aria-hidden="true" />
+        {open ? '收起提取的文字' : `已提取文字 · ${fmtChars(ex.chars)}`}
+      </button>
+      {open && (
+        <div className="translation msg__doc-text" aria-live="polite" aria-busy={st.loading || undefined}>
+          {st.loading && (
+            <span className="translation__state">
+              <Spinner size={12} />
+              正在读取…
+            </span>
+          )}
+          {!st.loading && st.error && (
+            <span className="translation__state translation__state--error">
+              {st.error.message || '读取失败'}
+              <button type="button" className="translation__retry" onClick={load}>
+                重试
+              </button>
+            </span>
+          )}
+          {st.data && (
+            <>
+              <span className="translation__label">
+                从文件里提取的文字{st.data.truncated ? '（文件较长，只存了前面 2 万字）' : ''}
+              </span>
+              <span className="translation__text msg__doc-body">{st.data.text}</span>
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** 改前的各个版本，最早的（原文）在前；服务端只留原文和最近几次，中间的丢掉了 */
 function EditHistory({ history }) {
   return (
@@ -608,6 +694,7 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
       {/* F15：发出的文件显示成文件卡片；带说明文字（caption）时文字另起一个气泡 */}
       {msg.attachment && <AttachmentCard attachment={msg.attachment} />}
       {mediaBlock && <MessageMedia convId={convId} msg={msg} onLoad={onMediaLoad} />}
+      {kind === 'customer' && msg.media?.extract && <DocText convId={convId} msg={msg} />}
       {showText && (
         <div className="msg__bubble">
           {MediaIcon && (

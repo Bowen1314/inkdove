@@ -184,7 +184,10 @@ describe('客户媒体存盘和显示', () => {
         data: { Message: { documentMessage: { fileName: '报价单 "v2".pdf' } } },
       });
       assert.equal(m.text, '[文件]');
-      assert.deepEqual(m.media, { type: 'document', mime: 'application/pdf', size: pdf.length, filename: '报价单 "v2".pdf', stored: 'ok', error: null });
+      // 存下后接着提取文字（这个假 PDF 解析不了，取的时候可能还在提取），见 doc-extract.test.js
+      const { extract, ...media } = m.media;
+      assert.deepEqual(media, { type: 'document', mime: 'application/pdf', size: pdf.length, filename: '报价单 "v2".pdf', stored: 'ok', error: null });
+      assert.ok(['pending', 'failed'].includes(extract?.status), JSON.stringify(extract));
       const raw = rawMedia(m.id);
       assert.ok(!storedFiles().some((f) => f.includes('报价单')), '磁盘上不用客户给的文件名');
       assert.match(raw.fileKey, /^[a-f0-9]{32}$/);

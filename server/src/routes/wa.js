@@ -80,6 +80,11 @@ export function waRouter(ctx) {
       next(err.status === 404 ? notFound('文件不存在') : err);
     });
   });
+  // 客户发来的文件提取出的文字 → {text, chars, truncated}，权限同看这个会话；没提取到文字的 404
+  router.get('/conversations/:id/messages/:messageId/doc-text', (req, res) => {
+    const c = loadConv(req);
+    res.json(wa.docText(c.id, String(req.params.messageId)));
+  });
   // 改负责人（只有 admin）：{userId: 成员 id | null} → 完整的 Conversation
   router.put('/conversations/:id/assignee', (req, res) => {
     requireAdmin(req);

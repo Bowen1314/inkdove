@@ -401,6 +401,8 @@ export const api = {
    */
   messageMediaUrl: (convId, messageId, { download = false } = {}) =>
     `/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/media${download ? '?download=1' : ''}`,
+  /** 客户发来的文件提取出的文字 → {text, chars, truncated}；没提取到的 404 */
+  messageDocText: (convId, messageId, o) => get(`/api/wa/conversations/${enc(convId)}/messages/${enc(messageId)}/doc-text`, o),
   /**
    * 手动要一条推荐回复（「推荐回复」「换一条」），号是什么回复方式都能用 → {draft: {kind, text, fileIds, createdAt}}。
    * 生成期间我方已经发了消息时照样返回，但不存进会话。错误码见 lib/labels.js 的 SUGGEST_ERROR；默认不弹 toast，由调用方提示

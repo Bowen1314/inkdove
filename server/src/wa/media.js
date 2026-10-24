@@ -99,6 +99,11 @@ export function publicMedia(raw) {
     out.filename = raw.filename ?? null;
     out.stored = raw.stored ?? null;
     out.error = raw.error ?? null;
+    // 文件提取文字的结果（只有客户发来的文件有）：{status, chars?, truncated?, error?}，文字本身另外取（…/doc-text）
+    if (raw.extract && typeof raw.extract === 'object') {
+      const e = raw.extract;
+      out.extract = { status: e.status ?? null, chars: Number.isFinite(e.chars) ? e.chars : null, truncated: !!e.truncated, error: e.error ?? null };
+    }
   }
   return out;
 }

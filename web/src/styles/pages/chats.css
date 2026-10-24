@@ -464,6 +464,30 @@
   height: 13px;
   flex: none;
 }
+/* 客户发来的文件提取出的文字：文件卡片下面一行「已提取文字 · N 字」，点开在下面显示，太长的在框里滚动 */
+.msg__doc-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.msg__doc-toggle {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
+.msg__doc-toggle.is-on {
+  color: var(--text);
+}
+.msg__doc-text {
+  margin: 2px 0;
+}
+.msg__doc-body {
+  max-height: 240px;
+  overflow-y: auto;
+}
 /* 改过的消息：时间后面的「已编辑」一直显示（不是悬停才出现），颜色同时间；点开在气泡下面列出改前的内容 */
 .msg__edited {
   color: inherit;
