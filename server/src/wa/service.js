@@ -109,6 +109,8 @@ export const MAX_DRAFT_ENTRIES = 10;
 const MAX_SUGGEST_MESSAGES = 20;
 /** 推荐回复跟进时：客户最后那段消息之后我方发的消息，最多单独列出（并参与检索）最近几条 */
 const MAX_FOLLOWUP_MESSAGES = 8;
+/** 推荐回复前最多识别「客户这次的消息」里最近几条语音、图片（见 recognizeForSuggest） */
+export const SUGGEST_RECOGNIZE_MAX = 3;
 const MAX_CAPTION = 1024;
 /** 手机号配对码：同一个号两次申请的最小间隔（连点会让 WhatsApp 风控这个号），等会话进入 SCAN_QR_CODE 的上限 */
 export const PAIR_CODE_INTERVAL_MS = 20_000;
@@ -192,6 +194,21 @@ export const isNonPrivateChat = (chatId) =>
 export function localDay(d = new Date()) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 语音、图片识别不了：code 是 media_unsupported（格式、大小、时长超出识别范围）或 media_failed（取不到文件、模型出错） */
+class RecognizeError extends Error {
+  constructor(code, why) {
+    super(why);
+    this.code = code;
+  }
+}
+
+/** 存下的 media 列 → 能识别的类型（voice / image），不能的返回 null。老数据没有 f4Type，按显示类型算 */
+function recognizeTypeOf(media) {
+  if (!media) return null;
+  if ('f4Type' in media) return media.f4Type === 'voice' || media.f4Type === 'image' ? media.f4Type : null;
+  return media.type === 'voice' || media.type === 'image' ? media.type : null;
 }
 
 function mediaLabel(mime) {
@@ -622,6 +639,8 @@ export function createWaService(ctx, opts = {}) {
   const recentSent = new Map();
   /** @type {Map<string, number>} 会话 id → 正在识别的语音/图片条数（F4）；识别完之前不处理这个会话 */
   const converting = new Map();
+  /** @type {Set<string>} 正在识别的消息 id（自动回复的识别和点「推荐回复」时的识别共用，同一条不识别两次） */
+  const recognizing = new Set();
   /**
    * @type {Map<string, {user:{id:string, name:string}|null, at:number}>} `<号 id>|<消息 ID>` → 业务员在墨鸽里点的撤回（保留 10 分钟）。
    * 经 WAHA 撤回后 WhatsApp 会推回一条 message.revoked（fromMe、source=api），可能比接口响应先到，也可能接口超时了撤回其实成了：
@@ -1518,10 +1537,15 @@ export function createWaService(ctx, opts = {}) {
   }
 
   // ---------------- 客户媒体存盘 ----------------
-  /** 新消息里 media 列的初始值：stored=pending，下载完改成 ok / too_large / failed */
+  /**
+   * 新消息里 media 列的初始值：stored=pending，下载完改成 ok / too_large / failed。
+   * f4Type、seconds 留给点「推荐回复」时识别语音、图片用（见 recognizeForSuggest；老数据没有这两项）
+   */
   function storedMediaJson(media) {
     return JSON.stringify({
       type: media.type,
+      f4Type: media.f4Type || null,
+      seconds: Number.isFinite(media.seconds) ? media.seconds : null,
       mime: media.mime || null,
       size: null,
       filename: media.filename || null,
@@ -1703,12 +1727,26 @@ export function createWaService(ctx, opts = {}) {
   }
 
   // ---------------- F4：语音、图片转文字 ----------------
+  // 结果记在 media.recognize：{status: ok | failed | unsupported, error?}。failed、unsupported 的不再重试（点「推荐回复」时也不再识别）；
+  // 今天的模型调用到上限、没识别的不记，之后还能识别
+
+  function patchRecognize(msgId, recognize) {
+    db.prepare("UPDATE messages SET media = json_set(media, '$.recognize', json(?)) WHERE id = ? AND media IS NOT NULL AND json_valid(media)").run(
+      JSON.stringify(recognize),
+      msgId,
+    );
+  }
+
+  const recognizeFailure = (err) => ({ status: err.code === 'media_unsupported' ? 'unsupported' : 'failed', error: err.message });
+
   function startConversion(acc, convId, msgId, m, saved) {
     converting.set(convId, (converting.get(convId) || 0) + 1);
+    recognizing.add(msgId);
     // F12：识别用的模型调用记到这个号和会话上
     llmScope({ accountId: acc.id, conversationId: convId }, () => convertMedia(acc, convId, msgId, m, saved))
       .catch((err) => log.error(`[wa] 识别会话 ${logConv(convId)} 的${m.media.f4Type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
       .finally(() => {
+        recognizing.delete(msgId);
         const n = (converting.get(convId) || 1) - 1;
         if (n > 0) converting.set(convId, n);
         else converting.delete(convId);
@@ -1730,6 +1768,76 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
+   * 识别前取文件并检查格式、大小、时长（自动回复的识别和点「推荐回复」时的识别共用）。
+   * 优先用存下的文件（saved 是存盘的结果，可以是还没完成的 promise），不重复下载；没存成、读不出来时用 download 再下载一次，
+   * 没给 download 的算取不到。超出识别范围抛 RecognizeError('media_unsupported')，取不到抛 RecognizeError('media_failed')。
+   * 服务正在关闭时返回 null
+   * @param {'voice'|'image'} type
+   * @param {{mime?:string|null, seconds?:number|null}} media
+   * @param {(() => Promise<{buffer:Buffer, mime?:string}>)|null} download
+   * @returns {Promise<{buffer:Buffer, mime:string}|null>}
+   */
+  async function loadForRecognition(type, media, saved, download) {
+    const limits = MEDIA_LIMITS[type];
+    if (type === 'image' && media.mime && !limits.mimes.includes(media.mime)) {
+      throw new RecognizeError('media_unsupported', `格式 ${media.mime} 不支持，只支持 jpeg、png、webp`);
+    }
+    if (type === 'voice' && media.seconds && media.seconds > limits.maxSeconds) {
+      throw new RecognizeError('media_unsupported', `语音 ${Math.round(media.seconds)} 秒，超过 3 分钟`);
+    }
+    let buffer = null;
+    let mime;
+    const tooBig = () => new RecognizeError('media_unsupported', `文件超过 ${Math.round(limits.maxBytes / 1024 / 1024)}MB`);
+    const stored = saved ? await saved : null;
+    // 服务正在关闭：存盘是被关闭中止的（返回失败），不要再用下面不受关闭控制的方式重新下载，也不写库（数据库马上要关）。
+    // 存盘状态留在 pending，下次启动时记为下载中断
+    if (closed) return null;
+    if (stored?.stored === 'too_large') throw tooBig();
+    if (stored?.stored === 'ok' && stored.fileKey) {
+      if (Number(stored.size) > limits.maxBytes) throw tooBig();
+      try {
+        buffer = await mediaStore.read(stored.fileKey);
+        mime = stored.mime;
+      } catch (err) {
+        log.warn(`[wa] 读存下的媒体文件失败${download ? '，改为重新下载' : ''}：${err?.message || err}`);
+        buffer = null;
+      }
+    }
+    if (!buffer) {
+      if (!download) throw new RecognizeError('media_failed', '存下的文件读不出来');
+      try {
+        ({ buffer, mime } = await download());
+      } catch (err) {
+        if (err instanceof TooLargeError || /文件太大/.test(String(err?.message))) throw tooBig();
+        throw new RecognizeError('media_failed', `下载失败：${err?.message || err}`);
+      }
+    }
+    mime = media.mime || baseMime(mime);
+    if (type === 'image' && !limits.mimes.includes(mime)) throw new RecognizeError('media_unsupported', `格式 ${mime || '未知'} 不支持，只支持 jpeg、png、webp`);
+    if (type === 'voice') {
+      const secs = media.seconds || oggDurationSeconds(buffer);
+      if (secs && secs > limits.maxSeconds) throw new RecognizeError('media_unsupported', `语音 ${Math.round(secs)} 秒，超过 3 分钟`);
+    }
+    return { buffer, mime };
+  }
+
+  /** 调模型转写语音或描述图片，返回文字（去掉首尾空白，截到存得下的长度）。模型出错、没返回内容时抛 RecognizeError('media_failed') */
+  async function recognizeText(type, { buffer, mime }) {
+    let text;
+    try {
+      text =
+        type === 'voice'
+          ? await ctx.ai.transcribe({ audio: buffer, mime: mime || 'audio/ogg', filename: `voice.${/mpeg|mp3/.test(mime) ? 'mp3' : /mp4|m4a|aac/.test(mime) ? 'm4a' : 'ogg'}` })
+          : await ctx.ai.describeImage({ mime, data: buffer.toString('base64') });
+    } catch (err) {
+      throw new RecognizeError('media_failed', err?.message || String(err));
+    }
+    text = clip(String(text || '').trim(), MAX_STORED_TEXT - 200);
+    if (!text) throw new RecognizeError('media_failed', '模型没有返回内容');
+    return text;
+  }
+
+  /**
    * 下载 → 检查大小、格式、时长 → 转写或描述 → 把占位消息改成文字（kind=text，等下一轮处理）。
    * 失败或超限：这条消息记为 handoff（media_failed / media_unsupported），needsHuman 并通知，不暂停（和原来的非文字消息一样）。
    */
@@ -1737,10 +1845,12 @@ export function createWaService(ctx, opts = {}) {
     const started = Date.now();
     const type = m.media.f4Type;
     const what = type === 'voice' ? '语音' : '图片';
-    const limits = MEDIA_LIMITS[type];
-    const fail = (code, why) => {
+    // mark：把结果记进 media.recognize（今天的次数到上限的不记）
+    const fail = (code, why, { mark = true } = {}) => {
+      if (closed) return;
+      if (mark) patchRecognize(msgId, recognizeFailure({ code, message: why }));
       const row = db.prepare('SELECT handled FROM messages WHERE id = ?').get(msgId);
-      if (!row || row.handled || closed) return;
+      if (!row || row.handled) return;
       const reason = code === 'media_unsupported' ? `${what}超出识别范围：${why}，已通知人工` : `${what}识别失败：${why}，已通知人工`;
       db.prepare("UPDATE messages SET handled = 1, bot_decision = 'handoff', decision_reason = ?, decision_code = ? WHERE id = ?").run(
         reason,
@@ -1754,46 +1864,15 @@ export function createWaService(ctx, opts = {}) {
     const conv = getConvRow(convId);
     if (!conv) return;
     const used = conv.llm_day === today ? conv.llm_calls : 0;
-    if (used + 1 > DAILY_LLM_LIMIT) return fail('media_failed', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`);
-    if (type === 'image' && m.media.mime && !limits.mimes.includes(m.media.mime)) {
-      return fail('media_unsupported', `格式 ${m.media.mime} 不支持，只支持 jpeg、png、webp`);
+    if (used + 1 > DAILY_LLM_LIMIT) return fail('media_failed', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`, { mark: false });
+    let loaded;
+    try {
+      loaded = await loadForRecognition(type, m.media, saved, () => downloadMedia(acc, m.media, MEDIA_LIMITS[type].maxBytes));
+    } catch (err) {
+      if (err instanceof RecognizeError) return fail(err.code, err.message);
+      throw err;
     }
-    if (type === 'voice' && m.media.seconds && m.media.seconds > limits.maxSeconds) {
-      return fail('media_unsupported', `语音 ${Math.round(m.media.seconds)} 秒，超过 3 分钟`);
-    }
-    let buffer = null;
-    let mime;
-    const tooBig = () => fail('media_unsupported', `文件超过 ${Math.round(limits.maxBytes / 1024 / 1024)}MB`);
-    // 优先用存盘下来的文件，不重复下载；没存成功（下载失败）再按原来的方式下载一次
-    const stored = saved ? await saved : null;
-    // 服务正在关闭：存盘是被关闭中止的（返回失败），不要再用下面不受关闭控制的方式重新下载，也不写库（数据库马上要关）。
-    // 存盘状态留在 pending，下次启动时记为下载中断
-    if (closed) return;
-    if (stored?.stored === 'too_large') return tooBig();
-    if (stored?.stored === 'ok' && stored.fileKey) {
-      if (Number(stored.size) > limits.maxBytes) return tooBig();
-      try {
-        buffer = await mediaStore.read(stored.fileKey);
-        mime = stored.mime;
-      } catch (err) {
-        log.warn(`[wa] 读存下的媒体文件失败，改为重新下载：${err?.message || err}`);
-        buffer = null;
-      }
-    }
-    if (!buffer) {
-      try {
-        ({ buffer, mime } = await downloadMedia(acc, m.media, limits.maxBytes));
-      } catch (err) {
-        if (err instanceof TooLargeError || /文件太大/.test(String(err?.message))) return tooBig();
-        return fail('media_failed', `下载失败：${err?.message || err}`);
-      }
-    }
-    mime = m.media.mime || baseMime(mime);
-    if (type === 'image' && !limits.mimes.includes(mime)) return fail('media_unsupported', `格式 ${mime || '未知'} 不支持，只支持 jpeg、png、webp`);
-    if (type === 'voice') {
-      const secs = m.media.seconds || oggDurationSeconds(buffer);
-      if (secs && secs > limits.maxSeconds) return fail('media_unsupported', `语音 ${Math.round(secs)} 秒，超过 3 分钟`);
-    }
+    if (!loaded) return;
     // 下载期间客户撤回了这条：不再拿去识别（撤回过的消息不进模型），handleRevoked 已经记为跳过
     if (db.prepare('SELECT revoked_at FROM messages WHERE id = ?').get(msgId)?.revoked_at) return;
     // 识别调用计入每会话每日 LLM 上限
@@ -1806,20 +1885,84 @@ export function createWaService(ctx, opts = {}) {
     );
     let text;
     try {
-      text =
-        type === 'voice'
-          ? await ctx.ai.transcribe({ audio: buffer, mime: mime || 'audio/ogg', filename: `voice.${/mpeg|mp3/.test(mime) ? 'mp3' : /mp4|m4a|aac/.test(mime) ? 'm4a' : 'ogg'}` })
-          : await ctx.ai.describeImage({ mime, data: buffer.toString('base64') });
+      text = await recognizeText(type, loaded);
     } catch (err) {
-      return fail('media_failed', err?.message || String(err));
+      if (err instanceof RecognizeError) return fail(err.code, err.message);
+      throw err;
     }
-    text = clip(String(text || '').trim(), MAX_STORED_TEXT - 200);
-    if (!text) return fail('media_failed', '模型没有返回内容');
     if (closed) return;
     const caption = type === 'image' && m.text ? `\n${clip(m.text, MAX_STORED_TEXT - 200)}` : '';
     const full = `[${what}] ${text}${caption}`;
     // 识别期间人工接管了的：占位消息已记为 skipped，只把文字补上给人看
-    db.prepare("UPDATE messages SET kind = 'text', text = ? WHERE id = ?").run(full, msgId);
+    db.prepare("UPDATE messages SET kind = 'text', text = ?, media = json_set(media, '$.recognize', json(?)) WHERE id = ?").run(
+      full,
+      JSON.stringify({ status: 'ok' }),
+      msgId,
+    );
+  }
+
+  // ---------------- 推荐回复前识别语音、图片 ----------------
+  /** 说明文字：没开识别时带说明文字的媒体存成文字消息（text 就是说明文字）；媒体消息的 text 是 [图片] 这样的标签，自动回复识别的占位消息是标签换行再加说明文字 */
+  const captionOf = (r) => (r.kind === 'text' ? r.text : r.text.includes('\n') ? r.text.slice(r.text.indexOf('\n') + 1) : '');
+
+  /**
+   * 点「推荐回复」「换一条」时，先把客户这次的消息（rows，见 suggestWindow）里还没识别的语音、图片识别成文字，起草时就能看到。
+   * 和自动回复的识别共用设置里的开关和模型：开了「识别语音」才识别语音，开了「识别图片」才识别图片。只识别存下了文件的，
+   * 最多最近 SUGGEST_RECOGNIZE_MAX 条，同时进行；每条计一次模型调用，今天剩下的次数先给起草留一次，不够的不识别（不记，之后还能识别）。
+   * 识别成了把消息改成文字（同自动回复：[语音] 转写的文字、[图片] 描述，后面接说明文字），存下的译文作废；
+   * 失败或超出识别范围记在 media.recognize，之后不再重试。不改消息的处理结果，不通知、不转人工；出错也不影响起草。
+   */
+  async function recognizeForSuggest(convId, rows, usedToday) {
+    const s = settings();
+    const on = { voice: !!s.media.voice, image: !!s.media.image };
+    if (!on.voice && !on.image) return;
+    const todo = [];
+    for (const row of rows) {
+      const media = safeJsonParse(row.media, null);
+      const type = recognizeTypeOf(media);
+      if (!type || !on[type] || media.stored !== 'ok' || media.recognize || recognizing.has(row.id)) continue;
+      // 老数据：自动回复识别过的没有 media.recognize，看文字
+      if (/^\[(语音|图片)\] /.test(row.text)) continue;
+      todo.push({ row, media, type });
+    }
+    const room = Math.min(SUGGEST_RECOGNIZE_MAX, DAILY_LLM_LIMIT - usedToday - 1);
+    if (room <= 0 || !todo.length) return;
+    await Promise.all(todo.slice(-room).map((t) => recognizeOne(convId, t)));
+  }
+
+  async function recognizeOne(convId, { row, media, type }) {
+    const what = type === 'voice' ? '语音' : '图片';
+    recognizing.add(row.id);
+    try {
+      const saved = { stored: 'ok', fileKey: media.fileKey, size: media.size, mime: media.mime };
+      const loaded = await loadForRecognition(type, { mime: baseMime(media.mime) || null, seconds: media.seconds ?? null }, saved, null);
+      if (!loaded) return;
+      // 取文件期间客户撤回了：不进模型
+      if (db.prepare('SELECT revoked_at FROM messages WHERE id = ?').get(row.id)?.revoked_at) return;
+      addLlmCalls(convId, 1);
+      const text = await recognizeText(type, loaded);
+      if (closed) return;
+      const caption = captionOf(row);
+      const full = `[${what}] ${text}${caption ? `\n${clip(caption, MAX_STORED_TEXT - 200)}` : ''}`;
+      // 识别期间客户撤回了、或者改了说明文字的不写（也不记结果，下次点的时候按改后的再识别）
+      const changed = db
+        .prepare(
+          "UPDATE messages SET kind = 'text', text = ?, translation = NULL, media = json_set(media, '$.recognize', json(?)) WHERE id = ? AND revoked_at IS NULL AND text = ?",
+        )
+        .run(full, JSON.stringify({ status: 'ok' }), row.id, row.text).changes;
+      // 一键翻译按客户最近的消息判断语言，文字变了就重新判断
+      if (changed) ctx.translationLanguages?.delete(convId);
+    } catch (err) {
+      if (closed) return;
+      if (!(err instanceof RecognizeError)) {
+        log.error(`[wa] 推荐回复前识别会话 ${logConv(convId)} 的${what}出错：${err?.stack || err}`);
+        return;
+      }
+      patchRecognize(row.id, recognizeFailure(err));
+      log.info(`[wa] 推荐回复前识别会话 ${logConv(convId)} 的${what}没有成功（${err.code}）`);
+    } finally {
+      recognizing.delete(row.id);
+    }
   }
 
   function scheduleFlush(convId, delayMs) {
@@ -2076,6 +2219,39 @@ export function createWaService(ctx, opts = {}) {
    * @returns {{message:string, history:any[], followUp:boolean, ourMessages:string[], customerFiles:any[]}|null}
    */
   function suggestInput(convId) {
+    const w = suggestWindow(convId);
+    if (!w) return null;
+    const message = w.rows.map((r) => r.text).join('\n');
+    if (!w.followUp) {
+      return {
+        message,
+        history: historyBefore(convId, w.rows[0].seq, { sentOnly: true }),
+        followUp: false,
+        ourMessages: [],
+        customerFiles: customerFilesFor(convId),
+      };
+    }
+    const ours = db
+      .prepare(
+        "SELECT text, attachment FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL AND seq > ? ORDER BY seq DESC LIMIT ?",
+      )
+      .all(convId, w.lastIn, MAX_FOLLOWUP_MESSAGES)
+      .reverse()
+      .map(contextText);
+    return {
+      message,
+      history: historyBefore(convId, Number.MAX_SAFE_INTEGER, { sentOnly: true }),
+      followUp: true,
+      ourMessages: ours,
+      customerFiles: customerFilesFor(convId),
+    };
+  }
+
+  /**
+   * 推荐回复的「客户这次的消息」是哪几条（规则见 suggestInput）：{rows, followUp, lastIn}，rows 带 id、seq、kind、text、media。
+   * 会话里一条客户消息都没有时为 null
+   */
+  function suggestWindow(convId) {
     const lastOut = db
       .prepare(
         "SELECT COALESCE(MAX(seq), 0) n FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL",
@@ -2084,20 +2260,11 @@ export function createWaService(ctx, opts = {}) {
     const inSince = (after, upTo) =>
       db
         .prepare(
-          "SELECT seq, text FROM messages WHERE conversation_id = ? AND direction = 'in' AND revoked_at IS NULL AND seq > ? AND seq <= ? ORDER BY seq",
+          "SELECT id, seq, kind, text, media FROM messages WHERE conversation_id = ? AND direction = 'in' AND revoked_at IS NULL AND seq > ? AND seq <= ? ORDER BY seq",
         )
         .all(convId, after, upTo);
     let rows = inSince(lastOut, Number.MAX_SAFE_INTEGER);
-    if (rows.length) {
-      rows = rows.slice(-MAX_SUGGEST_MESSAGES);
-      return {
-        message: rows.map((r) => r.text).join('\n'),
-        history: historyBefore(convId, rows[0].seq, { sentOnly: true }),
-        followUp: false,
-        ourMessages: [],
-        customerFiles: customerFilesFor(convId),
-      };
-    }
+    if (rows.length) return { rows: rows.slice(-MAX_SUGGEST_MESSAGES), followUp: false, lastIn: null };
     const lastIn = db
       .prepare("SELECT MAX(seq) n FROM messages WHERE conversation_id = ? AND direction = 'in' AND revoked_at IS NULL")
       .get(convId).n;
@@ -2109,20 +2276,7 @@ export function createWaService(ctx, opts = {}) {
       .get(convId, lastIn).n;
     rows = inSince(outBefore, lastIn).slice(-MAX_SUGGEST_MESSAGES);
     if (!rows.length) return null;
-    const ours = db
-      .prepare(
-        "SELECT text, attachment FROM messages WHERE conversation_id = ? AND direction = 'out' AND status = 'sent' AND revoked_at IS NULL AND seq > ? ORDER BY seq DESC LIMIT ?",
-      )
-      .all(convId, lastIn, MAX_FOLLOWUP_MESSAGES)
-      .reverse()
-      .map(contextText);
-    return {
-      message: rows.map((r) => r.text).join('\n'),
-      history: historyBefore(convId, Number.MAX_SAFE_INTEGER, { sentOnly: true }),
-      followUp: true,
-      ourMessages: ours,
-      customerFiles: customerFilesFor(convId),
-    };
+    return { rows, followUp: true, lastIn };
   }
 
   /** 「我的资料」里 AI 要用的字段；全没填时为 null（提示词里就不放【业务员信息】） */
@@ -3931,6 +4085,7 @@ export function createWaService(ctx, opts = {}) {
      * 跟进时记 followUp: true（客户来了新消息就作废，见 clearFollowUpSuggestion）。
      * 用了资料的，起草期间负责人变了、又不是点按钮的那个人，或者这个人被停用、删除了，照样返回、但不存
      * （点按钮的人本来就可能不是负责人，比如管理员替业务员的会话点，负责人没变时照存）。
+     * 起草前先识别客户这次的消息里还没识别的语音、图片（见 recognizeForSuggest）。
      * 不改消息的处理结果，不动防抖。
      * @returns {Promise<{draft:any}>}
      */
@@ -3940,13 +4095,18 @@ export function createWaService(ctx, opts = {}) {
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
       if (!acc) throw badRequest('这个会话所属的号已删除', 'account_deleted');
       if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
-      const input = suggestInput(convId);
-      if (!input) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
+      const win = suggestWindow(convId);
+      if (!win) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
       const today = localDay();
       const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
       if (usedToday + 1 > DAILY_LLM_LIMIT) {
         throw new HttpError(429, 'llm_daily_limit', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次），明天再试`);
       }
+      // 识别的模型调用也记到这个号和会话上
+      await llmScope({ accountId: acc.id, conversationId: convId }, () => recognizeForSuggest(convId, win.rows, usedToday));
+      // 识别期间客户把消息都撤回了之类
+      const input = suggestInput(convId);
+      if (!input) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
       const current = parseDraft(conv.draft);
       // 当前草稿是不是跟进推荐：followUp 只在库里，parseDraft 去掉了，读原始 JSON（老数据的推荐没有这一项，当不是跟进）
       const currentFollowUp = current?.kind === 'suggest' && safeJsonParse(conv.draft, null)?.followUp === true;

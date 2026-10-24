@@ -458,6 +458,21 @@ function revokedText(r) {
 }
 
 /** 文件提取文字没成的原因（不支持的类型、撤回前没提取的不显示） */
+/**
+ * 客户发来的语音、图片没识别成文字的原因（识别成了的，文字就是消息本身）。点「推荐回复」时会先识别，失败和超出范围的不再重试
+ */
+function RecognizeNote({ msg }) {
+  const r = msg.media?.recognize;
+  if (!r || (r.status !== 'failed' && r.status !== 'unsupported')) return null;
+  const what = msg.media.type === 'voice' ? '语音' : '图片';
+  return (
+    <div className="msg__doc-note">
+      {r.status === 'unsupported' ? `${what}超出识别范围` : `${what}没能识别`}
+      {r.error ? `：${r.error}` : ''}
+    </div>
+  );
+}
+
 const DOC_EXTRACT_NOTE = {
   no_text: '文件里没有可提取的文字（可能是扫描件或图片）',
   too_large: '文件超过 10MB，没有提取文字',
@@ -695,6 +710,7 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
       {msg.attachment && <AttachmentCard attachment={msg.attachment} />}
       {mediaBlock && <MessageMedia convId={convId} msg={msg} onLoad={onMediaLoad} />}
       {kind === 'customer' && msg.media?.extract && <DocText convId={convId} msg={msg} />}
+      {kind === 'customer' && <RecognizeNote msg={msg} />}
       {showText && (
         <div className="msg__bubble">
           {MediaIcon && (

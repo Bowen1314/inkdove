@@ -882,6 +882,173 @@ describe('推荐回复（只能手动要）', () => {
     });
   });
 
+  describe('点推荐回复时先识别语音、图片', () => {
+    const setMedia = (media) => t.req('PUT', '/api/settings', { body: { media } });
+    const allOff = { voice: false, image: false };
+    /** 客户发一条媒体（可带说明文字），等它有处理结果、服务空闲 */
+    async function sendMedia(acc, chat, buffer, mimetype, body = '') {
+      const convId = convIdOf(acc, chat);
+      const n = msgRows(convId).length;
+      const r = await postWaha(t, wahaMessage({ from: chat, body, hasMedia: true, media: wahaFile(acc, buffer, mimetype), session: acc.waha.sessionName }));
+      assert.equal(r.status, 200);
+      await waitDecided(t, convId, n + 1);
+      await idle();
+      return convId;
+    }
+    const msgRows = (convId) => t.ctx.db.prepare("SELECT * FROM messages WHERE conversation_id = ? AND direction = 'in' ORDER BY seq").all(convId);
+
+    it('人工回复的号：先识别客户这次发来的语音和图片，起草看到识别出的文字；消息改成文字、记 recognize，不改处理结果、不通知；每条计一次模型调用，再点不再识别', async () => {
+      assert.equal((await setMedia({ voice: true, image: true, transcribeModel: 'whisper-1' })).status, 200);
+      try {
+        const chat = newChat();
+        const n = notices().length;
+        let convId = await sendMedia(manualAcc, chat, Buffer.from('保温杯 A100 有几种颜色'), 'audio/ogg; codecs=opus');
+        convId = await sendMedia(manualAcc, chat, Buffer.from('A100 黑色款'), 'image/jpeg', '这个有货吗');
+        // 老数据的 media 列没有 f4Type、seconds：按显示类型认
+        const img = msgRows(convId)[1];
+        const legacy = JSON.parse(img.media);
+        delete legacy.f4Type;
+        delete legacy.seconds;
+        t.ctx.db.prepare('UPDATE messages SET media = ? WHERE id = ?').run(JSON.stringify(legacy), img.id);
+        assert.equal(convRow(convId).llm_calls, 0, '收到时不识别');
+        const before = callCounts();
+
+        const r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1);
+        assert.equal(hooks.calls.describeImage, before.describeImage + 1);
+        assert.equal(hooks.args.transcribe.mime, 'audio/ogg');
+        assert.equal(hooks.args.suggest.message, '[语音] 保温杯 A100 有几种颜色\n[图片] 图片里写着："A100 黑色款"\n这个有货吗');
+        const [voice, image] = await getMessages(t, convId);
+        assert.equal(voice.text, '[语音] 保温杯 A100 有几种颜色');
+        assert.deepEqual(voice.media.recognize, { status: 'ok', error: null });
+        assert.equal(image.text, '[图片] 图片里写着："A100 黑色款"\n这个有货吗');
+        assert.deepEqual(image.media.recognize, { status: 'ok', error: null });
+        for (const m of [voice, image]) {
+          assert.equal(m.botDecision, 'skipped', '不改处理结果');
+          assert.equal(m.decisionReason, '这个号没开自动回复');
+        }
+        assert.equal(convRow(convId).llm_calls, 3, '识别两条 + 起草一次');
+        assert.equal((await getConv(t, convId)).needsHuman, false);
+        assert.equal(notices().length, n, '不发通知');
+        assert.equal(handoffCount(convId), 0);
+        assert.equal(fake.sentTo(chat).length, 0);
+
+        const again = await manual(convId);
+        assert.equal(again.status, 200);
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1, '识别过的不再识别');
+        assert.equal(hooks.calls.describeImage, before.describeImage + 1);
+        assert.equal(hooks.args.suggest.message, '[语音] 保温杯 A100 有几种颜色\n[图片] 图片里写着："A100 黑色款"\n这个有货吗');
+        assert.equal(convRow(convId).llm_calls, 4);
+        assert.ok(await idle());
+      } finally {
+        await setMedia(allOff);
+      }
+    });
+
+    it('识别失败、超出范围的记下原因、照样起草，之后不再重试；没开识别的类型不识别', async () => {
+      assert.equal((await setMedia({ voice: true, image: false, transcribeModel: 'whisper-1' })).status, 200);
+      try {
+        const chat = newChat();
+        let convId = await sendMedia(manualAcc, chat, Buffer.from('语音内容'), 'audio/ogg; codecs=opus');
+        convId = await sendMedia(manualAcc, chat, Buffer.from('jpeg-bytes'), 'image/jpeg');
+        const before = callCounts();
+        hooks.transcribe = () => {
+          throw new Error('转写服务不可用');
+        };
+        let r;
+        try {
+          r = await manual(convId);
+        } finally {
+          hooks.transcribe = null;
+        }
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1);
+        assert.equal(hooks.calls.describeImage, before.describeImage, '没开识别图片');
+        assert.equal(hooks.args.suggest.message, '[语音]\n[图片]');
+        let [voice, image] = await getMessages(t, convId);
+        assert.equal(voice.text, '[语音]');
+        assert.deepEqual(voice.media.recognize, { status: 'failed', error: '转写服务不可用' });
+        assert.equal(image.media.recognize, undefined);
+        assert.equal(convRow(convId).llm_calls, 2, '识别失败的那次也算');
+
+        // 开了识别图片：gif 不在识别范围，记 unsupported，不调模型、不计次数；失败过的语音不再重试
+        assert.equal((await setMedia({ image: true })).status, 200);
+        convId = await sendMedia(manualAcc, chat, Buffer.from('GIF89a'), 'image/gif');
+        r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1, '失败过的不再重试');
+        assert.equal(hooks.calls.describeImage, before.describeImage + 1, '只识别了那张 jpeg');
+        const msgs = await getMessages(t, convId);
+        [voice, image] = msgs;
+        assert.equal(voice.text, '[语音]');
+        assert.match(image.text, /^\[图片\] /);
+        assert.deepEqual(msgs[2].media.recognize, { status: 'unsupported', error: '格式 image/gif 不支持，只支持 jpeg、png、webp' });
+        assert.equal(msgs[2].text, '[图片]');
+        assert.equal(convRow(convId).llm_calls, 4, '识别一张 + 起草一次');
+      } finally {
+        await setMedia(allOff);
+      }
+    });
+
+    it('今天的模型调用只剩一次：留给起草，不识别、也不记，之后还能识别；最多识别最近 3 条', async () => {
+      assert.equal((await setMedia({ voice: true, transcribeModel: 'whisper-1' })).status, 200);
+      try {
+        const chat = newChat();
+        let convId;
+        for (let i = 1; i <= 4; i++) convId = await sendMedia(manualAcc, chat, Buffer.from(`第${i}条语音`), 'audio/ogg; codecs=opus');
+        t.ctx.db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(localDay(), DAILY_LLM_LIMIT - 1, convId);
+        const before = callCounts();
+        let r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe, '次数只够起草');
+        assert.equal(hooks.calls.suggest, before.suggest + 1);
+        assert.ok((await getMessages(t, convId)).every((m) => m.text === '[语音]' && m.media.recognize === undefined));
+
+        t.ctx.db.prepare('UPDATE conversations SET llm_calls = 0 WHERE id = ?').run(convId);
+        r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe + 3, '最多识别最近 3 条');
+        assert.equal(hooks.args.suggest.message, '[语音]\n[语音] 第2条语音\n[语音] 第3条语音\n[语音] 第4条语音');
+        r = await manual(convId);
+        assert.equal(hooks.calls.transcribe, before.transcribe + 4, '再点一次识别剩下的那条');
+        assert.equal(hooks.args.suggest.message, '[语音] 第1条语音\n[语音] 第2条语音\n[语音] 第3条语音\n[语音] 第4条语音');
+      } finally {
+        await setMedia(allOff);
+      }
+    });
+
+    it('自动回复的号收到时识别过的，点推荐回复不再识别；识别结果同样记 recognize', async () => {
+      assert.equal((await setMedia({ voice: true, transcribeModel: 'whisper-1' })).status, 200);
+      try {
+        const chat = newChat();
+        const before = callCounts();
+        const convId = await sendMedia(autoAcc, chat, Buffer.from('保温杯 A100 多少钱'), 'audio/ogg; codecs=opus');
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1);
+        const [m] = await getMessages(t, convId);
+        assert.equal(m.text, '[语音] 保温杯 A100 多少钱');
+        assert.deepEqual(m.media.recognize, { status: 'ok', error: null });
+        const r = await manual(convId);
+        assert.equal(r.status, 200, JSON.stringify(r.body));
+        assert.equal(hooks.calls.transcribe, before.transcribe + 1);
+        assert.match(hooks.args.suggest.message, /^\[语音\] 保温杯 A100 多少钱/);
+      } finally {
+        await setMedia(allOff);
+      }
+    });
+
+    it('没开识别：照旧不识别，起草用 [语音] 这样的标签', async () => {
+      const chat = newChat();
+      const convId = await sendMedia(manualAcc, chat, Buffer.from('没开识别的语音'), 'audio/ogg; codecs=opus');
+      const before = callCounts();
+      const r = await manual(convId);
+      assert.equal(r.status, 200, JSON.stringify(r.body));
+      assert.equal(hooks.calls.transcribe, before.transcribe);
+      assert.equal(hooks.args.suggest.message, '[语音]');
+      assert.equal(convRow(convId).llm_calls, 1);
+    });
+  });
+
   describe('公司话术和个人话术', () => {
     it('settings.suggest.companyPrompt：GET 返回、PUT 能改（最多 4000 字）；agent 改不了', async () => {
       let r = await t.req('PUT', '/api/settings', { body: { suggest: { companyPrompt: '称呼客户 Dear，结尾署名 Inkdove Team' } } });

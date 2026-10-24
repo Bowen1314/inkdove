@@ -167,7 +167,7 @@ describe('F4 语音和图片识别', () => {
       await waitDecided(t, cid(chat), 1);
       const [m] = await getMessages(t, cid(chat));
       assert.equal(m.text, '[语音] 保温杯 A100 多少钱');
-      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg', size: audio.length, filename: null, stored: 'ok', error: null });
+      assert.deepEqual(m.media, { type: 'voice', mime: 'audio/ogg', size: audio.length, filename: null, stored: 'ok', error: null, recognize: { status: 'ok', error: null } });
       const fileGets = fake.state.requests.filter((r) => r.path.startsWith('/api/files/') && r.path.includes(`F4MEDIA${fileSeq}.`));
       assert.equal(fileGets.length, 1, '存盘和识别共用一次下载');
       assert.equal(m.botDecision, 'replied');

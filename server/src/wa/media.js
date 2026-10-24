@@ -104,6 +104,10 @@ export function publicMedia(raw) {
       const e = raw.extract;
       out.extract = { status: e.status ?? null, chars: Number.isFinite(e.chars) ? e.chars : null, truncated: !!e.truncated, error: e.error ?? null };
     }
+    // 语音、图片识别的结果：{status: ok | failed | unsupported, error}（识别出的文字就是消息的 text）
+    if (raw.recognize && typeof raw.recognize === 'object') {
+      out.recognize = { status: raw.recognize.status ?? null, error: raw.recognize.error ?? null };
+    }
   }
   return out;
 }

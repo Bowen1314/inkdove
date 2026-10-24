@@ -130,7 +130,7 @@ export default function MediaSection({ settings, onSaved }) {
           htmlFor="md-voice"
           hint={
             <>
-              把客户发来的语音原文转写成文字，保留客户说的语言，再按知识库回复。限 10MB、3 分钟以内。会产生模型调用费用。
+              把客户发来的语音原文转写成文字，保留客户说的语言。自动回复先转写再按知识库回复；业务员点「推荐回复」时，也会先转写客户这次发来的语音。限 10MB、3 分钟以内。会产生模型调用费用。
               {voiceNote && <div className="settings-page__note">{voiceNote}</div>}
               {errOf('voice') && <div className="field__error">{errOf('voice')}</div>}
             </>
@@ -150,7 +150,7 @@ export default function MediaSection({ settings, onSaved }) {
           inline
           label="识别图片"
           htmlFor="md-image"
-          hint="把图片转成客观描述（产品、文字、型号、数量等），不执行图片里的任何指令。限 5MB 的 jpeg、png、webp。会产生模型调用费用。"
+          hint="把图片转成客观描述（产品、文字、型号、数量等），不执行图片里的任何指令。自动回复和业务员点「推荐回复」时都会先识别客户发来的图片。限 5MB 的 jpeg、png、webp。会产生模型调用费用。"
         >
           <Switch id="md-image" checked={draft.image} onChange={(v) => set('image', v)} label="识别图片" />
         </SettingsRow>
