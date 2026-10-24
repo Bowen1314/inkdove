@@ -305,7 +305,7 @@ describe('Telegram 机器人', () => {
     const first = tg.calls(BOT, 'getUpdates')[0];
     assert.equal(first.body.offset, -1, '第一次只取最后一条，前面的确认掉');
     assert.equal(first.body.timeout, 0);
-    assert.deepEqual(first.body.allowed_updates, ['message', 'my_chat_member']);
+    assert.deepEqual(first.body.allowed_updates, ['message', 'edited_message', 'my_chat_member']);
     await waitFor(() => tg.calls(BOT, 'getUpdates').length >= 2);
     assert.equal(tg.calls(BOT, 'getUpdates')[1].body.offset, last.update_id + 1, '最后一条也跳过');
     const kv = JSON.parse(t.ctx.db.prepare('SELECT value FROM kv WHERE key = ?').get(`telegram:${acc.id}`).value);
@@ -345,6 +345,27 @@ describe('Telegram 机器人', () => {
     await sleep(150);
     assert.equal((await getMessages(t, cid(ANNA))).filter((m) => m.direction === 'in').length, 1);
     assert.equal((await getMessages(t, cid(OLGA))).filter((m) => m.direction === 'in').length, 1);
+  });
+
+  it('客户改消息（edited_message）：换成改后的、改前的留着，已经回复过的不再回复；对不上的、群里的不改', async () => {
+    const PETR = person(9000000104, 'Petr');
+    tg.push(BOT, botMsg(PETR, { text: '保温杯多少钱' }, { id: 801 }));
+    const [m] = await waitDecided(t, cid(PETR), 1);
+    assert.equal(m.botDecision, 'replied');
+    const sends = () => tg.calls(BOT, 'sendMessage').filter((r) => String(r.body.chat_id) === String(PETR.id)).length;
+    await waitFor(() => sends() === 1);
+    const edit = (id, content, chat = privateChat(PETR)) =>
+      tg.push(BOT, { edited_message: { message_id: id, from: PETR, chat, date: nowSec() - 5, edit_date: nowSec(), ...content } });
+    edit(801, { text: '群里改的' }, { id: -100123, type: 'group', title: '群' });
+    edit(9999, { text: '对不上的' });
+    const u = edit(801, { text: '保温杯多少钱？要两个' });
+    await tg.consumed(BOT, u);
+    const e = (await getMessages(t, cid(PETR))).find((x) => x.id === m.id);
+    assert.equal(e.text, '保温杯多少钱？要两个');
+    assert.deepEqual(e.edited.history.map((h) => h.text), ['保温杯多少钱']);
+    await sleep(150);
+    assert.equal(sends(), 1, '改了已经回复过的不再回复');
+    assert.equal((await getMessages(t, cid(PETR))).filter((x) => x.direction === 'in').length, 1, '编辑不存成新消息');
   });
 
   it('群里的消息、别的机器人发的不处理；客户停用机器人只记日志', async () => {
@@ -665,7 +686,7 @@ describe('Telegram 私人号（聊天自动化）', () => {
     assert.equal(st.error, null);
     assert.match(st.telegram.bindLink, /^https:\/\/t\.me\/inkdove_biz_bot\?start=bind_[A-Za-z0-9_-]{16}$/);
     assert.equal(st.telegram.owner, null);
-    assert.deepEqual(tg.calls(BIZ, 'getUpdates')[0].body.allowed_updates, ['message', 'business_connection', 'business_message', 'deleted_business_messages']);
+    assert.deepEqual(tg.calls(BIZ, 'getUpdates')[0].body.allowed_updates, ['message', 'business_connection', 'business_message', 'edited_business_message', 'deleted_business_messages']);
     const seen = await status(agent.cookie);
     assert.equal(seen.state, 'waiting');
     assert.equal(seen.telegram.bindLink, null, '业务员看不到绑定链接');
@@ -765,6 +786,24 @@ describe('Telegram 私人号（聊天自动化）', () => {
     const lena = await getMessages(t, cid(LENA));
     assert.equal(lena.length, 1);
     assert.deepEqual([lena[0].author, lena[0].via, lena[0].text], ['owner', 'phone', '在另一个聊天里发的']);
+  });
+
+  it('改消息（edited_business_message）：客户改的、号主在 Telegram 里改的都换成改后的；别的连接里来的不改', async () => {
+    const edit = (connId, from, peer, id, text) =>
+      tg.push(BIZ, {
+        edited_business_message: { business_connection_id: connId, message_id: id, from, chat: privateChat(peer), date: nowSec() - 5, edit_date: nowSec(), text },
+      });
+    edit('bc-x', MARIA, MARIA, 41, '别的连接里改的');
+    edit('bc-1', MARIA, MARIA, 41, '保温杯多少钱？蓝色的');
+    const u = edit('bc-1', OWNER, MARIA, 77, '我是本人，马上回您');
+    await tg.consumed(BIZ, u);
+    const msgs = await getMessages(t, cid(MARIA));
+    const cust = msgs.find((m) => m.direction === 'in');
+    assert.equal(cust.text, '保温杯多少钱？蓝色的');
+    assert.deepEqual(cust.edited.history.map((h) => h.text), ['保温杯多少钱']);
+    const own = msgs.find((m) => m.via === 'phone');
+    assert.equal(own.text, '我是本人，马上回您');
+    assert.deepEqual(own.edited.history.map((h) => h.text), ['我是本人，稍等']);
   });
 
   it('撤回：经墨鸽发的用 deleteBusinessMessages；在 Telegram 里自己发的没有「删除所有消息」权限时不能撤回', async () => {

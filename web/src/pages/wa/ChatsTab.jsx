@@ -9,6 +9,7 @@ import {
   ListChecks,
   MessagesSquare,
   PanelRight,
+  PencilLine,
   Pause,
   Play,
   RefreshCw,
@@ -455,12 +456,32 @@ function revokedText(r) {
   return [head, r.by === 'member' ? r.name : '', fmtTime(r.at)].filter(Boolean).join(' · ');
 }
 
+/** 改前的各个版本，最早的（原文）在前；服务端只留原文和最近几次，中间的丢掉了 */
+function EditHistory({ history }) {
+  return (
+    <div className="translation msg__edits">
+      <span className="translation__label">改前的内容</span>
+      <ol className="msg__edits-list">
+        {history.map((h, i) => (
+          <li key={`${i}-${h.at}`}>
+            <span className="msg__edits-when">
+              {i === 0 ? '原文' : '改过'} · {fmtTime(h.at)}
+            </span>
+            <span className="translation__text">{h.text}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 /**
  * manual：这个号是人工回复，"未处理 · 这个号没开自动回复"和"未处理 · 非文字消息[…]，已通知人工"不显示（每条客户消息都会有，没有信息量）。
  * 客户发来的媒体存了盘的（media.stored 有值）显示在气泡上方；没有说明文字时不再显示 [图片] 这样的标签气泡。
  * 有外文的消息（客户、我方、机器人发的都算）可以「翻译」成中文，译文显示在气泡下面；服务端存过的（自己或同事译过）默认展开。
  * 我方消息在时限内（msg.revocableUntil）可以「撤回」，撤回成功后 onRevoked(更新后的消息)；撤回过的消息（双方）气泡变淡，原文照样显示，
- * 下面写谁什么时候撤回的
+ * 下面写谁什么时候撤回的。改过的消息（客户改的、在手机上改的，msg.edited）气泡里是改后的内容，时间后面写「已编辑」，点开看改前的各个版本；
+ * 内容变了以后，之前的译文不再显示
  */
 function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked, onMediaLoad }) {
   const { kind, label, campaign } = bubbleKind(msg);
@@ -480,6 +501,16 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
   // （原文本来就是中文的那种不自动展开）
   const [zh, setZh] = useState({ loading: false, error: null, data: null });
   const [zhOpen, setZhOpen] = useState(null);
+  const [zhFor, setZhFor] = useState(msg.text);
+  if (zhFor !== msg.text) {
+    // 消息被改了：这次译的是改前的内容，作废（服务端存的译文也清掉了）
+    setZhFor(msg.text);
+    setZh({ loading: false, error: null, data: null });
+    setZhOpen(null);
+  }
+  const textRef = useRef(msg.text);
+  textRef.current = msg.text;
+  const [editsOpen, setEditsOpen] = useState(false);
   const aliveRef = useRef(true);
   const zhData = zh.data || msg.translation || null;
   const zhShown = zhOpen ?? (!!msg.translation && msg.translation.via !== 'none');
@@ -514,13 +545,14 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
   }, []);
 
   const translate = async () => {
+    const forText = msg.text;
     setZh({ loading: true, error: null, data: null });
     try {
       const data = await api.translateMessage(convId, msg.id, { silent: true });
-      if (aliveRef.current) setZh({ loading: false, error: null, data });
+      if (aliveRef.current && textRef.current === forText) setZh({ loading: false, error: null, data });
     } catch (e) {
       // 401 已经跳登录页
-      if (aliveRef.current) setZh({ loading: false, error: e?.status === 401 ? null : e, data: null });
+      if (aliveRef.current && textRef.current === forText) setZh({ loading: false, error: e?.status === 401 ? null : e, data: null });
     }
   };
   /** 「撤回」：确认后调接口。不收起操作区，手机上撤回中、失败时按钮还在 */
@@ -601,6 +633,19 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
         <Tooltip content={fmtTime(msg.ts)}>
           <span>{fmtHm(msg.ts)}</span>
         </Tooltip>
+        {msg.edited && (
+          <Tooltip content={`最后改于 ${fmtTime(msg.edited.at)}，点开看改前的内容`}>
+            <button
+              type="button"
+              className={`msg__link msg__edited${editsOpen ? ' is-on' : ''}`}
+              onClick={() => setEditsOpen((v) => !v)}
+              aria-expanded={editsOpen}
+            >
+              <PencilLine aria-hidden="true" />
+              已编辑
+            </button>
+          </Tooltip>
+        )}
         {canTranslate && (
           <button
             type="button"
@@ -639,6 +684,7 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
         )}
       </div>
       {msg.status === 'failed' && <div className="msg__error">发送失败{msg.error ? `：${msg.error}` : ''}</div>}
+      {msg.edited && editsOpen && <EditHistory history={msg.edited.history} />}
       {msg.revoked && (
         <div className="msg__revoked">
           <Undo2 aria-hidden="true" />

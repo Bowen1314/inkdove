@@ -67,7 +67,7 @@ describe('WAHA 号', () => {
     assert.equal(create.body.name, acc.waha.sessionName);
     const [hook] = create.body.config.webhooks;
     assert.equal(hook.url, 'http://127.0.0.1:8794/webhooks/waha');
-    assert.deepEqual(hook.events, ['message.any', 'message.revoked', 'session.status']);
+    assert.deepEqual(hook.events, ['message.any', 'message.revoked', 'message.edited', 'session.status']);
     assert.deepEqual(hook.hmac, { key: WAHA_SECRET });
     assert.equal(create.body.config.proxy, undefined, '未启用代理时不带 proxy');
     const got = await t.req('GET', `/api/accounts/${acc.id}`);

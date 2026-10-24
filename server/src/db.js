@@ -436,6 +436,12 @@ CREATE INDEX IF NOT EXISTS entries_status ON entries(status, created_at);
   ensureColumn(db, 'messages', 'revoked_by_user_id', 'TEXT');
   ensureColumn(db, 'messages', 'revoked_by_name', 'TEXT');
 
+  // ---- 消息编辑（wa/service.js 的 applyEdit）：扫码号的 message.edited、Telegram 的 edited_message / edited_business_message。
+  // text 换成改后的内容；edit_history 是改前的各个版本 [{text, at}]（JSON，最早的在前，最多 10 个），edited_at 是最近一次编辑的时间。
+  // 老库启动时自动加列，没编辑过的为 NULL ----
+  ensureColumn(db, 'messages', 'edited_at', 'TEXT');
+  ensureColumn(db, 'messages', 'edit_history', 'TEXT');
+
   // ---- 可选的向量检索（后台计算和检索见 kb/vectors.js） ----
   // 每个条目按 kb/vectors.js 的 entrySegments 分成一段或几段，每段一行（chunk 从 0 起）。kind 现在只有 entry。
   // model_key：格式 + 接口地址 + 模型名的哈希（ai/embed.js 的 embedModelKey），只用和当前设置一样的行；换了模型，新的算完一行

@@ -339,8 +339,8 @@ export async function translateMessage(ctx, conv, messageId) {
   const source = truncated ? full.slice(0, MAX_TRANSLATE_TEXT).replace(/[\uD800-\uDBFF]$/, '') : full;
   const r = await toChinese(ctx, conv, source);
   const t = { text: r.text, via: r.via, createdAt: nowIso(), ...(truncated ? { truncated: true } : {}) };
-  // 同时有人在译同一条的，先存下的为准
-  ctx.db.prepare('UPDATE messages SET translation = ? WHERE id = ? AND translation IS NULL').run(JSON.stringify(t), row.id);
+  // 同时有人在译同一条的，先存下的为准；译的期间客户改了这条消息（text 变了）的不存，译文是改前的
+  ctx.db.prepare('UPDATE messages SET translation = ? WHERE id = ? AND translation IS NULL AND text = ?').run(JSON.stringify(t), row.id, row.text);
   return withReason(t, r);
 }
 

@@ -153,8 +153,10 @@ export const TG_REVOKE_WINDOW_MS = TG_DELETE_LIMIT_MS - 3600 * 1000;
 /** Telegram 的「正在输入」只显示 5 秒，拟真等待时隔这么久再发一次 */
 const TG_TYPING_REFRESH_MS = 4000;
 /** 两种 Telegram 号各自要收的 update（getUpdates 的 allowed_updates） */
-const TG_BOT_UPDATES = ['message', 'my_chat_member'];
-const TG_BIZ_UPDATES = ['message', 'business_connection', 'business_message', 'deleted_business_messages'];
+const TG_BOT_UPDATES = ['message', 'edited_message', 'my_chat_member'];
+const TG_BIZ_UPDATES = ['message', 'business_connection', 'business_message', 'edited_business_message', 'deleted_business_messages'];
+/** 一条消息最多留几个改前的版本（再多的丢掉最早的） */
+export const EDIT_HISTORY_MAX = 10;
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -986,6 +988,8 @@ export function createWaService(ctx, opts = {}) {
         ? { at: r.revoked_at, by: r.revoked_by || 'phone', userId: r.revoked_by_user_id ?? null, name: r.revoked_by_name ?? null }
         : null,
       revocableUntil: revocableUntil(r, acc),
+      // 编辑：{at: 最近一次编辑的时间, history: 改前的各个版本 [{text, at}]（最早的在前）}，没编辑过的为 null。text 是改后的
+      edited: r.edited_at ? { at: r.edited_at, history: safeJsonParse(r.edit_history, []) } : null,
     };
   }
 
@@ -1843,6 +1847,7 @@ export function createWaService(ctx, opts = {}) {
       )
       .get(convId, dayStart).n;
 
+    const genStartedAt = nowIso();
     let result = await decideReply(ctx, {
       message,
       history,
@@ -1866,6 +1871,17 @@ export function createWaService(ctx, opts = {}) {
       .get(convId, ...pending.map((p) => p.seq));
     if (revokedNow) {
       log.info(`[wa] 会话 ${logConv(convId)} 生成回复期间客户撤回了消息，这次的回复不发，重新处理`);
+      scheduleFlush(convId);
+      return;
+    }
+    // 生成期间客户改了这一轮里的消息：这份回复是照着改前的话写的，不发，按改后的重新走一轮
+    const editedNow = db
+      .prepare(
+        `SELECT 1 FROM messages WHERE conversation_id = ? AND edited_at IS NOT NULL AND edited_at >= ? AND seq IN (${pending.map(() => '?').join(', ')}) LIMIT 1`,
+      )
+      .get(convId, genStartedAt, ...pending.map((p) => p.seq));
+    if (editedNow) {
+      log.info(`[wa] 会话 ${logConv(convId)} 生成回复期间客户改了消息，这次的回复不发，重新处理`);
       scheduleFlush(convId);
       return;
     }
@@ -2614,6 +2630,7 @@ export function createWaService(ctx, opts = {}) {
    * inkdove 管理的那部分 session 配置：webhook 和代理。
    * F12：订阅 message.any（收到的和自己发的消息都推，自己发的带 fromMe），用来记下机主在手机上发的消息。
    * 消息撤回：订阅 message.revoked（客户撤回、在手机上撤回我方消息都推）。
+   * 消息编辑：订阅 message.edited（客户改了他的消息、在手机上改了我方消息都推）。
    * 改了这里指纹就变，已有的号在服务启动时（init）或下次 start 时会把新配置 PUT 过去。
    */
   function wahaManagedConfig(acc) {
@@ -2621,7 +2638,7 @@ export function createWaService(ctx, opts = {}) {
       webhooks: [
         {
           url: config.wahaWebhookUrl,
-          events: ['message.any', 'message.revoked', 'session.status'],
+          events: ['message.any', 'message.revoked', 'message.edited', 'session.status'],
           hmac: { key: config.wahaWebhookSecret },
           retries: { policy: 'constant', delaySeconds: 2, attempts: 3 },
         },
@@ -2989,6 +3006,92 @@ export function createWaService(ctx, opts = {}) {
     return 'revoked_customer';
   }
 
+  // ---------------- 消息编辑 ----------------
+  // 扫码号的 message.edited、Telegram 的 edited_message（机器人）和 edited_business_message（私人号）：客户改了他的消息，
+  // 或者在同一个号的手机上改了我方消息。text 换成改后的内容，改前的版本留在 edit_history 给业务员看；AI 只看改后的。
+
+  /**
+   * 把一条消息改成新内容，返回处理结果（测试用）：
+   * - 撤回过的、内容没变的（重复推送）不改；
+   * - 正在识别的语音、图片（占位消息，识别完会整条重写）和识别过的（描述和说明文字拼在一起，分不开）不改；
+   * - 媒体消息改的是说明文字，改成空的就只剩 [图片] 这样的标签；
+   * - 改前的版本按出现的时间记进 edit_history，最早那个（原文）一直留着，中间的超过 EDIT_HISTORY_MAX 个丢掉最早的；
+   * - 客户的消息还没处理完（防抖、生成、拟真等待中）：拟真等待的发送取消，按改后的内容重新走一轮（生成中的见 processPending）；
+   *   已经处理过的只标「已编辑」，不再回复一次（多是改错字）。存下的译文作废
+   */
+  function applyEdit(row, rawText) {
+    if (row.revoked_at) return 'ignored_revoked';
+    const media = safeJsonParse(row.media, null);
+    if (media && ((row.kind === 'media' && !row.handled) || /^\[(图片|语音)\] /.test(row.text))) return 'ignored_edit_media';
+    let text = clip(String(rawText ?? '').trim(), MAX_STORED_TEXT);
+    let kind = row.kind;
+    if (!text) {
+      if (media) {
+        text = MEDIA_LABELS[media.type] || '[非文字消息]';
+        kind = 'media';
+      } else if (!row.attachment) return 'ignored_edit_empty';
+    } else if (media) kind = 'text';
+    if (text === row.text) return 'ignored_duplicate';
+    const parsed = safeJsonParse(row.edit_history, []);
+    const history = Array.isArray(parsed) ? parsed : [];
+    history.push({ text: row.text, at: row.edited_at || row.ts });
+    if (history.length > EDIT_HISTORY_MAX) history.splice(1, history.length - EDIT_HISTORY_MAX);
+    const changed = db
+      .prepare('UPDATE messages SET text = ?, kind = ?, edited_at = ?, edit_history = ?, translation = NULL WHERE id = ? AND revoked_at IS NULL')
+      .run(text, kind, nowIso(), JSON.stringify(history), row.id).changes;
+    if (!changed) return 'ignored_revoked';
+    if (row.direction === 'in') {
+      // 一键翻译按客户最近的消息判断语言，改了就重新判断
+      ctx.translationLanguages?.delete(row.conversation_id);
+      if (!row.handled) {
+        abortSending(row.conversation_id, 'edited');
+        scheduleFlush(row.conversation_id);
+      }
+    }
+    return 'edited';
+  }
+
+  /**
+   * WAHA 的 message.edited（按 WAHA 文档写的，没在真机上核实）：payload 是一条 WAMessage，另带 editedMessageId（被改消息的 ID，
+   * 不带 `<true|false>_<chat>_` 前缀）和 body（改后的内容）。聊天对象、是不是自己改的按入站消息的规则取，没有时从原始消息的 Info 取；
+   * ID 没给时从原始消息的 protocolMessage 取。message.any 万一把编辑的协议消息也推来，也走这里（见 handleWahaWebhook），
+   * 两边都推时第二次内容没变、不再改。对消息的规则同撤回（findRevokeTarget）；群聊、对不上的忽略
+   */
+  function handleWahaEdited(acc, p) {
+    if (closed) return 'closed';
+    const info = p._data?.Info || {};
+    const proto = p._data?.Message?.protocolMessage || p._data?.Message?.editedMessage?.message?.protocolMessage || {};
+    const fromMe = !!(p.fromMe ?? info.IsFromMe);
+    const { chatId } = parseWahaMessage({ fromMe, from: p.from ?? info.Chat, to: p.to ?? null, _data: p._data || {} });
+    const rawId = [p.editedMessageId, proto.key?.ID].find((x) => typeof x === 'string' && x);
+    if (!rawId) return 'ignored_edit';
+    if (!chatId || isNonPrivateChat(chatId)) return 'ignored_non_private';
+    const keyId = messageKeyId(rawId);
+    if (!/^[^_@\s]{3,}$/.test(keyId)) return 'ignored_edit';
+    // 改后的内容先从原始消息取（message.any 推来的协议消息，body 可能是空的），没有再用 body
+    const e = proto.editedMessage || {};
+    const fromProto =
+      e.conversation ?? e.extendedTextMessage?.text ?? e.imageMessage?.caption ?? e.videoMessage?.caption ?? e.documentMessage?.caption;
+    const body = typeof fromProto === 'string' ? fromProto : p.body;
+    if (typeof body !== 'string') return 'ignored_edit';
+    const row = findRevokeTarget(acc, chatId, keyId, fromMe);
+    if (!row) return 'ignored_edit_unknown';
+    return applyEdit(row, body);
+  }
+
+  /**
+   * Telegram 的 edited_message / edited_business_message：改后的整条消息（message_id 不变，文字在 text 或 caption 里）。
+   * 消息 id 只在一个聊天里唯一，按会话和 id 找；私人号的双方消息都可能被改（号主改的是我方消息）
+   */
+  function tgEdited(acc, msg) {
+    if (msg?.chat?.type !== 'private' || msg.chat.id == null || msg.message_id == null) return 'ignored_non_private';
+    const row = db
+      .prepare('SELECT * FROM messages WHERE conversation_id = ? AND external_id = ?')
+      .get(conversationIdOf(acc.id, String(msg.chat.id)), String(msg.message_id));
+    if (!row) return 'ignored_edit_unknown';
+    return applyEdit(row, msg.text ?? msg.caption ?? '');
+  }
+
   /** 撤回接口的报错转成中文原因。超时的撤回可能其实成了：之后收到 WhatsApp 的撤回通知会按这个成员标上（见 handleRevoked） */
   function revokeFail(err) {
     if (!(err instanceof WahaError)) return err;
@@ -3064,8 +3167,12 @@ export function createWaService(ctx, opts = {}) {
       return 'status';
     }
     if (body.event === 'message.revoked') return handleRevoked(acc, body.payload || {});
+    if (body.event === 'message.edited') return handleWahaEdited(acc, body.payload || {});
     // message.any 是现在订阅的；message 是老配置还没更新时推的（只有收到的消息），两种都按同一条路处理，按 id 去重
     if (body.event !== 'message.any' && body.event !== 'message') return 'ignored_event';
+    // 编辑是一条协议消息，不是新消息：万一也推成 message.any，按编辑处理，不存成一条新消息
+    const raw = body.payload?._data?.Message;
+    if (raw?.protocolMessage?.editedMessage || raw?.editedMessage?.message?.protocolMessage) return handleWahaEdited(acc, body.payload);
     return handleInbound(acc, parseWahaMessage(body.payload || {}));
   }
 
@@ -3382,9 +3489,10 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 处理一条 update，返回处理结果（测试用）。
-   * 机器人：私聊里客户发的 message；客户停用机器人（my_chat_member）只记日志。
+   * 机器人：私聊里客户发的 message、改了的 edited_message；客户停用机器人（my_chat_member）只记日志。
    * 私人号：给机器人发的 message 只认绑定口令；business_connection 记连接；business_message 是私聊里双方的消息
-   * （号主发的按 fromMe，墨鸽经机器人代发的回来时带 sender_business_bot、当回声剔除）；deleted_business_messages 是删除
+   * （号主发的按 fromMe，墨鸽经机器人代发的回来时带 sender_business_bot、当回声剔除）；edited_business_message 是改了的消息；
+   * deleted_business_messages 是删除
    */
   async function handleTelegramUpdate(accountId, u) {
     if (closed) return 'closed';
@@ -3400,6 +3508,7 @@ export function createWaService(ctx, opts = {}) {
         const m = parseTelegramMessage(u.message);
         return m ? handleInbound(acc, m) : 'ignored_non_private';
       }
+      if (u.edited_message) return tgEdited(acc, u.edited_message);
       if (u.my_chat_member?.chat?.type === 'private' && u.my_chat_member.new_chat_member?.status === 'kicked') {
         log.info(`[telegram] 号 ${acc.id} 有客户停用了机器人，之后发不到他了`);
         return 'blocked';
@@ -3417,6 +3526,11 @@ export function createWaService(ctx, opts = {}) {
       const ours = bot?.id != null && String(bot.id) === t.botId;
       const m = parseTelegramMessage(msg, { fromMe, source: fromMe ? (ours ? 'api' : 'app') : null });
       return m ? handleInbound(acc, m) : 'ignored_non_private';
+    }
+    if (u.edited_business_message) {
+      const t = tgKv(acc);
+      if (!tgLinked(t) || u.edited_business_message.business_connection_id !== t.connection.id) return 'ignored_connection';
+      return tgEdited(acc, u.edited_business_message);
     }
     if (u.deleted_business_messages) return tgDeleted(acc, u.deleted_business_messages);
     return 'ignored_event';

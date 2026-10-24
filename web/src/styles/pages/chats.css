@@ -464,6 +464,32 @@
   height: 13px;
   flex: none;
 }
+/* 改过的消息：时间后面的「已编辑」一直显示（不是悬停才出现），颜色同时间；点开在气泡下面列出改前的内容 */
+.msg__edited {
+  color: inherit;
+}
+.msg__edited.is-on {
+  color: var(--text);
+}
+.msg__edits {
+  margin: 2px 0;
+}
+.msg__edits-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.msg__edits-list > li {
+  display: flex;
+  flex-direction: column;
+}
+.msg__edits-when {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+}
 .msg__file {
   display: flex;
   align-items: center;
