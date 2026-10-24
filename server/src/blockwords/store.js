@@ -10,6 +10,7 @@
 // 发给管理员自己的通知和 F3 回执不查（不是发给客户的）。
 // AI 发言检查（blockwords/conduct.js）发现的也记在这里（detector=ai），只提醒、不拦；弹窗只弹屏蔽词命中和 AI 发现的严重问题，
 // 轻微的只进列表。AI 发现的管理员可以标「误报」。
+import { NO_NUMBER_NAMES } from '../accounts.js';
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, newId, notFound, nowIso, safeJsonParse } from '../util.js';
 import { checkExpandRequest, parseExpandOutput } from './expand.js';
@@ -139,9 +140,9 @@ export function createBlockwords(ctx) {
       : null;
     const accId = accountId || conv?.account_id || null;
     const acc = accId ? ctx.accounts.get(accId) : null;
-    // LINE 的客户没有号码，没名字时记「LINE 用户」（不记 userId）
+    // LINE、Telegram 的客户没有号码，没名字时记「LINE 用户」「Telegram 用户」（不记用户 id）
     const contact = conv
-      ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.channel === 'line' ? 'LINE 用户' : conv.chat_id || '')
+      ? conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : NO_NUMBER_NAMES[conv.channel] || conv.chat_id || '')
       : '';
     const id = newId();
     const row = {

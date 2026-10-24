@@ -2,7 +2,7 @@
 // 每个号码只发一条开场消息，不做任何跟进。权限（agent 只能看和操作自己建的任务）由路由判断，见 routes/campaigns.js；
 // 选号的权限（agent 只能选分配给自己的号）在 create 里判断。
 import crypto from 'node:crypto';
-import { DELETED_ACCOUNT_NAME } from '../accounts.js';
+import { DELETED_ACCOUNT_NAME, isTelegram } from '../accounts.js';
 import { canAccessAccount, forbidden } from '../auth.js';
 import { quoteWords } from '../blockwords/store.js';
 import { campaignStatusLabel } from '../codes.js';
@@ -226,6 +226,8 @@ export function createOutreach(ctx, opts = {}) {
       if (!a) throw badRequest('选的号不存在或已删除', 'account_not_found');
       // LINE 官方帐号只能给加了好友的人发消息，号码文件里的手机号对不上 LINE 用户
       if (a.channel === 'line') throw badRequest(`「${a.name}」是 LINE 官方帐号，不能外联群发：LINE 只能给加了好友的人发消息，按手机号找不到人`, 'line_unsupported');
+      // Telegram 按手机号找不到人，机器人也不能先给没说过话的人发消息
+      if (isTelegram(a.channel)) throw badRequest(`「${a.name}」是 Telegram 号，不能外联群发：Telegram 按手机号找不到人，只能回复来找你的人`, 'telegram_unsupported');
       return a;
     });
     const defaultCountry = textField(b.defaultCountry, 'defaultCountry', 10).toUpperCase() || 'CN';

@@ -216,6 +216,8 @@ export function createApp(config, options = {}) {
     historyImportDelayMs: options.historyImportDelayMs,
     lineReplyWindowMs: options.lineReplyWindowMs,
     lineContentRetryMs: options.lineContentRetryMs,
+    tgPollTimeoutSec: options.tgPollTimeoutSec,
+    tgRetryMs: options.tgRetryMs,
   });
   // F6：每 2 分钟扫一遍会话提取客户线索。leadsScanIntervalMs 为 0 时不启动定时器（测试里手动调 ctx.leads.scan()）
   ctx.leads = createLeadStore(ctx);

@@ -26,6 +26,7 @@ import { detectLocal } from '../translate/detect-local.js';
 import { callTranslationProvider, FIELD_LABELS, getTranslationProvider, missingField, TranslateError } from '../translate/index.js';
 import { languageName } from '../translate/languages.js';
 import { badRequest, clip, HttpError, notFound, nowIso, safeJsonParse } from '../util.js';
+import { convLogId } from './telegram.js';
 
 /** 原文长度上限，和人工发送的上限一致（service.js 的 MAX_OPERATOR_TEXT） */
 export const MAX_TRANSLATE_TEXT = 4096;
@@ -420,7 +421,7 @@ export async function fixDraftPlaceholders(ctx, conv, text, { timeoutMs = ctx.pl
     });
     return replacePlaceholderContents(normalized, zh);
   } catch (err) {
-    ctx.log.warn(`[translate] 会话 ${conv.id} 草稿里的【待你确认】是外文，译成中文失败，照原样给出：${err?.message || err}`);
+    ctx.log.warn(`[translate] 会话 ${convLogId(ctx.db, conv.id)} 草稿里的【待你确认】是外文，译成中文失败，照原样给出：${err?.message || err}`);
     return normalized;
   } finally {
     clearTimeout(timer);

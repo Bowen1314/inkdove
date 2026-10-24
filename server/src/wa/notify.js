@@ -1,8 +1,10 @@
 // 转人工通知（按号）：邮件走全局发信方式（F10），WhatsApp 通知由这个号自己发给它的通知号码。
 // WhatsApp 通知末尾带 F3 的用法说明，并记下通知消息的 id → 会话，供"引用通知回复"时找回会话（保留 7 天）。
+import { isWhatsapp, NO_NUMBER_NAMES } from '../accounts.js';
 import { NOTIFY_REASONS } from '../codes.js';
 import { emailConfigured } from '../settings.js';
 import { clip, safeJsonParse, sleep } from '../util.js';
+import { convLogId } from './telegram.js';
 
 // 通知原因的文案和 F12 的 code 标签放在同一个常量文件里（codes.js），这里转出去，老的引用不用改
 export { NOTIFY_REASONS };
@@ -91,10 +93,10 @@ export function createNotifier(deps) {
     const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversationId);
     if (!conv) return null;
     const chatId = conv.chat_id || conv.id;
-    // LINE 的客户没有手机号：不露 userId，写「LINE」
-    const isLine = conv.channel === 'line';
-    const num = conv.contact_number ? `+${conv.contact_number}` : isLine ? 'LINE' : chatId;
-    const who = conv.contact_name ? `${conv.contact_name}（${num}）` : isLine ? 'LINE 用户' : num;
+    // LINE、Telegram 的客户没有手机号：不露用户 id，写「LINE」「Telegram」
+    const noNumber = NO_NUMBER_NAMES[conv.channel] || null;
+    const num = conv.contact_number ? `+${conv.contact_number}` : noNumber ? noNumber.replace(/ 用户$/, '') : chatId;
+    const who = conv.contact_name ? `${conv.contact_name}（${num}）` : noNumber || num;
     const recent = db
       .prepare("SELECT text FROM messages WHERE conversation_id = ? AND author = 'customer' ORDER BY seq DESC LIMIT 20")
       .all(conversationId)
@@ -115,7 +117,7 @@ export function createNotifier(deps) {
       (reason === 'handoff' || reason === 'blocked') && detail ? clip(detail, 200) : `${label}${detail ? `（${clip(detail, 120)}）` : ''}`;
     const draft = safeJsonParse(conv.draft, null);
     const last = recent[0] || '';
-    const subject = `[待人工] 客户 ${isLine ? who : num}：${clip(last.replace(/\s+/g, ' '), 30) || label}`;
+    const subject = `[待人工] 客户 ${noNumber ? who : num}：${clip(last.replace(/\s+/g, ' '), 30) || label}`;
     const lines = [
       `号：${acc.name}`,
       `客户：${who}`,
@@ -144,11 +146,11 @@ export function createNotifier(deps) {
     findNotice,
     rememberNotice,
 
-    /** 转人工通知：各通道独立发送，失败只写日志。LINE 官方帐号没有号码可发，只发邮件 */
+    /** 转人工通知：各通道独立发送，失败只写日志。LINE 官方帐号、Telegram 号没有号码可发，只发邮件 */
     async notifyHandoff(acc, conversationId, reason, detail = '') {
       const n = acc.notify;
       const emailOn = n.email.enabled && emailConfigured(getSettings());
-      const waOn = n.whatsapp.enabled && acc.channel !== 'line';
+      const waOn = n.whatsapp.enabled && isWhatsapp(acc.channel);
       if (!emailOn && !waOn) return;
       const notice = buildNotice(acc, conversationId, reason, detail);
       if (!notice) return;
@@ -163,7 +165,7 @@ export function createNotifier(deps) {
         );
       }
       await Promise.all(jobs);
-      log.info(`[notify] 已处理号 ${acc.id} 会话 ${conversationId} 的转人工通知（${reason}）`);
+      log.info(`[notify] 已处理号 ${acc.id} 会话 ${convLogId(db, conversationId)} 的转人工通知（${reason}）`);
     },
 
     /** POST /api/accounts/:id/notify/test：返回 {email, whatsapp}，没开的通道为 null */
@@ -181,7 +183,7 @@ export function createNotifier(deps) {
       };
       const [email, whatsapp] = await Promise.all([
         n.email.enabled ? run(() => sendEmailTo(acc, subject, text)) : null,
-        n.whatsapp.enabled && acc.channel !== 'line' ? run(() => sendWhatsapp(acc, `${subject}\n\n${text}`)) : null,
+        n.whatsapp.enabled && isWhatsapp(acc.channel) ? run(() => sendWhatsapp(acc, `${subject}\n\n${text}`)) : null,
       ]);
       return { email, whatsapp };
     },

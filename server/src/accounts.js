@@ -5,9 +5,20 @@ import { kvGet, kvSet } from './db.js';
 import { DEFAULT_META_API_VERSION, boolField, normalizeEmails, normalizeNumbers, str } from './settings.js';
 import { badRequest, HttpError, isPlainObject, nowIso, safeJsonParse } from './util.js';
 import { releaseLostAccess } from './wa/assign.js';
+import { botIdOf, TG_TOKEN_RE } from './wa/telegram.js';
 
-/** 接入方式：waha 扫码、meta Meta 官方 Cloud API、line LINE 官方帐号（LINE Messaging API） */
-export const CHANNELS = ['waha', 'meta', 'line'];
+/**
+ * 接入方式：waha 扫码、meta Meta 官方 Cloud API、line LINE 官方帐号（LINE Messaging API）、
+ * tgbot Telegram 机器人（客户和机器人聊）、tgbiz Telegram 私人号（Telegram 的「聊天自动化」：把机器人连到自己的号上，
+ * 客户和这个私人号聊，机器人代收代发）。两种 Telegram 都走 Telegram Bot API
+ */
+export const CHANNELS = ['waha', 'meta', 'line', 'tgbot', 'tgbiz'];
+export const isTelegram = (channel) => channel === 'tgbot' || channel === 'tgbiz';
+/** 发 WhatsApp 消息的接入方式：只有它们能开 WhatsApp 通知、能外联群发 */
+export const isWhatsapp = (channel) => channel === 'waha' || channel === 'meta';
+/** 客户没有手机号的接入方式，没名字时这样称呼客户（不露 LINE 的 userId、Telegram 的用户 id） */
+export const NO_NUMBER_NAMES = { line: 'LINE 用户', tgbot: 'Telegram 用户', tgbiz: 'Telegram 用户' };
+export const CHANNEL_NAMES = { line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号' };
 /**
  * 回复方式：off 人工回复（只存消息，不调用模型；业务员需要时在会话页手动要推荐回复）、auto 自动回复。
  * v0.3.0 还有 suggest（客户来消息自动起草推荐回复），已取消：库里存的、PUT 收到的、导入文件里的 suggest 都按 off
@@ -38,6 +49,8 @@ function defaultConfig(channel) {
         : null,
     // LINE Developers Console 里 Messaging API channel 的 Channel ID、Channel secret、长期 Channel access token
     line: channel === 'line' ? { channelId: '', channelSecret: '', accessToken: '' } : null,
+    // @BotFather 给的机器人 token。私人号绑定了谁、连接的 id 这些是墨鸽收消息时记下的，存在 kv（见 wa/service.js 的 tgKv），不在这里
+    telegram: isTelegram(channel) ? { botToken: '' } : null,
     notify: { email: { enabled: false, to: [] }, whatsapp: { enabled: false, number: '' } },
   };
 }
@@ -61,6 +74,7 @@ export function rowToAccount(r) {
     waha: base.waha ? { proxy: { ...base.waha.proxy, ...(c.waha?.proxy || {}) } } : null,
     meta: base.meta ? { ...base.meta, ...(c.meta || {}) } : null,
     line: base.line ? { ...base.line, ...(c.line || {}) } : null,
+    telegram: base.telegram ? { ...base.telegram, ...(c.telegram || {}) } : null,
     notify: {
       email: { ...base.notify.email, ...(c.notify?.email || {}) },
       whatsapp: { ...base.notify.whatsapp, ...(c.notify?.whatsapp || {}) },
@@ -91,8 +105,8 @@ export function lineConfigured(acc) {
 }
 
 /**
- * 对外视图：密钥不回传（Meta 的 token、app secret，LINE 的 channel secret、access token 只给「设没设」）。
- * viewer 是 agent 时再去掉 Meta 的 verifyToken 和通知的收件人（邮箱、号码），这些只有 admin 能看能改
+ * 对外视图：密钥不回传（Meta 的 token、app secret，LINE 的 channel secret、access token，Telegram 的机器人 token 只给「设没设」）。
+ * viewer 是 agent 时再去掉 Meta 的 verifyToken、通知的收件人（邮箱、号码）和 Telegram 私人号的绑定链接，这些只有 admin 能看能改
  * @param {any} acc
  * @param {any} config
  * @param {any} status
@@ -145,12 +159,19 @@ export function publicAccount(acc, config, status, viewer = null) {
           webhookUrl: `${config.publicBaseUrl}/webhooks/line/${acc.id}`,
         }
       : null,
+    telegram: acc.telegram ? { botTokenSet: !!acc.telegram.botToken } : null,
     notify: {
       email: { enabled: acc.notify.email.enabled, to: hide ? [] : [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: hide ? '' : acc.notify.whatsapp.number },
     },
-    status: status || { state: 'not_configured', me: null, error: null, lastWebhookAt: null },
+    status: withoutBindLink(status, hide) || { state: 'not_configured', me: null, error: null, lastWebhookAt: null },
   };
+}
+
+/** Telegram 私人号的绑定链接谁点了谁就成了号主，agent 看不到 */
+function withoutBindLink(status, hide) {
+  if (!hide || !status?.telegram?.bindLink) return status;
+  return { ...status, telegram: { ...status.telegram, bindLink: null } };
 }
 
 function storedConfig(acc) {
@@ -163,6 +184,7 @@ function storedConfig(acc) {
     waha: acc.waha,
     meta: acc.meta,
     line: acc.line,
+    telegram: acc.telegram,
     notify: acc.notify,
   });
 }
@@ -213,8 +235,9 @@ const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
 
 /**
  * 号的部分更新。接口层面整个 PUT 只有 admin 能调（agent 一律 403，见 routes/accounts.js）；
- * isAdmin=false 时 name、waha.proxy、meta.*、line.* 仍然拒绝，留作第二道防线。
- * LINE 官方帐号不能开 WhatsApp 通知（通知要由这个号发给一个 WhatsApp 号码，LINE 发不了），只拦「开启」。
+ * isAdmin=false 时 name、waha.proxy、meta.*、line.*、telegram.* 仍然拒绝，留作第二道防线。
+ * LINE 官方帐号、Telegram 号不能开 WhatsApp 通知（通知要由这个号发给一个 WhatsApp 号码，它们发不了），只拦「开启」。
+ * 机器人 token 不能和别的号重复（同一个机器人只能有一个程序收消息），这个在 routes/accounts.js 里查。
  * 回复方式：replyMode（off / auto）；suggest 按 off 处理（兼容 v0.3.0 的客户端），其他值 400。
  * 也接受旧的 autoReply（true → auto，false → off），两个都给时以 replyMode 为准。
  * @param {any} current 内部对象
@@ -291,6 +314,17 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (l.channelSecret !== undefined) a.line.channelSecret = str(l.channelSecret, 'line.channelSecret', 500).trim();
     if (l.accessToken !== undefined) a.line.accessToken = str(l.accessToken, 'line.accessToken', 2000).trim();
   }
+  if (patch.telegram !== undefined && patch.telegram !== null) {
+    const t = patch.telegram;
+    if (!isPlainObject(t)) throw badRequest('telegram 必须是对象');
+    adminOnly();
+    if (!a.telegram) throw badRequest('只有 Telegram 号才有这些字段');
+    if (t.botToken !== undefined) {
+      const v = str(t.botToken, 'telegram.botToken', 200).trim();
+      if (v && !TG_TOKEN_RE.test(v)) throw badRequest('机器人 token 格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段', 'bad_token');
+      a.telegram.botToken = v;
+    }
+  }
   if (patch.notify !== undefined) {
     const p = patch.notify;
     if (!isPlainObject(p)) throw badRequest('notify 必须是对象');
@@ -311,8 +345,8 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
       if (!isPlainObject(w)) throw badRequest('notify.whatsapp 必须是对象');
       if (w.enabled !== undefined) {
         const on = boolField(w.enabled, 'notify.whatsapp.enabled');
-        if (on && !a.notify.whatsapp.enabled && a.channel === 'line') {
-          throw badRequest('LINE 官方帐号发不了 WhatsApp 通知，请用邮件通知', 'whatsapp_notify_unsupported');
+        if (on && !a.notify.whatsapp.enabled && !isWhatsapp(a.channel)) {
+          throw badRequest(`${CHANNEL_NAMES[a.channel] || '这个号'}发不了 WhatsApp 通知，请用邮件通知`, 'whatsapp_notify_unsupported');
         }
         a.notify.whatsapp.enabled = on;
       }
@@ -334,6 +368,7 @@ export function exportAccount(acc) {
   const px = acc.waha?.proxy;
   const m = acc.meta;
   const l = acc.line;
+  const t = acc.telegram;
   return {
     name: acc.name,
     channel: acc.channel,
@@ -365,6 +400,7 @@ export function exportAccount(acc) {
         }
       : null,
     line: l ? { channelId: l.channelId, channelSecret: l.channelSecret, accessToken: l.accessToken } : null,
+    telegram: t ? { botToken: t.botToken } : null,
     notify: {
       email: { enabled: acc.notify.email.enabled, to: [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: acc.notify.whatsapp.number },
@@ -382,7 +418,7 @@ export function exportAccount(acc) {
  * 都在返回项的 notices 里说明，别让一个号拖垮整批导入。
  * @param {any} doc 解析后的 JSON
  * @param {{emailReady:boolean, globalProxyReady?:boolean}} o
- * @returns {{name:string, channel:'waha'|'meta'|'line', config:any, notices?:string[]}[]}
+ * @returns {{name:string, channel:string, config:any, notices?:string[]}[]}
  */
 export function parseAccountsExport(doc, { emailReady, globalProxyReady = false }) {
   if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
@@ -399,11 +435,12 @@ export function parseAccountsExport(doc, { emailReady, globalProxyReady = false 
       const name = str(item.name ?? '', 'name', 100).trim();
       if (!name) throw badRequest('name 不能为空');
       label += `（${name}）`;
-      if (!CHANNELS.includes(item.channel)) throw badRequest('channel 只能是 waha、meta 或 line');
+      if (!CHANNELS.includes(item.channel)) throw badRequest(`channel 只能是 ${CHANNELS.join('、')}`);
       // applyAccountPatch 在这几种情况下的提示不带字段名，先拦下来
       if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，其他接入方式应为 null');
       if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，其他接入方式应为 null');
       if (item.channel !== 'line' && item.line != null) throw badRequest('line 只有 LINE 官方帐号才有，其他接入方式应为 null');
+      if (!isTelegram(item.channel) && item.telegram != null) throw badRequest('telegram 只有 Telegram 号才有，其他接入方式应为 null');
       const draft = { name, channel: item.channel, ...defaultConfig(item.channel) };
       // 没配发信方式时，开着的邮件通知先关掉再校验（拷一份，不改解析出来的原文件内容）；
       // notify 不是对象之类的格式问题仍交给 applyAccountPatch 报错
@@ -453,7 +490,7 @@ export function createAccountStore(db, config) {
     bySession(name) {
       return rowToAccount(db.prepare("SELECT * FROM accounts WHERE channel = 'waha' AND session_name = ?").get(name));
     },
-    /** @param {{name:string, channel:'waha'|'meta'|'line', sessionName?:string, config?:any}} p */
+    /** @param {{name:string, channel:string, sessionName?:string, config?:any}} p */
     create({ name, channel, sessionName, config: cfg }) {
       const id = newAccountId();
       const acc = { ...defaultConfig(channel), ...(cfg || {}) };
@@ -476,19 +513,20 @@ export function createAccountStore(db, config) {
     },
     /**
      * 导入：在一个事务里逐个新建（新 id、新 session 名，不启动 WAHA）。名称可以重复；
-     * Meta 号的 phoneNumberId、LINE 官方帐号的 Channel ID 和已有的号、或文件里前面的号重复时跳过（空的不算重复）。
-     * @param {{name:string, channel:'waha'|'meta'|'line', config:any, notices?:string[]}[]} items 已经过 parseAccountsExport 校验；
+     * Meta 号的 phoneNumberId、LINE 官方帐号的 Channel ID、Telegram 号的机器人（token 前面的数字 id）和已有的号、
+     * 或文件里前面的号重复时跳过（空的不算重复）。
+     * @param {{name:string, channel:string, config:any, notices?:string[]}[]} items 已经过 parseAccountsExport 校验；
      *   notices 是导入时自动调整过什么的说明，原样带到返回的 created 项里
      */
     importMany(items) {
       return db.transaction(() => {
-        // 去重的键：meta:<phoneNumberId>、line:<channelId>
-        const keyOf = (channel, cfg) =>
-          channel === 'meta' && cfg.meta?.phoneNumberId
-            ? `meta:${cfg.meta.phoneNumberId}`
-            : channel === 'line' && cfg.line?.channelId
-              ? `line:${cfg.line.channelId}`
-              : '';
+        // 去重的键：meta:<phoneNumberId>、line:<channelId>、tg:<机器人 id>（两种 Telegram 号共用：同一个机器人只能给一个号用）
+        const keyOf = (channel, cfg) => {
+          if (channel === 'meta' && cfg.meta?.phoneNumberId) return `meta:${cfg.meta.phoneNumberId}`;
+          if (channel === 'line' && cfg.line?.channelId) return `line:${cfg.line.channelId}`;
+          const botId = isTelegram(channel) ? botIdOf(cfg.telegram?.botToken) : '';
+          return botId ? `tg:${botId}` : '';
+        };
         /** @type {Map<string, {name:string, inFile:boolean}>} */
         const seen = new Map();
         for (const a of store.list()) {
@@ -501,13 +539,17 @@ export function createAccountStore(db, config) {
           const key = keyOf(it.channel, it.config);
           const dup = key && seen.get(key);
           if (dup) {
-            const isLine = it.channel === 'line';
-            const what = isLine ? `Channel ID ${it.config.line.channelId}` : `phoneNumberId ${it.config.meta.phoneNumberId}`;
+            const [what, unit] =
+              it.channel === 'line'
+                ? [`Channel ID ${it.config.line.channelId}`, '个 LINE 官方帐号']
+                : it.channel === 'meta'
+                  ? [`phoneNumberId ${it.config.meta.phoneNumberId}`, '个 Meta 号码']
+                  : ['机器人 token', '个 Telegram 机器人'];
             skipped.push({
               name: it.name,
               reason: dup.inFile
                 ? `${what} 和文件里前面的号「${dup.name}」重复，只导入了前面那个`
-                : `${what} 已经被号「${dup.name}」使用，同一个${isLine ? ' LINE 官方帐号' : ' Meta 号码'}不重复导入`,
+                : `${what} 已经被号「${dup.name}」使用，同一${unit}不重复导入`,
             });
             continue;
           }

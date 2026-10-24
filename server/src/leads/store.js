@@ -6,6 +6,7 @@ import { llmScope } from '../records.js';
 import { llmConfigured } from '../settings.js';
 import { badRequest, clip, HttpError, isPlainObject, newId, notFound, nowIso, safeJsonParse } from '../util.js';
 import { DAILY_LLM_LIMIT, localDay } from '../wa/service.js';
+import { convLogId } from '../wa/telegram.js';
 
 /** 后台扫描间隔 */
 export const LEADS_SCAN_INTERVAL_MS = 2 * 60 * 1000;
@@ -313,7 +314,7 @@ export function createLeadStore(ctx) {
           attempts++;
           failures.set(convId, Date.now());
           result.failed.push(convId);
-          log.warn(`[leads] 会话 ${convId} 提取客户线索失败，30 分钟后再试：${err?.message || err}`);
+          log.warn(`[leads] 会话 ${convLogId(db, convId)} 提取客户线索失败，30 分钟后再试：${err?.message || err}`);
         }
       }
       if (result.extracted.length || result.failed.length) {

@@ -1,10 +1,20 @@
-// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式（扫码、Meta 官方接口、LINE 官方帐号）、
+// WhatsApp 业务层（第二期：按号）。每个号（Account）有自己的接入方式（扫码、Meta 官方接口、LINE 官方帐号、Telegram 机器人和私人号）、
 // 回复方式（人工回复 / 自动回复）、回复范围、通知和代理；
 // 会话 id 是 <accountId>:<chatId>。四层防滥用的第 4 层（会话级闸门）在这里，回复拟真（F1/F14）和
 // 在 WhatsApp 里处理转人工（F3）也在这里。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { conversationIdOf, DELETED_ACCOUNT_NAME, lineConfigured, metaConfigured } from '../accounts.js';
+import {
+  CHANNEL_NAMES,
+  conversationIdOf,
+  DELETED_ACCOUNT_NAME,
+  isTelegram,
+  isWhatsapp,
+  lineConfigured,
+  metaConfigured,
+  NO_NUMBER_NAMES,
+} from '../accounts.js';
+import { kvGet, kvSet } from '../db.js';
 import { hitMessage, quoteWords } from '../blockwords/store.js';
 import { internalFileUrl, publicFileUrl } from '../files/signed.js';
 import { MAX_FILES_PER_REPLY } from '../files/store.js';
@@ -51,6 +61,25 @@ import {
   metaUploadMedia,
 } from './meta.js';
 import { createNotifier, shortMessageId } from './notify.js';
+import {
+  botIdOf,
+  convLogId,
+  TG_CAPTION_MAX,
+  TG_DELETE_LIMIT_MS,
+  TG_PHOTO_MAX_BYTES,
+  TG_TEXT_MAX,
+  TG_UPLOAD_MAX_BYTES,
+  TgError,
+  tgDeleteMessage,
+  tgDownloadFile,
+  tgOpenFile,
+  tgReadBusinessMessage,
+  tgSendFile,
+  tgSendText,
+  tgSendTyping,
+  tgUserName,
+} from './telegram.js';
+import { startTgPoller } from './telegram-poll.js';
 import { needsRelay } from './relay.js';
 import { fixDraftPlaceholders, storedTranslation } from './translate.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
@@ -118,6 +147,14 @@ const LINE_EVENT_KEEP_MS = 3600 * 1000;
 const LINE_NAME_CACHE_MS = 3600 * 1000;
 /** handleInbound 的这些结果表示客户消息存下了（LINE 这时才记它的 reply token 和 markAsReadToken） */
 const LINE_STORED = new Set(['scheduled', 'archived', 'archived_media', 'converting']);
+
+/** Telegram：机器人能删自己发的消息 48 小时，和扫码号一样少算 1 小时 */
+export const TG_REVOKE_WINDOW_MS = TG_DELETE_LIMIT_MS - 3600 * 1000;
+/** Telegram 的「正在输入」只显示 5 秒，拟真等待时隔这么久再发一次 */
+const TG_TYPING_REFRESH_MS = 4000;
+/** 两种 Telegram 号各自要收的 update（getUpdates 的 allowed_updates） */
+const TG_BOT_UPDATES = ['message', 'my_chat_member'];
+const TG_BIZ_UPDATES = ['message', 'business_connection', 'business_message', 'deleted_business_messages'];
 
 // F14：两段及以上、总长超过 160 字符的回复按段落拆开发，最多 3 条
 export const SPLIT_MIN_CHARS = 160;
@@ -417,6 +454,78 @@ export function parseLineMessage(ev) {
   };
 }
 
+const tgSeconds = (v) => (Number.isFinite(v) && v > 0 ? v : null);
+
+/**
+ * Telegram 的一条私聊消息（机器人收到的 message、私人号的 business_message）→ 统一的入站结构，chatId 是私聊的 chat id
+ * （就是客户的用户 id，Telegram 不给手机号），客户名字取 chat 上的名字（私人号自己发的消息 chat 也是客户）。群、频道返回 null。
+ * 图片取最大的那张（photo 是同一张图的几种尺寸，最后一个最大）；语音、视频、圆形视频、动图、音频、文件按 file_id 下载（getFile，20MB 以内），
+ * F4 只识别图片和语音。贴纸、位置、联系人、投票这些不下载，记成标签。说明文字（caption）当正文。时间 date 是秒
+ * https://core.telegram.org/bots/api#message
+ * @param {any} msg
+ * @param {{fromMe?: boolean, source?: string|null}} [o] 私人号自己发的：fromMe；source 为 api 是墨鸽经机器人代发的，app 是在 Telegram 里发的
+ */
+export function parseTelegramMessage(msg, { fromMe = false, source = null } = {}) {
+  if (!msg || typeof msg !== 'object' || msg.chat?.type !== 'private' || msg.chat.id == null) return null;
+  const text = String(msg.text ?? msg.caption ?? '').trim();
+  let label = null;
+  let media = null;
+  const file = (kind, f, extra = {}) => {
+    label = MEDIA_LABELS[kind];
+    if (!f?.file_id) return;
+    media = {
+      type: kind,
+      f4Type: null,
+      mime: f.mime_type ? baseMime(f.mime_type) : '',
+      id: String(f.file_id),
+      url: null,
+      filename: null,
+      seconds: null,
+      size: Number.isFinite(f.file_size) ? f.file_size : null,
+      ...extra,
+    };
+  };
+  if (Array.isArray(msg.photo) && msg.photo.length) file('image', msg.photo[msg.photo.length - 1], { f4Type: 'image', mime: 'image/jpeg' });
+  else if (msg.voice) file('voice', msg.voice, { f4Type: 'voice', seconds: tgSeconds(msg.voice.duration) });
+  else if (msg.video_note) file('video', msg.video_note, { mime: 'video/mp4' });
+  else if (msg.video) file('video', msg.video);
+  // 动图同时带 animation 和 document，按视频存
+  else if (msg.animation) file('video', msg.animation);
+  else if (msg.audio) file('voice', msg.audio, { filename: cleanFilename(msg.audio.file_name), seconds: tgSeconds(msg.audio.duration) });
+  else if (msg.document) file('document', msg.document, { filename: cleanFilename(msg.document.file_name) });
+  else if (msg.sticker) label = MEDIA_LABELS.sticker;
+  else if (msg.venue || msg.location) {
+    const v = msg.venue || {};
+    const loc = v.location || msg.location || {};
+    const title = String(v.title || '').trim();
+    const address = String(v.address || '').trim();
+    const where = title && address && title !== address ? `${title}（${address}）` : title || address;
+    const lat = Number(loc.latitude);
+    const lng = Number(loc.longitude);
+    label = where ? `[位置] ${clip(where, 300)}` : Number.isFinite(lat) && Number.isFinite(lng) ? `[位置] ${lat}, ${lng}` : '[位置]';
+  } else if (msg.contact) {
+    const c = msg.contact;
+    const who = [tgUserName(c), c.phone_number ? `+${String(c.phone_number).replace(/^\+/, '')}` : ''].filter(Boolean).join(' ');
+    label = who ? `[联系人] ${clip(who, 200)}` : '[联系人]';
+  } else if (msg.poll) {
+    label = `[投票] ${clip(String(msg.poll.question || '').trim(), 200)}`.trim();
+  }
+  const ts = Number(msg.date);
+  return {
+    channel: 'telegram',
+    externalId: String(msg.message_id),
+    chatId: String(msg.chat.id),
+    fromMe,
+    source,
+    timestampMs: Number.isFinite(ts) && ts > 0 ? ts * 1000 : Date.now(),
+    text,
+    mediaLabel: text ? null : label || '[非文字消息]',
+    media,
+    contactName: clip(tgUserName(msg.chat), 100),
+    replyToId: msg.reply_to_message?.message_id != null ? String(msg.reply_to_message.message_id) : null,
+  };
+}
+
 /**
  * 配对码要关联的手机号：去掉空格、横线、括号，允许开头 + 或 00，剩下是 8–15 位、不以 0 开头的数字（带国家码）。
  * 返回纯数字号码，不合格返回 null。
@@ -480,12 +589,15 @@ export const draftEntryIds = (raw, entries) => {
  *   wahaInlineMaxBytes?: number,
  *   lineReplyWindowMs?: number,
  *   lineContentRetryMs?: number,
+ *   tgPollTimeoutSec?: number,
+ *   tgRetryMs?: number,
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
  * }} [opts]
  *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）；
- *   lineReplyWindowMs：LINE 的 reply token 多久以内拿来回复；lineContentRetryMs：下载 LINE 客户文件返回 202 后隔多久再取（测试里调小）
+ *   lineReplyWindowMs：LINE 的 reply token 多久以内拿来回复；lineContentRetryMs：下载 LINE 客户文件返回 202 后隔多久再取（测试里调小）；
+ *   tgPollTimeoutSec：Telegram 长轮询每次等多久；tgRetryMs：Telegram 收消息出错后第一次等多久再试（测试里调小）
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -525,6 +637,21 @@ export function createWaService(ctx, opts = {}) {
   const lineNames = new Map();
   const lineReplyWindowMs = opts.lineReplyWindowMs ?? LINE_REPLY_WINDOW_MS;
   const lineContentRetryMs = opts.lineContentRetryMs ?? 2000;
+  /**
+   * @type {Map<string, {token:string, channel:string, ready:boolean, error:string|null, fatal:boolean, me:any, poller:{stop:() => Promise<void>}}>}
+   * Telegram：号 id → 正在收消息的长轮询（token 改了就换一个）
+   */
+  const tgPollers = new Map();
+  /** @type {Map<string, any>} Telegram：号 id → kv 里记的状态（见 tgKv），读一次留在内存 */
+  const tgKvCache = new Map();
+  /** @type {Map<string, NodeJS.Timeout>} Telegram：会话 id → 隔几秒再发一次「正在输入」的定时器 */
+  const tgTypingTimers = new Map();
+  const tgPollTimeoutSec = opts.tgPollTimeoutSec ?? 50;
+  const tgRetryMs = opts.tgRetryMs ?? 2000;
+  /** 改号以后同步 Telegram 收消息，一次只跑一个 */
+  let tgSyncChain = Promise.resolve();
+  /** 日志里写的会话 id（Telegram 的不带客户的用户 id，见 telegram.js 的 convLogId） */
+  const logConv = (convId) => convLogId(db, convId);
   const wahaInlineMax = opts.wahaInlineMaxBytes ?? WAHA_INLINE_MAX_BYTES;
   /** 客户媒体单个文件的上限（测试里可以调小） */
   const mediaMaxBytes = opts.mediaStoreMaxBytes ?? MEDIA_STORE_MAX_BYTES;
@@ -593,10 +720,11 @@ export function createWaService(ctx, opts = {}) {
    * 记下本服务经 API 发出去的消息（bot 回复、后台人工、F3 转发和回执、通知、文件、F11 外联），
    * 用来从 message.any 的 fromMe 消息里剔除回声（F12）。发请求之前就记，id 等 API 返回后再补：回声可能比 API 响应先到。
    */
-  function rememberSent(accountId, chatId, text) {
+  function rememberSent(accountId, chatId, text, chatScoped = false) {
     const now = Date.now();
     const list = (recentSent.get(accountId) || []).filter((e) => now - e.at < ECHO_ID_KEEP_MS);
-    const entry = { id: null, short: null, chatId, text: String(text ?? '').trim(), at: now };
+    // chatScoped：消息 id 只在这个聊天里唯一（Telegram），按 id 比时还要聊天对得上
+    const entry = { id: null, short: null, chatId, text: String(text ?? '').trim(), at: now, chatScoped };
     list.push(entry);
     recentSent.set(accountId, list);
     return entry;
@@ -615,7 +743,7 @@ export function createWaService(ctx, opts = {}) {
     const body = String(text ?? '').trim();
     return list.some(
       (e) =>
-        (externalId && (e.id === externalId || (short && e.short === short))) ||
+        (externalId && (e.id === externalId || (short && e.short === short)) && (!e.chatScoped || e.chatId === chatId)) ||
         (byText && e.chatId === chatId && e.text === body && now - e.at <= ECHO_TEXT_WINDOW_MS),
     );
   }
@@ -623,12 +751,16 @@ export function createWaService(ctx, opts = {}) {
   /** 发文本（不落库）。号被删了、未配置时抛错 */
   async function sendRaw(acc, chatId, text) {
     if (!acc) throw new Error('这个号已删除');
-    const entry = rememberSent(acc.id, chatId, text);
+    const entry = rememberSent(acc.id, chatId, text, isTelegram(acc.channel));
     let id;
     if (acc.channel === 'waha') id = await waha.sendText(acc.sessionName, chatId, text);
     else if (acc.channel === 'meta') id = await metaSendText(config.metaGraphUrl, acc.meta, chatId, text);
     else if (acc.channel === 'line') id = await lineSend(acc, chatId, [{ type: 'text', text }]);
-    else throw new Error('未知的接入方式');
+    else if (isTelegram(acc.channel)) {
+      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 一条消息最多 ${TG_TEXT_MAX} 个字，这条有 ${text.length} 个字，请分开发`);
+      const t = tgTarget(acc);
+      id = await tgSendText(config.telegramApiUrl, t.token, chatId, text, { businessConnectionId: t.businessConnectionId });
+    } else throw new Error('未知的接入方式');
     entry.id = id || null;
     entry.short = id ? shortMessageId(id) : null;
     return id;
@@ -694,10 +826,11 @@ export function createWaService(ctx, opts = {}) {
    * F15：发一个文件（不落库）。WAHA：jpeg/png 用 sendImage，其余用 sendFile；15MB 以内传 base64，更大的给签名下载地址。
    * Meta：先上传拿 media id（按号码缓存 25 天），jpeg/png 且不超过 5MB 的发 image，其余发 document；缓存的 id 失效时重传一次。
    * LINE：图片给签名地址，其他文件发下载链接（见 lineFileMessages）。
+   * Telegram：直接上传，10MB 以内的 jpeg/png 发图片（Telegram 会压缩），其余发文件（原样），最大 50MB；说明文字最多 1024 字。
    */
   async function sendFileRaw(acc, chatId, file, caption = '') {
     if (!acc) throw new Error('这个号已删除');
-    const entry = rememberSent(acc.id, chatId, caption);
+    const entry = rememberSent(acc.id, chatId, caption, isTelegram(acc.channel));
     const diskPath = ctx.files.filePath(file.id);
     const asImage = file.mime === 'image/jpeg' || file.mime === 'image/png';
     let id;
@@ -737,6 +870,17 @@ export function createWaService(ctx, opts = {}) {
       }
     } else if (acc.channel === 'line') {
       id = await lineSend(acc, chatId, lineFileMessages(file, caption));
+    } else if (isTelegram(acc.channel)) {
+      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件的说明文字最多 ${TG_CAPTION_MAX} 个字，请缩短，或者把文字单独发`);
+      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 机器人发文件不能超过 50MB');
+      const t = tgTarget(acc);
+      id = await tgSendFile(
+        config.telegramApiUrl,
+        t.token,
+        chatId,
+        { buffer: await fs.promises.readFile(diskPath), filename: file.filename, mime: file.mime },
+        { asPhoto: asImage && file.size <= TG_PHOTO_MAX_BYTES, caption, businessConnectionId: t.businessConnectionId },
+      );
     } else {
       throw new Error('未知的接入方式');
     }
@@ -745,9 +889,9 @@ export function createWaService(ctx, opts = {}) {
     return id;
   }
 
-  /** 给某个号码发文本（通知、F3 回执用）。LINE 官方帐号只能给加了好友的 userId 发，没有号码可发 */
+  /** 给某个号码发文本（通知、F3 回执用）。LINE 官方帐号、Telegram 号只能给聊过的人发，没有号码可发 */
   const sendToNumber = async (acc, number, text) => {
-    if (acc?.channel === 'line') throw new Error('LINE 官方帐号不能给手机号发消息');
+    if (acc && !isWhatsapp(acc.channel)) throw new Error(`${CHANNEL_NAMES[acc.channel] || '这个号'}不能给手机号发消息`);
     return sendRaw(acc, acc?.channel === 'waha' ? `${number}@c.us` : number, text);
   };
 
@@ -796,11 +940,18 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 我方这条消息最晚能撤回到什么时候（ISO），不能撤回时为 null：扫码号发送成功、有 WhatsApp 消息 id、还没撤回、
-   * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号、LINE 官方帐号没有撤回接口
+   * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号、LINE 官方帐号没有撤回接口。
+   * Telegram 机器人删自己发的，48 小时内；私人号要有删除的权限（经机器人发的要「删除机器人发的消息」，
+   * 在 Telegram 里自己发的要「删除所有消息」），时限按 48 小时算
    */
   function revocableUntil(r, acc) {
-    if (r.direction !== 'out' || r.status !== 'sent' || !r.external_id || r.revoked_at || acc?.channel !== 'waha') return null;
-    const until = Date.parse(r.ts) + REVOKE_WINDOW_MS;
+    if (r.direction !== 'out' || r.status !== 'sent' || !r.external_id || r.revoked_at) return null;
+    let windowMs = 0;
+    if (acc?.channel === 'waha') windowMs = REVOKE_WINDOW_MS;
+    else if (acc?.channel === 'tgbot' && r.via !== 'phone') windowMs = TG_REVOKE_WINDOW_MS;
+    else if (acc?.channel === 'tgbiz' && tgCanDelete(acc, r)) windowMs = TG_REVOKE_WINDOW_MS;
+    if (!windowMs) return null;
+    const until = Date.parse(r.ts) + windowMs;
     return Number.isFinite(until) && until > Date.now() ? new Date(until).toISOString() : null;
   }
 
@@ -843,9 +994,9 @@ export function createWaService(ctx, opts = {}) {
     return r ? rowToConversation(r) : null;
   }
 
-  /** 客户的称呼：名字，没有就是 +号码；LINE 的客户没有号码，叫「LINE 用户」（不露 userId） */
+  /** 客户的称呼：名字，没有就是 +号码；LINE、Telegram 的客户没有号码，叫「LINE 用户」「Telegram 用户」（不露用户 id） */
   const displayName = (conv) =>
-    conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : conv.channel === 'line' ? 'LINE 用户' : conv.chat_id || conv.id);
+    conv.contact_name || (conv.contact_number ? `+${conv.contact_number}` : NO_NUMBER_NAMES[conv.channel] || conv.chat_id || conv.id);
 
   function cancelTimer(convId) {
     const t = timers.get(convId);
@@ -891,7 +1042,7 @@ export function createWaService(ctx, opts = {}) {
     } catch (err) {
       status = 'failed';
       error = String(err?.message || err);
-      log.warn(`[wa] 发送到 ${conv.id} 失败：${error}`);
+      log.warn(`[wa] 发送到 ${logConv(conv.id)} 失败：${error}`);
     }
     if (externalId && db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND external_id = ?').get(conv.id, externalId)) {
       externalId = null;
@@ -936,7 +1087,7 @@ export function createWaService(ctx, opts = {}) {
     } catch (err) {
       status = 'failed';
       error = String(err?.message || err);
-      log.warn(`[wa] 发文件到 ${conv.id} 失败：${error}`);
+      log.warn(`[wa] 发文件到 ${logConv(conv.id)} 失败：${error}`);
     }
     if (externalId && db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND external_id = ?').get(conv.id, externalId)) {
       externalId = null;
@@ -1095,14 +1246,19 @@ export function createWaService(ctx, opts = {}) {
   }
 
   // ---------------- 入站 ----------------
+  /**
+   * 早于这个时间的消息不处理（服务刚启动、扫码号刚连上时 WhatsApp 推来的旧消息）。Telegram 不限：停机期间客户发的消息
+   * 重启后才取到，时间都在启动之前，按 offset 确认过的不会再给，第一次接入时之前积压的也已经跳过（见 telegram-poll.js）
+   */
   function cutoffMs(acc) {
+    if (isTelegram(acc.channel)) return 0;
     return Math.max(startedAt, acc.channel === 'waha' ? state(acc.id).connectedAt : 0) - OLD_MESSAGE_GRACE_MS;
   }
 
   async function resolveNumber(acc, m) {
     if (m.channel === 'meta') return m.chatId.replace(/\D+/g, '') || null;
-    // LINE 只给 userId，没有手机号
-    if (m.channel === 'line') return null;
+    // LINE 只给 userId、Telegram 只给用户 id，没有手机号
+    if (m.channel === 'line' || m.channel === 'telegram') return null;
     const at = m.chatId.lastIndexOf('@');
     const user = at >= 0 ? m.chatId.slice(0, at) : m.chatId;
     const server = at >= 0 ? m.chatId.slice(at + 1).toLowerCase() : '';
@@ -1128,8 +1284,9 @@ export function createWaService(ctx, opts = {}) {
 
   /** 4.1 黑白名单（按号） */
   function inScope(acc, number, chatId) {
-    // LINE 官方帐号的客户只有 userId、没有手机号，按号码的白名单、黑名单用不上，都算在范围内（发得进来的本来就是加了好友的人）
-    if (acc.channel === 'line') return true;
+    // LINE、Telegram 的客户只有用户 id、没有手机号，按号码的白名单、黑名单用不上，都算在范围内
+    // （LINE 发得进来的本来就是加了好友的人，Telegram 是主动来找机器人或私人号的人）
+    if (!isWhatsapp(acc.channel)) return true;
     if (number && acc.blocklist.includes(number)) return false;
     if (acc.scope === 'allowlist') {
       // F11：这个号发过外联的对象算在范围内（黑名单仍然优先）
@@ -1152,14 +1309,15 @@ export function createWaService(ctx, opts = {}) {
   async function handleInbound(acc, m) {
     if (closed) return 'closed';
     if (!acc) return 'ignored_account';
-    // F12：只有扫码号（WAHA message.any）会推自己发的消息；Meta 没有这一项
-    if (m.fromMe && acc.channel !== 'waha') return 'ignored_from_me';
+    // F12：只有扫码号（WAHA message.any）和 Telegram 私人号（business_message）会推自己发的消息；Meta、LINE 没有这一项
+    if (m.fromMe && acc.channel !== 'waha' && acc.channel !== 'tgbiz') return 'ignored_from_me';
     const chatId = m.chatId;
     if (!chatId || isNonPrivateChat(chatId)) return 'ignored_non_private';
     // F12：本服务经 API 发出去的消息（机器人、人工、F3 转发和回执、通知）推回来的回声，剔除
     if (m.fromMe && (m.source === 'api' || isOwnEcho(acc.id, chatId, m.externalId, m.text, m.source !== 'app'))) return 'ignored_echo';
     const convId = conversationIdOf(acc.id, chatId);
-    const key = m.externalId ? `${acc.id}|${m.externalId}` : null;
+    // Telegram 的消息 id 只在一个聊天里唯一，不同客户的消息 id 会撞，要带上聊天
+    const key = m.externalId ? (isTelegram(acc.channel) ? `${acc.id}|${chatId}|${m.externalId}` : `${acc.id}|${m.externalId}`) : null;
     if (
       key &&
       (inflight.has(key) ||
@@ -1409,6 +1567,16 @@ export function createWaService(ctx, opts = {}) {
         else throw new Error('消息里没有消息 id');
         res = opened.res;
         mime = mime || opened.mime;
+      } else if (isTelegram(acc.channel)) {
+        if (!media.id) throw new Error('消息里没有文件 id');
+        const opened = await tgOpenFile(config.telegramApiUrl, acc.telegram.botToken, media.id, {
+          maxBytes: mediaMaxBytes,
+          knownSize: media.size ?? null,
+          timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
+          signal,
+        });
+        res = opened.res;
+        mime = mime || opened.mime;
       } else {
         throw new Error('未知的接入方式');
       }
@@ -1453,7 +1621,7 @@ export function createWaService(ctx, opts = {}) {
     converting.set(convId, (converting.get(convId) || 0) + 1);
     // F12：识别用的模型调用记到这个号和会话上
     llmScope({ accountId: acc.id, conversationId: convId }, () => convertMedia(acc, convId, msgId, m, saved))
-      .catch((err) => log.error(`[wa] 识别会话 ${convId} 的${m.media.f4Type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
+      .catch((err) => log.error(`[wa] 识别会话 ${logConv(convId)} 的${m.media.f4Type === 'voice' ? '语音' : '图片'}出错：${err?.stack || err}`))
       .finally(() => {
         const n = (converting.get(convId) || 1) - 1;
         if (n > 0) converting.set(convId, n);
@@ -1471,6 +1639,7 @@ export function createWaService(ctx, opts = {}) {
     }
     if (acc.channel === 'meta') return metaDownloadMedia(config.metaGraphUrl, acc.meta, media.id, { maxBytes });
     if (acc.channel === 'line') return lineDownloadContent(config.lineDataApiUrl, acc.line, media, { maxBytes, retryDelayMs: lineContentRetryMs });
+    if (isTelegram(acc.channel)) return tgDownloadFile(config.telegramApiUrl, acc.telegram.botToken, media, { maxBytes });
     throw new Error('未知的接入方式');
   }
 
@@ -1573,7 +1742,7 @@ export function createWaService(ctx, opts = {}) {
     const ms = delayMs ?? Math.round(settings().reply.debounceSeconds * 1000);
     const t = setTimeout(() => {
       timers.delete(convId);
-      flush(convId).catch((err) => log.error(`[wa] 处理会话 ${convId} 出错：${err?.stack || err}`));
+      flush(convId).catch((err) => log.error(`[wa] 处理会话 ${logConv(convId)} 出错：${err?.stack || err}`));
     }, ms);
     timers.set(convId, t);
   }
@@ -1650,7 +1819,7 @@ export function createWaService(ctx, opts = {}) {
     const today = localDay();
     const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
     if (usedToday + 2 > DAILY_LLM_LIMIT) {
-      log.warn(`[wa] 会话 ${convId} 今天的模型调用已达上限（${usedToday}/${DAILY_LLM_LIMIT}）`);
+      log.warn(`[wa] 会话 ${logConv(convId)} 今天的模型调用已达上限（${usedToday}/${DAILY_LLM_LIMIT}）`);
       return void settle('skipped', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`);
     }
     // 每个号每分钟 30 条
@@ -1696,7 +1865,7 @@ export function createWaService(ctx, opts = {}) {
       .prepare(`SELECT 1 FROM messages WHERE conversation_id = ? AND revoked_at IS NOT NULL AND seq IN (${pending.map(() => '?').join(', ')}) LIMIT 1`)
       .get(convId, ...pending.map((p) => p.seq));
     if (revokedNow) {
-      log.info(`[wa] 会话 ${convId} 生成回复期间客户撤回了消息，这次的回复不发，重新处理`);
+      log.info(`[wa] 会话 ${logConv(convId)} 生成回复期间客户撤回了消息，这次的回复不发，重新处理`);
       scheduleFlush(convId);
       return;
     }
@@ -1733,7 +1902,7 @@ export function createWaService(ctx, opts = {}) {
         if (strikes >= OFFTOPIC_STRIKES) {
           const until = new Date(Date.now() + MUTE_MS).toISOString();
           db.prepare('UPDATE conversations SET muted_until = ? WHERE id = ?').run(until, convId);
-          log.info(`[wa] 会话 ${convId} 24 小时内离题 ${strikes} 次，静默到 ${until}`);
+          log.info(`[wa] 会话 ${logConv(convId)} 24 小时内离题 ${strikes} 次，静默到 ${until}`);
         }
         return;
       }
@@ -1986,7 +2155,7 @@ export function createWaService(ctx, opts = {}) {
       // 草稿里写了负责人的名字、电话这些，记下是谁的（没用资料就不记，改派也不清）
       if (agentProfile) draft.agentUserId = before.assignee_id;
     } catch (err) {
-      log.warn(`[wa] 会话 ${convId} 生成草稿失败，不带草稿通知：${err?.message || err}`);
+      log.warn(`[wa] 会话 ${logConv(convId)} 生成草稿失败，不带草稿通知：${err?.message || err}`);
       return;
     }
     if (closed) return;
@@ -1997,12 +2166,12 @@ export function createWaService(ctx, opts = {}) {
     if (!conv || !conv.needs_human || operatorSince) return;
     // 生成期间改派给了别人：草稿里是前一个负责人的资料，和存下之后再改派一样作废（没用资料的草稿照存）
     if (draft.agentUserId && draft.agentUserId !== (conv.assignee_id ?? null)) {
-      log.info(`[wa] 会话 ${convId} 起草期间换了负责人，草稿里是前一个负责人的资料，不存`);
+      log.info(`[wa] 会话 ${logConv(convId)} 起草期间换了负责人，草稿里是前一个负责人的资料，不存`);
       return;
     }
     // 生成期间负责人被停用了（删除的话上面已经因为会话变成未分配不存了）：和存下之后再停用一样作废
     if (draft.agentUserId && memberGone(draft.agentUserId)) {
-      log.info(`[wa] 会话 ${convId} 起草期间负责人被停用或删除了，草稿里是他的资料，不存`);
+      log.info(`[wa] 会话 ${logConv(convId)} 起草期间负责人被停用或删除了，草稿里是他的资料，不存`);
       return;
     }
     db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
@@ -2013,6 +2182,8 @@ export function createWaService(ctx, opts = {}) {
   async function markRead(acc, chatId, ids) {
     // Meta 的标已读和"正在输入"是同一个请求，在 typing() 里一起发
     if (acc.channel === 'line') return lineMarkRead(acc, chatId);
+    // Telegram 机器人不能标已读；私人号用 readBusinessMessage
+    if (acc.channel === 'tgbiz') return tgMarkRead(acc, chatId, ids);
     if (acc.channel !== 'waha') return;
     try {
       await waha.sendSeen(acc.sessionName, chatId, ids);
@@ -2046,9 +2217,12 @@ export function createWaService(ctx, opts = {}) {
       } else if (acc.channel === 'line' && on) {
         // LINE 的「正在输入」也没有停止接口：我方发出消息时消失，最长显示 20 秒
         await lineStartLoading(config.lineApiUrl, acc.line, chatId, 20);
+      } else if (isTelegram(acc.channel)) {
+        await tgTyping(acc, chatId, on);
       }
     } catch (err) {
-      log.warn(`[wa] "正在输入"${on ? '开启' : '关闭'}失败（${chatId}）：${err?.message || err}`);
+      // Telegram 的 chat id 是客户的用户 id，日志里不记
+      log.warn(`[wa] "正在输入"${on ? '开启' : '关闭'}失败（${isTelegram(acc.channel) ? `号 ${acc.id}` : chatId}）：${err?.message || err}`);
     }
   }
 
@@ -2124,11 +2298,11 @@ export function createWaService(ctx, opts = {}) {
       }
     }
     if (sent < parts.length) {
-      log.info(`[wa] 会话 ${convId} 拟真发送被取消：已发 ${sent}/${parts.length} 条`);
+      log.info(`[wa] 会话 ${logConv(convId)} 拟真发送被取消：已发 ${sent}/${parts.length} 条`);
       // 一条都没发出：客户消息还没处理，重新从防抖开始（新消息已在库里，会一起合并）
       if (sent === 0 && !closed) scheduleFlush(convId);
     } else if (sentFileIds.length < files.length) {
-      log.info(`[wa] 会话 ${convId} 文件没有全部发出：已发 ${sentFileIds.length}/${files.length} 个`);
+      log.info(`[wa] 会话 ${logConv(convId)} 文件没有全部发出：已发 ${sentFileIds.length}/${files.length} 个`);
     }
   }
 
@@ -2384,6 +2558,7 @@ export function createWaService(ctx, opts = {}) {
     if (acc.channel === 'line') {
       return { ...base, state: lineConfigured(acc) ? 'configured' : 'not_configured', error: st.linePushError?.message ?? null };
     }
+    if (isTelegram(acc.channel)) return tgStatus(acc, base);
     if (acc.channel !== 'waha') return { ...base, error: '未知的接入方式' };
     const relayError = relays.error(acc.id);
     try {
@@ -2692,15 +2867,20 @@ export function createWaService(ctx, opts = {}) {
     }
     await relays.stop(acc.id);
     cancelHistoryImport(acc.id);
+    await tgStop(acc.id);
     for (const r of db.prepare('SELECT id FROM conversations WHERE account_id = ?').all(acc.id)) {
       cancelTimer(r.id);
       abortSending(r.id, 'account_deleted');
       lineReplyTokens.delete(r.id);
       lineReadTokens.delete(r.id);
+      clearInterval(tgTypingTimers.get(r.id));
+      tgTypingTimers.delete(r.id);
     }
     accounts.delete(acc.id, by);
     accState.delete(acc.id);
     recentSent.delete(acc.id);
+    db.prepare('DELETE FROM kv WHERE key = ?').run(tgKvKey(acc.id));
+    tgKvCache.delete(acc.id);
     for (const map of [seenLineEvents, lineNames]) {
       for (const k of map.keys()) if (k.startsWith(`${acc.id}|`)) map.delete(k);
     }
@@ -2842,6 +3022,7 @@ export function createWaService(ctx, opts = {}) {
     if (!acc) throw badRequest('这个会话所属的号已删除，不能再撤回', 'account_deleted');
     if (acc.channel === 'meta') throw badRequest('Meta 官方接口的号不能撤回消息（WhatsApp Cloud API 没有撤回功能）', 'revoke_unsupported');
     if (acc.channel === 'line') throw badRequest('LINE 官方帐号不能撤回已发出的消息（LINE Messaging API 没有撤回功能）', 'revoke_unsupported');
+    if (isTelegram(acc.channel)) return revokeTelegram(acc, conv, row, user);
     if (acc.channel !== 'waha') throw badRequest('这个号不能撤回消息', 'revoke_unsupported');
     if (!row.external_id) throw badRequest('这条消息没有记下 WhatsApp 的消息 id，不能撤回', 'no_message_id');
     if (!revocableUntil(row, acc)) throw badRequest('已经超过 WhatsApp 允许撤回的时间（发出后约两天半），不能再撤回', 'revoke_expired');
@@ -2860,7 +3041,7 @@ export function createWaService(ctx, opts = {}) {
     } catch (err) {
       // WAHA 明确报错的没撤成，不会再有撤回通知；超时、连不上的可能其实成了，留着记录等通知
       if (err instanceof WahaError && err.status) revokeAttempts.delete(attemptKey);
-      log.warn(`[wa] 撤回会话 ${convId} 的消息 ${row.id} 失败：${err?.message || err}`);
+      log.warn(`[wa] 撤回会话 ${logConv(convId)} 的消息 ${row.id} 失败：${err?.message || err}`);
       throw revokeFail(err);
     } finally {
       revoking.delete(row.id);
@@ -2996,6 +3177,368 @@ export function createWaService(ctx, opts = {}) {
     }
   }
 
+  // ---------------- Telegram（机器人、私人号） ----------------
+  // 收消息是每个号一个长轮询（telegram-poll.js），改号以后由 routes/accounts.js 调 syncTelegram。
+  // 私人号（tgbiz）：号主先点绑定链接（t.me/<机器人>?start=bind_<code>），机器人收到 /start bind_<code> 记下号主；
+  // 再在 Telegram 的「聊天自动化」里添加这个机器人，机器人收到 business_connection。只收号主自己连上的连接的消息：
+  // 谁都能在自己的 Telegram 里添加这个机器人，不绑定的话别人的私聊也会进墨鸽。
+
+  const tgKvKey = (accountId) => `telegram:${accountId}`;
+
+  /**
+   * kv 里记的 Telegram 状态：{botId, botUsername, offset, bindCode, owner:{id, name}|null,
+   * connection:{id, userId, name, enabled, canReply, canRead, canDelete, canDeleteAll, at}|null}。
+   * 换了机器人（token 前面的数字 id 变了）就重来：offset、绑定、连接都作废，换一个新的绑定 code
+   */
+  function tgKv(acc) {
+    const botId = botIdOf(acc.telegram?.botToken);
+    // 还没填 token（或者暂时清掉了）：给个空的，不动 kv 里记的，填回同一个机器人时绑定和连接还在
+    if (!botId) return { botId: '', botUsername: '', offset: null, bindCode: '', owner: null, connection: null };
+    let cur = tgKvCache.get(acc.id);
+    if (cur === undefined) {
+      cur = kvGet(db, tgKvKey(acc.id), null);
+      tgKvCache.set(acc.id, cur);
+    }
+    if (cur && cur.botId === botId) return cur;
+    const fresh = { botId, botUsername: '', offset: null, bindCode: crypto.randomBytes(12).toString('base64url'), owner: null, connection: null };
+    kvSet(db, tgKvKey(acc.id), fresh);
+    tgKvCache.set(acc.id, fresh);
+    return fresh;
+  }
+
+  function tgKvUpdate(acc, patch) {
+    if (!botIdOf(acc.telegram?.botToken)) return tgKv(acc);
+    const next = { ...tgKv(acc), ...patch };
+    kvSet(db, tgKvKey(acc.id), next);
+    tgKvCache.set(acc.id, next);
+    state(acc.id).statusCache = null;
+    return next;
+  }
+
+  /** 私人号连好了：绑定了号主，「聊天自动化」里连着的就是号主本人 */
+  const tgLinked = (t) => !!(t.owner && t.connection && t.connection.enabled && t.connection.userId === t.owner.id);
+
+  /** 发消息要的：机器人 token，私人号再加连接 id。私人号没连好、没有回复权限时报错，不发 */
+  function tgTarget(acc) {
+    const token = acc.telegram?.botToken;
+    if (!token) throw new Error('还没有填 Telegram 机器人的 token');
+    if (acc.channel !== 'tgbiz') return { token, businessConnectionId: undefined };
+    const t = tgKv(acc);
+    if (!tgLinked(t)) throw new Error('Telegram 私人号还没有连上机器人（先绑定号主，再在「聊天自动化」里添加机器人），没有发送');
+    if (!t.connection.canReply) throw new Error('机器人没有代你回复消息的权限：请在 Telegram 的「聊天自动化」里打开回复消息的权限');
+    return { token, businessConnectionId: t.connection.id };
+  }
+
+  /** 私人号能不能删这条：经墨鸽（机器人）发的要「删除机器人发的消息」或「删除所有消息」，在 Telegram 里自己发的要「删除所有消息」 */
+  function tgCanDelete(acc, r) {
+    const t = tgKv(acc);
+    if (!tgLinked(t)) return false;
+    return r.via === 'phone' ? !!t.connection.canDeleteAll : !!(t.connection.canDelete || t.connection.canDeleteAll);
+  }
+
+  /** 私人号：标已读到客户最后一条消息（要有读消息的权限；只能是 24 小时内活跃过的聊天）。失败只记警告 */
+  async function tgMarkRead(acc, chatId, ids) {
+    const t = tgKv(acc);
+    const last = ids[ids.length - 1];
+    if (!last || !tgLinked(t) || !t.connection.canRead) return;
+    try {
+      await tgReadBusinessMessage(config.telegramApiUrl, acc.telegram.botToken, t.connection.id, chatId, last);
+    } catch (err) {
+      log.warn(`[telegram] 标已读失败（号 ${acc.id}）：${err?.message || err}`);
+    }
+  }
+
+  /** 「正在输入」只显示 5 秒：开着时每 4 秒再发一次，关掉时停（没有停止接口，我方发出消息时 Telegram 自己去掉） */
+  async function tgTyping(acc, chatId, on) {
+    const key = conversationIdOf(acc.id, chatId);
+    clearInterval(tgTypingTimers.get(key));
+    tgTypingTimers.delete(key);
+    if (!on) return;
+    const t = tgTarget(acc);
+    const send = () => tgSendTyping(config.telegramApiUrl, t.token, chatId, { businessConnectionId: t.businessConnectionId });
+    await send();
+    const timer = setInterval(() => send().catch(() => {}), TG_TYPING_REFRESH_MS);
+    timer.unref?.();
+    tgTypingTimers.set(key, timer);
+  }
+
+  /**
+   * 号的连接状态。机器人：在收消息就是 working；token 不对、连不上 Telegram 是 failed。
+   * 私人号：还没绑定号主、还没在「聊天自动化」里连上（或者连上的不是号主）是 waiting，连好了是 working；
+   * 机器人没开 Business Mode、没有回复权限这些放在 error 里。telegram 里是给连接页面看的：机器人用户名、绑定链接（还没绑定时）、号主、连接
+   */
+  function tgStatus(acc, base) {
+    if (!acc.telegram?.botToken) return base;
+    const p = tgPollers.get(acc.id);
+    const t = tgKv(acc);
+    const isBiz = acc.channel === 'tgbiz';
+    const c = t.connection;
+    const byOwner = !!(t.owner && c && c.userId === t.owner.id);
+    const telegram = {
+      botUsername: t.botUsername || null,
+      bindLink: isBiz && !t.owner && t.botUsername && t.bindCode ? `https://t.me/${t.botUsername}?start=bind_${t.bindCode}` : null,
+      owner: isBiz && t.owner ? { name: t.owner.name } : null,
+      connection:
+        isBiz && c
+          ? { enabled: c.enabled, byOwner, name: c.name, canReply: c.canReply, canRead: c.canRead, canDelete: c.canDelete || c.canDeleteAll, at: c.at }
+          : null,
+    };
+    const out = { ...base, telegram };
+    if (!p) return { ...out, state: 'stopped' };
+    if (p.error) return { ...out, state: 'failed', error: p.error };
+    if (!p.ready) return { ...out, state: 'starting' };
+    if (!isBiz) return { ...out, state: 'working' };
+    if (tgLinked(t)) {
+      return { ...out, state: 'working', error: c.canReply ? null : '机器人没有代你回复消息的权限，墨鸽收得到消息但发不出去：请在 Telegram 的「聊天自动化」里打开回复消息的权限' };
+    }
+    let error = null;
+    if (p.me && p.me.can_connect_to_business === false) {
+      error = '这个机器人还没打开 Business Mode，「聊天自动化」里加不了它：在 @BotFather 里选这个机器人 → Bot Settings → Business Mode，打开';
+    } else if (t.owner && c && c.enabled && !byOwner) {
+      error = `在「聊天自动化」里连接这个机器人的是「${c.name || '另一个帐号'}」，不是绑定的号主「${t.owner.name || '号主'}」，墨鸽不收它的消息`;
+    }
+    return { ...out, state: 'waiting', error };
+  }
+
+  /** 让每个填了机器人 token 的 Telegram 号都在收消息：token 改了的重新开始，删了的、清了 token 的停掉 */
+  function syncTelegram() {
+    tgSyncChain = tgSyncChain
+      .then(async () => {
+        if (closed) return;
+        const want = new Map();
+        for (const acc of accounts.list()) if (isTelegram(acc.channel) && acc.telegram?.botToken) want.set(acc.id, acc);
+        for (const [id, p] of [...tgPollers]) {
+          const acc = want.get(id);
+          // token 不对停下了的（fatal），再保存一次号就重新试
+          if (acc && acc.telegram.botToken === p.token && acc.channel === p.channel && !p.fatal) continue;
+          await tgStop(id);
+        }
+        for (const [id, acc] of want) if (!tgPollers.has(id) && !closed) startTelegram(acc);
+      })
+      .catch((err) => log.error(`[telegram] 同步收消息出错：${err?.stack || err}`));
+    return tgSyncChain;
+  }
+
+  async function tgStop(accountId) {
+    const p = tgPollers.get(accountId);
+    if (!p) return;
+    tgPollers.delete(accountId);
+    await p.poller.stop();
+    const st = accState.get(accountId);
+    if (st) st.statusCache = null;
+  }
+
+  function startTelegram(acc) {
+    const entry = { token: acc.telegram.botToken, channel: acc.channel, ready: false, error: null, fatal: false, me: null, poller: null };
+    tgPollers.set(acc.id, entry);
+    const touch = () => {
+      state(acc.id).statusCache = null;
+    };
+    /** 号还在、token 没换时才读写 kv（停下的旧轮询可能还在收尾） */
+    const live = () => {
+      const a = accounts.get(acc.id);
+      return a && tgPollers.get(acc.id) === entry && a.telegram?.botToken === entry.token ? a : null;
+    };
+    entry.poller = startTgPoller({
+      apiBase: config.telegramApiUrl,
+      token: entry.token,
+      allowedUpdates: acc.channel === 'tgbiz' ? TG_BIZ_UPDATES : TG_BOT_UPDATES,
+      timeoutSec: tgPollTimeoutSec,
+      retryMs: tgRetryMs,
+      loadOffset: () => {
+        const a = live();
+        return a ? tgKv(a).offset ?? null : null;
+      },
+      saveOffset: (offset) => {
+        const a = live();
+        if (a) tgKvUpdate(a, { offset });
+      },
+      onReady: (me) => {
+        entry.ready = true;
+        entry.error = null;
+        entry.me = me;
+        const a = live();
+        if (a) tgKvUpdate(a, { botUsername: String(me?.username || '') });
+        log.info(`[telegram] 号 ${acc.id} 开始收消息`);
+        touch();
+      },
+      onOk: () => {
+        if (!entry.error) return;
+        entry.error = null;
+        log.info(`[telegram] 号 ${acc.id} 恢复收消息`);
+        touch();
+      },
+      onError: (err, fatal) => {
+        const msg = err instanceof TgError ? err.message : `收消息出错：${err?.message || err}`;
+        if (entry.error !== msg) log.warn(`[telegram] 号 ${acc.id} 收消息出错${fatal ? '，停下了，改了 token 后重新开始' : '，稍后重试'}：${msg}`);
+        entry.error = msg;
+        entry.fatal = fatal;
+        touch();
+      },
+      onUpdate: (u) => handleTelegramUpdate(acc.id, u),
+      onUpdateError: (err) => log.error(`[telegram] 处理号 ${acc.id} 的消息出错：${err?.stack || err}`),
+    });
+  }
+
+  /**
+   * 处理一条 update，返回处理结果（测试用）。
+   * 机器人：私聊里客户发的 message；客户停用机器人（my_chat_member）只记日志。
+   * 私人号：给机器人发的 message 只认绑定口令；business_connection 记连接；business_message 是私聊里双方的消息
+   * （号主发的按 fromMe，墨鸽经机器人代发的回来时带 sender_business_bot、当回声剔除）；deleted_business_messages 是删除
+   */
+  async function handleTelegramUpdate(accountId, u) {
+    if (closed) return 'closed';
+    const acc = accounts.get(accountId);
+    if (!acc || !isTelegram(acc.channel)) return 'ignored_account';
+    if (!u || typeof u !== 'object') return 'ignored_event';
+    const st = state(acc.id);
+    st.lastWebhookAt = nowIso();
+    st.statusCache = null;
+    if (acc.channel === 'tgbot') {
+      if (u.message) {
+        if (u.message.from?.is_bot) return 'ignored_bot';
+        const m = parseTelegramMessage(u.message);
+        return m ? handleInbound(acc, m) : 'ignored_non_private';
+      }
+      if (u.my_chat_member?.chat?.type === 'private' && u.my_chat_member.new_chat_member?.status === 'kicked') {
+        log.info(`[telegram] 号 ${acc.id} 有客户停用了机器人，之后发不到他了`);
+        return 'blocked';
+      }
+      return 'ignored_event';
+    }
+    if (u.message) return tgBind(acc, u.message);
+    if (u.business_connection) return tgConnection(acc, u.business_connection);
+    if (u.business_message) {
+      const msg = u.business_message;
+      const t = tgKv(acc);
+      if (!tgLinked(t) || msg.business_connection_id !== t.connection.id) return 'ignored_connection';
+      const fromMe = msg.from?.id != null && String(msg.from.id) === t.owner.id;
+      const bot = msg.sender_business_bot;
+      const ours = bot?.id != null && String(bot.id) === t.botId;
+      const m = parseTelegramMessage(msg, { fromMe, source: fromMe ? (ours ? 'api' : 'app') : null });
+      return m ? handleInbound(acc, m) : 'ignored_non_private';
+    }
+    if (u.deleted_business_messages) return tgDeleted(acc, u.deleted_business_messages);
+    return 'ignored_event';
+  }
+
+  /**
+   * 私人号的绑定：号主点开绑定链接后，机器人收到他发的 /start bind_<code>，记下号主，回一句下一步怎么做。
+   * 只有还没绑定、code 对得上时才绑（绑定后 code 作废）；别人给机器人发的消息一律不理：这个机器人只给私人号代收代发
+   */
+  async function tgBind(acc, msg) {
+    if (msg.chat?.type !== 'private' || !msg.from || msg.from.is_bot) return 'ignored_bot_chat';
+    const mm = /^\/start\s+bind_([A-Za-z0-9_-]{1,64})$/.exec(String(msg.text || '').trim());
+    if (!mm) return 'ignored_bot_chat';
+    const t = tgKv(acc);
+    const got = Buffer.from(mm[1]);
+    const want = Buffer.from(t.bindCode || '');
+    if (t.owner || !want.length || got.length !== want.length || !crypto.timingSafeEqual(got, want)) return 'ignored_bind';
+    const owner = { id: String(msg.from.id), name: clip(tgUserName(msg.from), 100) };
+    const next = tgKvUpdate(acc, { owner, bindCode: '' });
+    log.info(`[telegram] 号 ${acc.id} 绑定了号主`);
+    const tip = tgLinked(next)
+      ? '「聊天自动化」里已经连好了，客户发给你的私聊消息会出现在墨鸽里。'
+      : `下一步：打开 Telegram 的「设置 → 聊天自动化」（英文界面是 Settings → Chat Automation），添加 @${next.botUsername}，并打开回复消息的权限。`;
+    try {
+      await tgSendText(config.telegramApiUrl, acc.telegram.botToken, msg.chat.id, `已绑定到墨鸽。${tip}`);
+    } catch (err) {
+      log.warn(`[telegram] 号 ${acc.id} 回复绑定结果失败：${err?.message || err}`);
+    }
+    return 'bound';
+  }
+
+  /**
+   * business_connection：有人在「聊天自动化」里连上、断开这个机器人，或者改了权限。号主已经连好时，别人连上来的不理（只记日志）；
+   * 否则记下最近一次的：号主还没绑定就先连了的，绑定后直接生效；不是号主连的，状态里提示
+   */
+  function tgConnection(acc, bc) {
+    const rights = bc.rights && typeof bc.rights === 'object' ? bc.rights : {};
+    const connection = {
+      id: String(bc.id || ''),
+      userId: String(bc.user?.id ?? ''),
+      name: clip(tgUserName(bc.user), 100),
+      enabled: bc.is_enabled !== false,
+      // 老版本 Bot API 只有 can_reply，没有 rights
+      canReply: !!(rights.can_reply ?? bc.can_reply),
+      canRead: !!rights.can_read_messages,
+      canDelete: !!rights.can_delete_sent_messages,
+      canDeleteAll: !!rights.can_delete_all_messages,
+      at: nowIso(),
+    };
+    if (!connection.id) return 'ignored_connection';
+    const t = tgKv(acc);
+    if (tgLinked(t) && connection.userId !== t.owner.id) {
+      log.warn(`[telegram] 号 ${acc.id}：有别的帐号在「聊天自动化」里连了这个机器人，不是绑定的号主，不理`);
+      return 'ignored_connection';
+    }
+    tgKvUpdate(acc, { connection });
+    log.info(`[telegram] 号 ${acc.id} 的「聊天自动化」连接${connection.enabled ? '已连上或改了权限' : '已断开'}`);
+    return connection.enabled ? 'connected' : 'disconnected';
+  }
+
+  /**
+   * deleted_business_messages：私聊里有消息被删了（Telegram 不说是谁删的，私聊里双方都能删任何一条）。
+   * 客户的消息按「客户撤回」标；我方的消息，墨鸽里点过撤回的按那个成员标，其余按「已在手机上撤回」
+   */
+  function tgDeleted(acc, d) {
+    const t = tgKv(acc);
+    if (!tgLinked(t) || d.business_connection_id !== t.connection.id) return ['ignored_connection'];
+    if (d.chat?.type !== 'private' || d.chat.id == null) return ['ignored_non_private'];
+    const convId = conversationIdOf(acc.id, String(d.chat.id));
+    const at = nowIso();
+    pruneRevokeAttempts();
+    return (Array.isArray(d.message_ids) ? d.message_ids : []).map((mid) => {
+      const row = db.prepare('SELECT * FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, String(mid));
+      if (!row) return 'ignored_revoke_unknown';
+      if (row.revoked_at) return 'ignored_duplicate';
+      if (row.direction === 'in') return customerRevoked(row, at);
+      const attempt = revokeAttempts.get(`${acc.id}|${convId}|${mid}`);
+      markRevoked(row.id, attempt ? 'member' : 'phone', attempt?.user ?? null, at);
+      return attempt ? 'revoked_member' : 'revoked_phone';
+    });
+  }
+
+  /** 业务员在墨鸽里撤回 Telegram 号发出的消息（revokeMessage 已经查过方向、状态、号）：机器人 deleteMessage，私人号 deleteBusinessMessages */
+  async function revokeTelegram(acc, conv, row, user) {
+    if (!row.external_id) throw badRequest('这条消息没有记下 Telegram 的消息 id，不能撤回', 'no_message_id');
+    if (acc.channel === 'tgbiz' && !tgCanDelete(acc, row)) {
+      throw badRequest(
+        row.via === 'phone'
+          ? '在 Telegram 里自己发的消息，要机器人有「删除所有消息」的权限才能撤回：请在「聊天自动化」里打开'
+          : '机器人没有删除消息的权限：请在 Telegram 的「聊天自动化」里打开',
+        'revoke_no_right',
+      );
+    }
+    if (!revocableUntil(row, acc)) throw badRequest('已经超过 Telegram 允许撤回的时间（发出后 48 小时），不能再撤回', 'revoke_expired');
+    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '正在撤回这条消息，请稍等');
+    const who = user ? { id: user.id, name: user.name ?? '' } : null;
+    const attemptKey = `${acc.id}|${conv.id}|${row.external_id}`;
+    pruneRevokeAttempts();
+    revokeAttempts.set(attemptKey, { user: who, at: Date.now() });
+    revoking.add(row.id);
+    try {
+      const connId = acc.channel === 'tgbiz' ? tgKv(acc).connection.id : undefined;
+      await tgDeleteMessage(config.telegramApiUrl, acc.telegram.botToken, conv.chat_id, row.external_id, { businessConnectionId: connId });
+    } catch (err) {
+      // Telegram 明确报错的没撤成；连不上、超时的可能其实成了，私人号留着记录等删除通知
+      if (err instanceof TgError && err.status) revokeAttempts.delete(attemptKey);
+      log.warn(`[telegram] 撤回消息 ${row.id} 失败（号 ${acc.id}）：${err?.message || err}`);
+      throw err instanceof TgError ? new HttpError(502, 'telegram_error', `撤回失败：${err.message}`) : err;
+    } finally {
+      revoking.delete(row.id);
+    }
+    markRevoked(row.id, 'member', who, nowIso());
+    return rowToMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(row.id), accounts.get(acc.id) || acc);
+  }
+
+  /** 私人号换号主：清掉绑定，换一个新的绑定链接（连接留着，同一个人重新绑定后直接生效） */
+  function telegramRebind(acc) {
+    if (acc.channel !== 'tgbiz') throw badRequest('只有 Telegram 私人号要绑定号主', 'wrong_channel');
+    tgKvUpdate(acc, { owner: null, bindCode: crypto.randomBytes(12).toString('base64url') });
+    log.info(`[telegram] 号 ${acc.id} 清掉了绑定的号主`);
+  }
+
   /** LINE 客户资料里的名字（缓存 1 小时；不是好友时为空）。取失败的不缓存，下条消息再取 */
   async function lineName(acc, userId) {
     const key = `${acc.id}|${userId}`;
@@ -3023,6 +3566,9 @@ export function createWaService(ctx, opts = {}) {
     handleWahaWebhook,
     handleMetaWebhook,
     handleLineWebhook,
+    handleTelegramUpdate,
+    syncTelegram,
+    telegramRebind,
     handleInbound,
     revokeMessage,
     notifier,
@@ -3038,6 +3584,8 @@ export function createWaService(ctx, opts = {}) {
       for (const acc of accounts.list()) {
         if (acc.channel === 'waha') getStatus(acc).catch(() => {});
       }
+      // Telegram 号开始收消息（长轮询，不等第一批结果）
+      syncTelegram();
       // inkdove 管理的 session 配置变了（比如 F12 把 webhook 事件改成 message.any、消息撤回加订 message.revoked）：已有的号把新配置 PUT 过去，
       // 运行中的 session 由 WAHA 自动重启一次，登录态保留。指纹没变的、从没推过配置的（还没建 session，start 时按新配置建）
       // 不动；WAHA 连不上时只记日志，下次 start 时再同步
@@ -3225,7 +3773,7 @@ export function createWaService(ctx, opts = {}) {
       const foreign =
         !!draft.agentUserId && ((assigneeNow !== assigneeBefore && draft.agentUserId !== assigneeNow) || memberGone(draft.agentUserId));
       if (now && !stale && foreign) {
-        log.info(`[wa] 会话 ${convId} 起草推荐回复期间换了负责人，或者点按钮的人被停用、删除了，推荐里是他的资料，不存`);
+        log.info(`[wa] 会话 ${logConv(convId)} 起草推荐回复期间换了负责人，或者点按钮的人被停用、删除了，推荐里是他的资料，不存`);
       } else if (now && !stale) {
         db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify(draft), convId);
         noteDraft('记录', (d) => d.recorded(now, draft, { question: input.message, requestedBy: user }));
@@ -3300,6 +3848,7 @@ export function createWaService(ctx, opts = {}) {
       else if (acc.channel === 'meta') externalId = await metaSendTemplate(config.metaGraphUrl, acc.meta, chatId, template);
       // LINE 只能给加了好友的人发，手里只有手机号找不到人（创建外联时已经拦下，这里兜底）
       else if (acc.channel === 'line') throw new Error('LINE 官方帐号不能外联群发');
+      else if (isTelegram(acc.channel)) throw new Error('Telegram 号不能外联群发');
       else throw new Error('未知的接入方式');
       entry.id = externalId || null;
       entry.short = externalId ? shortMessageId(externalId) : null;
@@ -3339,6 +3888,10 @@ export function createWaService(ctx, opts = {}) {
       const jobs = [...mediaJobs];
       for (const j of jobs) j.ac.abort(new Error('closing'));
       await Promise.allSettled(jobs.map((j) => j.promise));
+      await tgSyncChain;
+      await Promise.allSettled([...tgPollers.keys()].map((id) => tgStop(id)));
+      for (const t of tgTypingTimers.values()) clearInterval(t);
+      tgTypingTimers.clear();
       await relays.closeAll();
     },
   };

@@ -1,6 +1,7 @@
 // F7 号码接口。agent 只能看分给自己的号（GET 列表和详情，看不到 Meta 的 verifyToken 和通知收件人）；
 // 其余一律只有 admin：新建、删除、改设置（整个 PUT，含回复方式、persona、范围、名单、通知、改名、IP 代理、Meta 凭证）、
-// 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入。所有判断都在服务端。
+// 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入、Telegram 私人号重新绑定。所有判断都在服务端。
+// Telegram 号新建、改设置、导入、删除后让服务同步收消息（wa.syncTelegram）。
 import express from 'express';
 import multer from 'multer';
 import {
@@ -9,6 +10,7 @@ import {
   applyAccountPatch,
   CHANNELS,
   exportAccount,
+  isTelegram,
   parseAccountsExport,
   proxyFingerprint,
   publicAccount,
@@ -17,6 +19,7 @@ import { canAccessAccount, forbidden } from '../auth.js';
 import { emailConfigured, str } from '../settings.js';
 import { badRequest, HttpError, isPlainObject, notFound, nowIso } from '../util.js';
 import { testProxy } from '../wa/proxy-test.js';
+import { botIdOf } from '../wa/telegram.js';
 
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 
@@ -37,6 +40,14 @@ export function accountsRouter(ctx, auth) {
     return acc;
   }
 
+  /** 同一个 Telegram 机器人只能给一个号用：两个号一起收消息会互相顶掉（Telegram 返回 409） */
+  function assertBotUnused(acc) {
+    const botId = isTelegram(acc.channel) ? botIdOf(acc.telegram.botToken) : '';
+    if (!botId) return;
+    const other = accounts.list().find((a) => a.id !== acc.id && isTelegram(a.channel) && botIdOf(a.telegram.botToken) === botId);
+    if (other) throw new HttpError(409, 'telegram_bot_in_use', `这个机器人已经给号「${other.name}」用了，同一个机器人只能接一个号`);
+  }
+
   /** viewer：看的人，agent 看不到 verifyToken 和通知收件人 */
   const view = async (acc, opts, viewer = null) => publicAccount(acc, ctx.config, await wa.getStatus(acc, opts), viewer);
 
@@ -50,9 +61,10 @@ export function accountsRouter(ctx, auth) {
     if (!isPlainObject(body)) throw badRequest('请求体必须是对象');
     const name = str(body.name ?? '', 'name', 100).trim();
     if (!name) throw badRequest('name 不能为空');
-    if (!CHANNELS.includes(body.channel)) throw badRequest('channel 只能是 waha、meta 或 line');
+    if (!CHANNELS.includes(body.channel)) throw badRequest(`channel 只能是 ${CHANNELS.join('、')}`);
     const acc = accounts.create({ name, channel: body.channel });
     ctx.log.info(`[accounts] ${req.user.email} 新建了号 ${acc.id}（${acc.channel}）`);
+    if (isTelegram(acc.channel)) await wa.syncTelegram();
     res.json(await view(acc, { timeoutMs: 2000 }));
   });
 
@@ -106,6 +118,7 @@ export function accountsRouter(ctx, auth) {
         globalProxyReady: ctx.globalProxy.enabled(),
       });
       const result = accounts.importMany(items);
+      if (items.some((it) => isTelegram(it.channel))) wa.syncTelegram();
       ctx.log.info(
         `[accounts] ${req.user.email} 导入了号码配置：新建 ${result.created.length} 个，跳过 ${result.skipped.length} 个`,
       );
@@ -122,7 +135,9 @@ export function accountsRouter(ctx, auth) {
       emailReady: emailConfigured(ctx.getSettings()),
       globalProxyReady: ctx.globalProxy.enabled(),
     });
+    assertBotUnused(next);
     const saved = accounts.save(next);
+    if (isTelegram(saved.channel)) await wa.syncTelegram();
     if (saved.channel === 'waha' && proxyFingerprint(cur) !== proxyFingerprint(saved)) {
       // 4.5 / F13：代理一改，中继重启，已有的 WAHA session 用新配置更新（WAHA 自动重启 session，登录态保留）
       try {
@@ -166,6 +181,14 @@ export function accountsRouter(ctx, auth) {
   });
 
   router.post('/:id/notify/test', auth.requireAdmin, async (req, res) => res.json(await wa.notifier.test(load(req))));
+
+  // Telegram 私人号换号主：清掉绑定，生成新的绑定链接（只有 admin；绑定链接谁点了谁就是号主）
+  router.post('/:id/telegram/rebind', auth.requireAdmin, async (req, res) => {
+    const acc = load(req);
+    wa.telegramRebind(acc);
+    ctx.log.info(`[accounts] ${req.user.email} 清掉了号 ${acc.id} 绑定的 Telegram 号主`);
+    res.json(await view(accounts.get(acc.id)));
+  });
 
   return router;
 }
