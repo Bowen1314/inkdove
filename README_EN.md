@@ -7,7 +7,7 @@
 
 # 墨鸽 Inkdove
 
-**A WhatsApp workspace for export sales teams: customers talk to one company number, each customer is assigned to a salesperson, and when you need it, one click gets AI to draft a reply grounded in your knowledge base through RAG (full-text search plus a built-in vector store). A person always sends it.**
+**A WhatsApp and LINE workspace for export sales teams: customers deal with one company number, each customer is assigned to a salesperson, and on request AI drafts a reply grounded in the knowledge base through RAG (full-text search plus a built-in vector store). A person reviews and sends every draft.**
 
 [![Release](https://img.shields.io/github/v/release/Bowen1314/inkdove)](https://github.com/Bowen1314/inkdove/releases/latest)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
@@ -30,7 +30,7 @@
 ## ⚠️ Before you start
 
 - **QR-code login can get your number banned.** The QR option (WAHA) uses WhatsApp Web's unofficial protocol, and the number may be restricted or banned. For numbers that matter, use Meta's official Cloud API. See [the three connection methods and their risks](docs/channels-and-security.md#三种接入方式的区别和风险) (Chinese).
-- **Don't use it for spam.** Don't send marketing messages to people who haven't agreed to hear from you. Follow WhatsApp's terms and your local laws.
+- **Do not use it for unsolicited bulk messaging.** Do not send marketing messages to people who have not agreed to receive them, and comply with WhatsApp's terms and local laws.
 - **Whoever sends an AI draft is responsible for it.** AI can get prices, lead times and promises wrong. Check before you send.
 
 ## Who it's for
@@ -40,7 +40,7 @@
 - Several people on an export sales team share the company's WhatsApp number instead of using their own;
 - Customers should stay with the company: when a salesperson leaves, their customers are handed to someone else in one click, with the full chat history;
 - You want new hires to answer with the company's own product info, prices and wording;
-- The boss wants to see every chat and be able to step in at any time, hear about it right away when someone says something they shouldn't to a customer, and see who changed what.
+- Managers need to see every chat and step in at any time, learn promptly when someone says something inappropriate to a customer, and have a record of every settings change.
 
 **Not a good fit if:**
 
@@ -64,7 +64,7 @@
 - **Dashboard.** Admins see message volume, new customers, handoff reasons and response times, how much each team member handled, how long customers wait for a human reply, model spend, outreach results, and how many suggested replies were sent as is, edited or not used. Filter by number or by salesperson. [Details](docs/features.md#数据看板管理员) (Chinese)
 - **Blocked words and AI conduct check.** Once an admin sets a blocked-word list, any message to a customer containing one of those words isn't sent (messages typed on the owner's phone can't be stopped, only flagged), and every admin gets a pop-up right away, with a button to disable that salesperson's account. You can also turn on the AI conduct check, which has the AI look at what was sent for abuse, threats, discrimination or harassment; it only alerts and never blocks. Both are off by default. [Details](docs/features.md#屏蔽词管理员默认关闭) (Chinese)
 - **Activity log.** Admins can see who did what and when: changes to numbers, settings and the knowledge base, chat assignments, team members, exports, sign-ins and failed sign-ins, with before and after values, the IP address and the device (for example "Chrome · Windows 电脑"). Messages to customers aren't logged, and passwords and keys are only recorded as "changed". The log can be read but not edited or deleted. [Details](docs/features.md#操作日志管理员) (Chinese)
-- **Multiple numbers, three connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API; it can also connect a LINE Official Account (customers add it as a friend and chat in LINE, for markets such as Japan, Taiwan and Thailand). QR-code numbers can each use their own proxy; an optional global proxy can also send model, translation and email requests, and QR-code numbers, through an airport node from a Clash subscription. New versions install with one click in the web console, or on a schedule (say, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
+- **Multiple numbers, three connection methods, in-app updates.** One deployment serves several numbers, connected by QR code (WAHA) or Meta's official Cloud API; it can also connect a LINE Official Account (customers add it as a friend and chat in LINE, for markets such as Japan, Taiwan and Thailand). QR-code numbers can each use their own proxy; an optional global proxy can also send model, translation and email requests, and QR-code numbers, through a proxy node from a Clash subscription. New versions install with one click in the web console, or on a schedule (for example, overnight). [Connections and proxies](docs/channels-and-security.md) · [In-app updates](docs/online-update.md) (Chinese)
 
 Full feature details: [docs/features.md](docs/features.md) (Chinese).
 
@@ -101,7 +101,10 @@ The recommended setup is the official image with docker compose. Building the im
 
 - A Linux server or Mac with Docker and Docker Compose v2, amd64 or arm64. The three containers' memory limits add up to about 1.4 GB.
 - An API key for a large language model: OpenAI, Anthropic and Gemini API formats are supported, as are OpenAI-compatible APIs.
-- A WhatsApp number: for QR login, a phone with WhatsApp installed; for Meta's Cloud API, a Meta developer account and a public HTTPS address. For a LINE Official Account, an account with the Messaging API enabled and a public HTTPS address ([steps](docs/deploy.md#line-官方帐号要的公网-https), Chinese).
+- At least one number or account to connect:
+  - QR login: a phone with WhatsApp installed;
+  - Meta's Cloud API: a Meta developer account and a public HTTPS address;
+  - LINE Official Account: an account with the Messaging API enabled and a public HTTPS address ([steps](docs/deploy.md#line-官方帐号要的公网-https), Chinese).
 
 ### Steps
 
@@ -141,14 +144,15 @@ The recommended setup is the official image with docker compose. Building the im
 
 4. Open `http://127.0.0.1:8794` and log in with the admin email and password from `.env`. The console only listens on localhost; on a remote server, tunnel in first with `ssh -L 8794:127.0.0.1:8794 <your-server>`, or set up HTTPS as described under [Exposing it over HTTPS](#exposing-it-over-https).
 
-### First five things after logging in
+### Initial setup after logging in
 
 1. **Settings → AI model** (设置 → AI 模型): pick the API format (openai / anthropic / gemini), enter the base URL, key and model, and click Test connection (测试连接).
 2. **Files → Knowledge sources** (文件 → 知识库资料): upload documents or add URLs, click Start organizing (开始整理), and wait for the entries.
 3. **Knowledge base → Test chat** (知识库 → 测试对话): ask a few typical customer questions and check the answers.
 4. **Numbers → Add number** (号码 → 添加号码):
    - QR number: click Start QR connection (开始扫码连接) and scan the code from Linked devices in WhatsApp on the phone. If scanning is awkward (say, it's your only phone), switch the link method (关联方式) to phone-number pairing code (手机号配对码), enter the number with its country code to get an 8-character code, and type it on the phone under Link a device → Link with phone number instead. The code is valid for about 2 minutes;
-   - Meta number: enter the phone number id, verify token, access token and app secret, put the webhook URL shown on the page (`<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta/<number id>`) into the Meta dashboard, and subscribe to `messages`.
+   - Meta number: enter the phone number id, verify token, access token and app secret, put the webhook URL shown on the page (`<INKDOVE_PUBLIC_BASE_URL>/webhooks/meta/<number id>`) into the Meta dashboard, and subscribe to `messages`;
+   - LINE Official Account: enter the Channel ID, Channel secret and long-lived Channel access token, put the Webhook URL shown under Connection (连接) (`<INKDOVE_PUBLIC_BASE_URL>/webhooks/line/<number id>`) into the LINE Developers Console, and turn on Use webhook. See [LINE Official Accounts](docs/channels-and-security.md#line-官方帐号) (Chinese).
 5. Choose the **reply mode** in the number's details: new numbers default to Manual reply (人工回复). Incoming messages are just stored and no AI is called; when a salesperson wants help, they click Suggest reply (推荐回复) in the chat, AI drafts a reply from the knowledge base, and they edit and send it. To let the bot answer customers directly, choose Auto-reply (自动回复) and set up Notify me when unsure (拿不准时通知我). For email notifications, first configure SMTP or Resend under **Settings → Email delivery** (设置 → 发信方式). The company style guide lives under **Settings → Suggested replies** (设置 → 推荐回复).
 
 If you have salespeople: **Members → Invite member** (成员 → 邀请成员), give them the numbers they may use, then assign customers to them on the **Chats** (会话) page.
@@ -202,7 +206,7 @@ All in Chinese:
 - [Features](docs/features.md): full description of every feature, plus implementation details and API contracts
 - [Development](docs/development.md): project layout, local development and tests, cutting a release
 - [Deviations from the spec](docs/deviations.md): where the implementation differs from the SPEC
-- [Verified external APIs](docs/external-apis.md): sources and test results for the WAHA, Meta, Resend, SMTP and LLM APIs
+- [Verified external APIs](docs/external-apis.md): sources and test results for the WAHA, Meta, LINE, Resend, SMTP and LLM APIs
 
 ## License
 
@@ -218,4 +222,4 @@ v0.1.0 and earlier remain under the MIT license.
 
 If you want to use it in a closed-source commercial product without the AGPL obligations, a commercial license can be arranged. Please [open an issue](https://github.com/Bowen1314/inkdove/issues) on GitHub.
 
-<p align="center">If you find it useful, please give it a star.</p>
+<p align="center">If you find Inkdove useful, a star is appreciated.</p>
