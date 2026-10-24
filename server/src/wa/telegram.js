@@ -253,7 +253,7 @@ export function convLogId(db, convId) {
     // 关闭时数据库已经关了：写日志的地方多在 catch 里，这里再抛错会把原来的错误盖掉
     return `${String(convId).split(':')[0]}:?`;
   }
-  if (channel !== 'tgbot' && channel !== 'tgbiz') return convId;
+  if (channel !== 'tgbot' && channel !== 'tgbiz' && channel !== 'tguser') return convId;
   const i = convId.indexOf(':');
   return `${convId.slice(0, i)}:tg-${createHmac('sha256', LOG_SALT).update(convId.slice(i + 1)).digest('hex').slice(0, 8)}`;
 }

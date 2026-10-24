@@ -4,6 +4,8 @@
 // 在 WhatsApp 里处理转人工（F3）也在这里。
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
+import { renderSVG } from 'uqr';
 import {
   CHANNEL_NAMES,
   conversationIdOf,
@@ -13,6 +15,7 @@ import {
   lineConfigured,
   metaConfigured,
   NO_NUMBER_NAMES,
+  tgUserConfigured,
 } from '../accounts.js';
 import { kvGet, kvSet } from '../db.js';
 import { hitMessage, quoteWords } from '../blockwords/store.js';
@@ -81,6 +84,7 @@ import {
   tgUserName,
 } from './telegram.js';
 import { startTgPoller } from './telegram-poll.js';
+import { createMtcuteClient, TGU_LOGIN_TIMEOUT_MS, TGU_NO_LIMIT_MS, tgUserSkip, TgUserError } from './tguser.js';
 import { needsRelay } from './relay.js';
 import { fixDraftPlaceholders, storedTranslation } from './translate.js';
 import { createWahaClient, mapWahaStatus, TooLargeError, WAHA_STATUS_LABEL, WahaError } from './waha.js';
@@ -614,10 +618,13 @@ export const draftEntryIds = (raw, entries) => {
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
+ *   tgUserClientFactory?: typeof createMtcuteClient,
+ *   tgUserLoginTimeoutMs?: number,
  * }} [opts]
  *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）；
  *   lineReplyWindowMs：LINE 的 reply token 多久以内拿来回复；lineContentRetryMs：下载 LINE 客户文件返回 202 后隔多久再取（测试里调小）；
- *   tgPollTimeoutSec：Telegram 长轮询每次等多久；tgRetryMs：Telegram 收消息出错后第一次等多久再试（测试里调小）
+ *   tgPollTimeoutSec：Telegram 长轮询每次等多久；tgRetryMs：Telegram 收消息出错后第一次等多久再试（测试里调小）；
+ *   tgUserClientFactory：Telegram 扫码登录的客户端（测试里换成假的）；tgUserLoginTimeoutMs：扫码登录多久没完成就放弃
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -787,7 +794,10 @@ export function createWaService(ctx, opts = {}) {
     if (acc.channel === 'waha') id = await waha.sendText(acc.sessionName, chatId, text);
     else if (acc.channel === 'meta') id = await metaSendText(config.metaGraphUrl, acc.meta, chatId, text);
     else if (acc.channel === 'line') id = await lineSend(acc, chatId, [{ type: 'text', text }]);
-    else if (isTelegram(acc.channel)) {
+    else if (acc.channel === 'tguser') {
+      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 一条消息最多 ${TG_TEXT_MAX} 个字，这条有 ${text.length} 个字，请分开发`);
+      id = await tgUserClient(acc).sendText(chatId, text);
+    } else if (isTelegram(acc.channel)) {
       if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 一条消息最多 ${TG_TEXT_MAX} 个字，这条有 ${text.length} 个字，请分开发`);
       const t = tgTarget(acc);
       id = await tgSendText(config.telegramApiUrl, t.token, chatId, text, { businessConnectionId: t.businessConnectionId });
@@ -858,6 +868,7 @@ export function createWaService(ctx, opts = {}) {
    * Meta：先上传拿 media id（按号码缓存 25 天），jpeg/png 且不超过 5MB 的发 image，其余发 document；缓存的 id 失效时重传一次。
    * LINE：图片给签名地址，其他文件发下载链接（见 lineFileMessages）。
    * Telegram：直接上传，10MB 以内的 jpeg/png 发图片（Telegram 会压缩），其余发文件（原样），最大 50MB；说明文字最多 1024 字。
+   * 扫码登录的号限制一样（用户帐号其实能发更大的文件，和机器人保持一致）。
    */
   async function sendFileRaw(acc, chatId, file, caption = '') {
     if (!acc) throw new Error('这个号已删除');
@@ -901,6 +912,14 @@ export function createWaService(ctx, opts = {}) {
       }
     } else if (acc.channel === 'line') {
       id = await lineSend(acc, chatId, lineFileMessages(file, caption));
+    } else if (acc.channel === 'tguser') {
+      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件的说明文字最多 ${TG_CAPTION_MAX} 个字，请缩短，或者把文字单独发`);
+      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 发文件不能超过 50MB');
+      id = await tgUserClient(acc).sendFile(
+        chatId,
+        { buffer: await fs.promises.readFile(diskPath), filename: file.filename, mime: file.mime },
+        { asPhoto: asImage && file.size <= TG_PHOTO_MAX_BYTES, caption },
+      );
     } else if (isTelegram(acc.channel)) {
       if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件的说明文字最多 ${TG_CAPTION_MAX} 个字，请缩短，或者把文字单独发`);
       if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 机器人发文件不能超过 50MB');
@@ -973,10 +992,11 @@ export function createWaService(ctx, opts = {}) {
    * 我方这条消息最晚能撤回到什么时候（ISO），不能撤回时为 null：扫码号发送成功、有 WhatsApp 消息 id、还没撤回、
    * 没超过时限的我方消息（机器人、人工、手机上发的、外联都算）。Meta 号、LINE 官方帐号没有撤回接口。
    * Telegram 机器人删自己发的，48 小时内；私人号要有删除的权限（经机器人发的要「删除机器人发的消息」，
-   * 在 Telegram 里自己发的要「删除所有消息」），时限按 48 小时算
+   * 在 Telegram 里自己发的要「删除所有消息」），时限按 48 小时算。扫码登录的号删私聊里的消息没有时限（给一个很远的时间）
    */
   function revocableUntil(r, acc) {
     if (r.direction !== 'out' || r.status !== 'sent' || !r.external_id || r.revoked_at) return null;
+    if (acc?.channel === 'tguser') return new Date(Date.parse(r.ts) + TGU_NO_LIMIT_MS).toISOString();
     let windowMs = 0;
     if (acc?.channel === 'waha') windowMs = REVOKE_WINDOW_MS;
     else if (acc?.channel === 'tgbot' && r.via !== 'phone') windowMs = TG_REVOKE_WINDOW_MS;
@@ -1342,8 +1362,8 @@ export function createWaService(ctx, opts = {}) {
   async function handleInbound(acc, m) {
     if (closed) return 'closed';
     if (!acc) return 'ignored_account';
-    // F12：只有扫码号（WAHA message.any）和 Telegram 私人号（business_message）会推自己发的消息；Meta、LINE 没有这一项
-    if (m.fromMe && acc.channel !== 'waha' && acc.channel !== 'tgbiz') return 'ignored_from_me';
+    // F12：只有扫码号（WAHA message.any）、Telegram 私人号（business_message）和扫码登录的号会推自己发的消息；Meta、LINE 没有这一项
+    if (m.fromMe && acc.channel !== 'waha' && acc.channel !== 'tgbiz' && acc.channel !== 'tguser') return 'ignored_from_me';
     const chatId = m.chatId;
     if (!chatId || isNonPrivateChat(chatId)) return 'ignored_non_private';
     // F12：本服务经 API 发出去的消息（机器人、人工、F3 转发和回执、通知）推回来的回声，剔除
@@ -1605,6 +1625,11 @@ export function createWaService(ctx, opts = {}) {
         else throw new Error('消息里没有消息 id');
         res = opened.res;
         mime = mime || opened.mime;
+      } else if (acc.channel === 'tguser') {
+        if (!media.id) throw new Error('消息里没有文件 id');
+        res = tgUserClient(acc).openFile(media.id, { fileSize: media.size ?? null, maxBytes: mediaMaxBytes, signal });
+        // mtcute 给的是普通的 Readable，没有响应头；类型用消息里的
+        res.headers = {};
       } else if (isTelegram(acc.channel)) {
         if (!media.id) throw new Error('消息里没有文件 id');
         const opened = await tgOpenFile(config.telegramApiUrl, acc.telegram.botToken, media.id, {
@@ -1763,6 +1788,10 @@ export function createWaService(ctx, opts = {}) {
     }
     if (acc.channel === 'meta') return metaDownloadMedia(config.metaGraphUrl, acc.meta, media.id, { maxBytes });
     if (acc.channel === 'line') return lineDownloadContent(config.lineDataApiUrl, acc.line, media, { maxBytes, retryDelayMs: lineContentRetryMs });
+    if (acc.channel === 'tguser') {
+      const buffer = await tgUserClient(acc).download(media.id, { fileSize: media.size ?? null, maxBytes });
+      return { buffer, mime: media.mime || '' };
+    }
     if (isTelegram(acc.channel)) return tgDownloadFile(config.telegramApiUrl, acc.telegram.botToken, media, { maxBytes });
     throw new Error('未知的接入方式');
   }
@@ -2441,6 +2470,7 @@ export function createWaService(ctx, opts = {}) {
     if (acc.channel === 'line') return lineMarkRead(acc, chatId);
     // Telegram 机器人不能标已读；私人号用 readBusinessMessage
     if (acc.channel === 'tgbiz') return tgMarkRead(acc, chatId, ids);
+    if (acc.channel === 'tguser') return tgUserMarkRead(acc, chatId, ids);
     if (acc.channel !== 'waha') return;
     try {
       await waha.sendSeen(acc.sessionName, chatId, ids);
@@ -2815,6 +2845,7 @@ export function createWaService(ctx, opts = {}) {
     if (acc.channel === 'line') {
       return { ...base, state: lineConfigured(acc) ? 'configured' : 'not_configured', error: st.linePushError?.message ?? null };
     }
+    if (acc.channel === 'tguser') return tgUserStatus(acc, base);
     if (isTelegram(acc.channel)) return tgStatus(acc, base);
     if (acc.channel !== 'waha') return { ...base, error: '未知的接入方式' };
     const relayError = relays.error(acc.id);
@@ -3126,6 +3157,8 @@ export function createWaService(ctx, opts = {}) {
     await relays.stop(acc.id);
     cancelHistoryImport(acc.id);
     await tgStop(acc.id);
+    // 扫码登录的号：从 Telegram 退出（这个设备从帐号的设备列表里消失），删掉登录态
+    if (acc.channel === 'tguser') await tgUserLogout(acc, { quiet: true });
     for (const r of db.prepare('SELECT id FROM conversations WHERE account_id = ?').all(acc.id)) {
       cancelTimer(r.id);
       abortSending(r.id, 'account_deleted');
@@ -3602,8 +3635,14 @@ export function createWaService(ctx, opts = {}) {
     clearInterval(tgTypingTimers.get(key));
     tgTypingTimers.delete(key);
     if (!on) return;
-    const t = tgTarget(acc);
-    const send = () => tgSendTyping(config.telegramApiUrl, t.token, chatId, { businessConnectionId: t.businessConnectionId });
+    let send;
+    if (acc.channel === 'tguser') {
+      const c = tgUserClient(acc);
+      send = () => c.sendTyping(chatId);
+    } else {
+      const t = tgTarget(acc);
+      send = () => tgSendTyping(config.telegramApiUrl, t.token, chatId, { businessConnectionId: t.businessConnectionId });
+    }
     await send();
     const timer = setInterval(() => send().catch(() => {}), TG_TYPING_REFRESH_MS);
     timer.unref?.();
@@ -3648,7 +3687,10 @@ export function createWaService(ctx, opts = {}) {
     return { ...out, state: 'waiting', error };
   }
 
-  /** 让每个填了机器人 token 的 Telegram 号都在收消息：token 改了的重新开始，删了的、清了 token 的停掉 */
+  /**
+   * 让每个填了机器人 token 的 Telegram 号都在收消息：token 改了的重新开始，删了的、清了 token 的停掉。
+   * 扫码登录的号一起同步（syncTgUsers）
+   */
   function syncTelegram() {
     tgSyncChain = tgSyncChain
       .then(async () => {
@@ -3662,6 +3704,7 @@ export function createWaService(ctx, opts = {}) {
           await tgStop(id);
         }
         for (const [id, acc] of want) if (!tgPollers.has(id) && !closed) startTelegram(acc);
+        await syncTgUsers();
       })
       .catch((err) => log.error(`[telegram] 同步收消息出错：${err?.stack || err}`));
     return tgSyncChain;
@@ -3738,7 +3781,7 @@ export function createWaService(ctx, opts = {}) {
   async function handleTelegramUpdate(accountId, u) {
     if (closed) return 'closed';
     const acc = accounts.get(accountId);
-    if (!acc || !isTelegram(acc.channel)) return 'ignored_account';
+    if (!acc || !isTelegram(acc.channel) || acc.channel === 'tguser') return 'ignored_account';
     if (!u || typeof u !== 'object') return 'ignored_event';
     const st = state(acc.id);
     st.lastWebhookAt = nowIso();
@@ -3843,18 +3886,25 @@ export function createWaService(ctx, opts = {}) {
     const convId = conversationIdOf(acc.id, String(d.chat.id));
     const at = nowIso();
     pruneRevokeAttempts();
-    return (Array.isArray(d.message_ids) ? d.message_ids : []).map((mid) => {
-      const row = db.prepare('SELECT * FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, String(mid));
-      if (!row) return 'ignored_revoke_unknown';
-      if (row.revoked_at) return 'ignored_duplicate';
-      if (row.direction === 'in') return customerRevoked(row, at);
-      const attempt = revokeAttempts.get(`${acc.id}|${convId}|${mid}`);
-      markRevoked(row.id, attempt ? 'member' : 'phone', attempt?.user ?? null, at);
-      return attempt ? 'revoked_member' : 'revoked_phone';
-    });
+    return (Array.isArray(d.message_ids) ? d.message_ids : []).map((mid) =>
+      tgRowDeleted(acc, db.prepare('SELECT * FROM messages WHERE conversation_id = ? AND external_id = ?').get(convId, String(mid)), at),
+    );
   }
 
-  /** 业务员在墨鸽里撤回 Telegram 号发出的消息（revokeMessage 已经查过方向、状态、号）：机器人 deleteMessage，私人号 deleteBusinessMessages */
+  /** Telegram 删了一条消息：客户的按「客户撤回」标；我方的，墨鸽里点过撤回的按那个成员标，其余按「已在手机上撤回」 */
+  function tgRowDeleted(acc, row, at) {
+    if (!row) return 'ignored_revoke_unknown';
+    if (row.revoked_at) return 'ignored_duplicate';
+    if (row.direction === 'in') return customerRevoked(row, at);
+    const attempt = revokeAttempts.get(`${acc.id}|${row.conversation_id}|${row.external_id}`);
+    markRevoked(row.id, attempt ? 'member' : 'phone', attempt?.user ?? null, at);
+    return attempt ? 'revoked_member' : 'revoked_phone';
+  }
+
+  /**
+   * 业务员在墨鸽里撤回 Telegram 号发出的消息（revokeMessage 已经查过方向、状态、号）：机器人 deleteMessage，私人号 deleteBusinessMessages，
+   * 扫码登录的号 messages.deleteMessages（对双方删除，没有时限）
+   */
   async function revokeTelegram(acc, conv, row, user) {
     if (!row.external_id) throw badRequest('这条消息没有记下 Telegram 的消息 id，不能撤回', 'no_message_id');
     if (acc.channel === 'tgbiz' && !tgCanDelete(acc, row)) {
@@ -3873,13 +3923,18 @@ export function createWaService(ctx, opts = {}) {
     revokeAttempts.set(attemptKey, { user: who, at: Date.now() });
     revoking.add(row.id);
     try {
-      const connId = acc.channel === 'tgbiz' ? tgKv(acc).connection.id : undefined;
-      await tgDeleteMessage(config.telegramApiUrl, acc.telegram.botToken, conv.chat_id, row.external_id, { businessConnectionId: connId });
+      if (acc.channel === 'tguser') {
+        await tgUserClient(acc).deleteMessages(conv.chat_id, [row.external_id]);
+      } else {
+        const connId = acc.channel === 'tgbiz' ? tgKv(acc).connection.id : undefined;
+        await tgDeleteMessage(config.telegramApiUrl, acc.telegram.botToken, conv.chat_id, row.external_id, { businessConnectionId: connId });
+      }
     } catch (err) {
-      // Telegram 明确报错的没撤成；连不上、超时的可能其实成了，私人号留着记录等删除通知
-      if (err instanceof TgError && err.status) revokeAttempts.delete(attemptKey);
+      // Telegram 明确报错的没撤成；连不上、超时的可能其实成了，私人号、扫码登录的号留着记录等删除通知
+      if ((err instanceof TgError && err.status) || (err instanceof TgUserError && err.code)) revokeAttempts.delete(attemptKey);
       log.warn(`[telegram] 撤回消息 ${row.id} 失败（号 ${acc.id}）：${err?.message || err}`);
-      throw err instanceof TgError ? new HttpError(502, 'telegram_error', `撤回失败：${err.message}`) : err;
+      if (err instanceof TgUserError && err.code === 'NOT_LOGGED_IN') throw new HttpError(409, 'not_connected', err.message);
+      throw err instanceof TgError || err instanceof TgUserError ? new HttpError(502, 'telegram_error', `撤回失败：${err.message}`) : err;
     } finally {
       revoking.delete(row.id);
     }
@@ -3892,6 +3947,375 @@ export function createWaService(ctx, opts = {}) {
     if (acc.channel !== 'tgbiz') throw badRequest('只有 Telegram 私人号要绑定号主', 'wrong_channel');
     tgKvUpdate(acc, { owner: null, bindCode: crypto.randomBytes(12).toString('base64url') });
     log.info(`[telegram] 号 ${acc.id} 清掉了绑定的号主`);
+  }
+
+  // ---------------- Telegram 扫码登录（tguser） ----------------
+  // 每个号一个 mtcute 客户端（tguser.js）。有登录态文件的号在启动时、改号以后（syncTelegram）自动用登录态连上；
+  // 没有的停在 logged_out，等管理员点「扫码登录」（tgUserLogin）：scan_qr（二维码 30 秒左右换一次）→ 扫了以后开了两步验证的
+  // 进 password（管理员在页面上输密码，只拿来登录，不存）→ working。二维码、两步验证超过 5 分钟没完成就停下、删掉半截的登录态。
+  // 登录态文件在：没登录完的、退出登录的、登录失效的都删掉，所以有文件就是登录过的。
+
+  const tgUserFactory = opts.tgUserClientFactory ?? createMtcuteClient;
+  const tgUserLoginTimeoutMs = opts.tgUserLoginTimeoutMs ?? TGU_LOGIN_TIMEOUT_MS;
+  const tgUserDir = path.join(config.dataDir, 'telegram');
+  const tgUserSessionPath = (accountId) => path.join(tgUserDir, `${accountId}.session`);
+  const tgUserHasSession = (accountId) => fs.existsSync(tgUserSessionPath(accountId));
+  /** api_id、api_hash 改了就要换客户端 */
+  const tgUserKey = (acc) => `${acc.telegram?.apiId}|${acc.telegram?.apiHash}`;
+  const TGU_LOST_TEXT = '墨鸽在这个 Telegram 帐号上的登录已经失效（可能在手机的「设置 → 设备」里结束了墨鸽），请重新扫码登录';
+  /**
+   * @type {Map<string, {
+   *   key: string, client: any, state: string, me: {id:string, name:string, username:string}|null, error: string|null,
+   *   qr: {url: string, expiresAt: number}|null, qrVersion: number, ac: AbortController, timer: NodeJS.Timeout|null,
+   *   password: {resolve: (pw: string) => void}|null, attempt: {resolve: (r: string) => void}|null, run: Promise<void>|null,
+   * }>}
+   * 号 id → 扫码登录的客户端和登录状态。state：starting、scan_qr、password、working、logged_out、failed
+   */
+  const tgUsers = new Map();
+
+  /** 等 p，最多等 ms 毫秒，超时时取 onTimeout() 的结果（抛错就是报错）。定时器用完就清，不挂住进程 */
+  function tgUserWithin(p, ms, onTimeout) {
+    let timer;
+    const late = new Promise((resolve) => {
+      timer = setTimeout(resolve, ms);
+    }).then(onTimeout);
+    return Promise.race([p, late]).finally(() => clearTimeout(timer));
+  }
+
+  /** 删掉登录态文件（SQLite 的 -wal、-shm 一起） */
+  async function tgUserWipe(accountId) {
+    const p = tgUserSessionPath(accountId);
+    await Promise.all(['', '-wal', '-shm', '-journal'].map((x) => fs.promises.rm(p + x, { force: true })));
+  }
+
+  /** 发消息、下载等要的客户端：没登录好时报错，不发 */
+  function tgUserClient(acc) {
+    const e = tgUsers.get(acc.id);
+    if (e?.state === 'working' && e.client) return e.client;
+    throw new TgUserError('这个 Telegram 帐号还没有登录（或者登录已经失效），请先在号的「连接」里扫码登录', { code: 'NOT_LOGGED_IN' });
+  }
+
+  /**
+   * 给号起一个客户端。login=false：用存着的登录态；login=true：扫码登录（之前的登录态先删掉）
+   * @param {any} acc
+   * @param {{login: boolean}} o
+   */
+  function tgUserStart(acc, { login }) {
+    const entry = {
+      key: tgUserKey(acc),
+      client: null,
+      state: 'starting',
+      me: null,
+      error: null,
+      qr: null,
+      qrVersion: 0,
+      ac: new AbortController(),
+      timer: null,
+      password: null,
+      attempt: null,
+      run: null,
+    };
+    tgUsers.set(acc.id, entry);
+    const { signal } = entry.ac;
+    const live = () => !closed && tgUsers.get(acc.id) === entry && !signal.aborted;
+    const set = (patch) => {
+      Object.assign(entry, patch);
+      const st = accState.get(acc.id);
+      if (st) st.statusCache = null;
+    };
+    /** 二维码、两步验证等太久就停下 */
+    const armTimeout = () => {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => {
+        if (!live() || (entry.state !== 'scan_qr' && entry.state !== 'password')) return;
+        log.info(`[tguser] 号 ${acc.id} 的扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，停下了`);
+        entry.ac.abort(new TgUserError('timeout', { code: 'LOGIN_TIMEOUT' }));
+      }, tgUserLoginTimeoutMs);
+      entry.timer.unref?.();
+    };
+    /** 两步验证密码：等管理员在页面上输（tgUserPassword）；中止时一起放弃 */
+    const askPassword = () =>
+      new Promise((resolve, reject) => {
+        if (signal.aborted) return reject(signal.reason);
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        if (entry.state !== 'password') armTimeout();
+        set({ state: 'password', qr: null, password: { resolve } });
+      });
+    const onPasswordInvalid = () => {
+      entry.attempt?.resolve('invalid');
+      entry.attempt = null;
+    };
+    // 用登录态重连时，补收停机期间的消息可能比这边切到 working 早一点到：starting 时也收
+    const ready = () => live() && (entry.state === 'working' || entry.state === 'starting');
+    const handlers = {
+      onMessage: (p) => (ready() ? tgUserInbound(acc.id, p) : Promise.resolve('ignored_not_ready')),
+      onEdit: (p) => (ready() ? tgUserEdited(acc.id, p) : 'ignored_not_ready'),
+      onDelete: (ids) => (ready() ? tgUserDeleted(acc.id, ids) : ['ignored_not_ready']),
+      onAuthLost: () => {
+        if (!live()) return;
+        log.warn(`[tguser] 号 ${acc.id} 的登录失效了，需要重新扫码`);
+        set({ state: 'logged_out', error: TGU_LOST_TEXT, me: null });
+        tgUserRelease(acc.id, entry, { wipe: true }).catch(() => {});
+      },
+    };
+    const loggedIn = (me) => {
+      clearTimeout(entry.timer);
+      entry.attempt?.resolve('ok');
+      entry.attempt = null;
+      set({ state: 'working', me, error: null, qr: null, password: null });
+      log.info(`[tguser] 号 ${acc.id} 已登录 Telegram`);
+    };
+    entry.run = (async () => {
+      try {
+        if (login) await tgUserWipe(acc.id);
+        const hadSession = !login && tgUserHasSession(acc.id);
+        // 登录态等于这个帐号的钥匙：目录只给自己（0700），文件 0600（SQLite 的 -wal、-shm 跟主文件的权限一样）
+        await fs.promises.mkdir(tgUserDir, { recursive: true, mode: 0o700 });
+        await fs.promises.chmod(tgUserDir, 0o700).catch(() => {});
+        await (await fs.promises.open(tgUserSessionPath(acc.id), 'a', 0o600)).close();
+        await fs.promises.chmod(tgUserSessionPath(acc.id), 0o600).catch(() => {});
+        const client = await tgUserFactory({
+          apiId: Number(acc.telegram.apiId),
+          apiHash: acc.telegram.apiHash,
+          storagePath: tgUserSessionPath(acc.id),
+          // 第一次登录不拉以前的消息；用登录态重连时补上停机期间的
+          catchUp: hadSession,
+          proxyPort: config.globalProxyPort,
+          log,
+          logTag: `号 ${acc.id}`,
+          ...handlers,
+        });
+        entry.client = client;
+        if (!live()) return;
+        if (!login) {
+          const r = hadSession ? await client.restore() : null;
+          if (!live()) return;
+          if (!r) {
+            set({ state: 'logged_out', error: hadSession ? TGU_LOST_TEXT : null });
+            await tgUserRelease(acc.id, entry, { wipe: true });
+            return;
+          }
+          if (r.needPassword) {
+            loggedIn(await client.checkPassword({ password: askPassword, onPasswordInvalid, signal }));
+            return;
+          }
+          loggedIn(r);
+          return;
+        }
+        const me = await client.loginQr({
+          onQr: (url, expiresAt) => {
+            if (!live()) return;
+            if (entry.state !== 'scan_qr') armTimeout();
+            set({ state: 'scan_qr', qr: { url, expiresAt }, qrVersion: entry.qrVersion + 1 });
+          },
+          onScanned: () => {
+            if (live()) set({ state: 'starting', qr: null });
+          },
+          password: askPassword,
+          onPasswordInvalid,
+          signal,
+        });
+        if (live()) loggedIn(me);
+      } catch (err) {
+        clearTimeout(entry.timer);
+        entry.attempt?.resolve('failed');
+        entry.attempt = null;
+        const timedOut = signal.reason?.code === 'LOGIN_TIMEOUT';
+        // 被 tgUserStop 停掉的不动状态（那边会收尾）；超时的、出错的：半截的登录态删掉
+        if (signal.aborted && !timedOut) return;
+        if (tgUsers.get(acc.id) !== entry || closed) return;
+        const msg = timedOut
+          ? `扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，已经停下：要登录时再点「扫码登录」`
+          : err instanceof TgUserError
+            ? err.message
+            : `连接 Telegram 出错：${err?.message || err}`;
+        if (!timedOut) log.warn(`[tguser] 号 ${acc.id} ${login ? '扫码登录' : '连接'}失败：${msg}`);
+        set({ state: login || err?.authLost ? 'logged_out' : 'failed', error: msg, qr: null, password: null, me: null });
+        await tgUserRelease(acc.id, entry, { wipe: login || !!err?.authLost });
+      }
+    })();
+    return entry;
+  }
+
+  /** 关掉一个客户端（号的状态留着给页面看）；wipe 时再删登录态 */
+  async function tgUserRelease(accountId, entry, { wipe = false } = {}) {
+    clearTimeout(entry.timer);
+    const c = entry.client;
+    entry.client = null;
+    if (c) await c.close().catch((err) => log.warn(`[tguser] 号 ${accountId} 断开出错：${err?.message || err}`));
+    if (wipe && (tgUsers.get(accountId) === entry || !tgUsers.has(accountId))) await tgUserWipe(accountId);
+  }
+
+  /** 停掉一个号的客户端（登录态留着）。正在登录的中止 */
+  async function tgUserStop(accountId) {
+    const entry = tgUsers.get(accountId);
+    if (!entry) return;
+    tgUsers.delete(accountId);
+    entry.ac.abort(new Error('stopped'));
+    // 中止后 run 很快结束；客户端卡住时也不一直等
+    await tgUserWithin(entry.run?.catch(() => {}), 10_000, () => {});
+    await tgUserRelease(accountId, entry);
+    const st = accState.get(accountId);
+    if (st) st.statusCache = null;
+  }
+
+  /**
+   * 改号以后：删了的、清了 api_id / api_hash 的停掉；api_id / api_hash 改了的换客户端；
+   * 有登录态、还没起客户端的起来（启动时也走这里）
+   */
+  async function syncTgUsers() {
+    if (closed) return;
+    const want = new Map(accounts.list().filter((a) => a.channel === 'tguser' && tgUserConfigured(a)).map((a) => [a.id, a]));
+    for (const [id, e] of [...tgUsers]) {
+      const acc = want.get(id);
+      if (!acc || e.key !== tgUserKey(acc)) await tgUserStop(id);
+    }
+    for (const [id, acc] of want) if (!tgUsers.has(id) && tgUserHasSession(id) && !closed) tgUserStart(acc, { login: false });
+  }
+
+  /** 开始扫码登录（管理员点「扫码登录」）。已经在登录的原样返回；已经登录好的不重来 */
+  async function tgUserLogin(acc) {
+    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
+    if (!tgUserConfigured(acc)) throw badRequest('请先填 api_id 和 api_hash（在 my.telegram.org 申请）', 'not_configured');
+    const e = tgUsers.get(acc.id);
+    if (e && e.key === tgUserKey(acc) && ['starting', 'scan_qr', 'password'].includes(e.state)) return;
+    if (e?.state === 'working' && e.key === tgUserKey(acc)) throw new HttpError(409, 'already_logged_in', '这个号已经登录了；要换帐号请先退出登录');
+    await tgUserStop(acc.id);
+    tgUserStart(acc, { login: true });
+    log.info(`[tguser] 号 ${acc.id} 开始扫码登录`);
+  }
+
+  /** 扫码登录的二维码（SVG）。现在不在等扫码时 404 */
+  function tgUserQr(acc) {
+    const e = tgUsers.get(acc.id);
+    if (acc.channel !== 'tguser' || e?.state !== 'scan_qr' || !e.qr) throw new HttpError(404, 'no_qr', '现在没有要扫的二维码');
+    return renderSVG(e.qr.url, { border: 2 });
+  }
+
+  /**
+   * 两步验证密码：交给正在登录的客户端，等 Telegram 的结果。密码不对 400（还停在 password，可以再输）；
+   * 只拿来登录，不存、不进日志
+   */
+  async function tgUserPassword(acc, password) {
+    if (typeof password !== 'string' || !password) throw badRequest('请输入两步验证密码');
+    if (password.length > 256) throw badRequest('密码太长了');
+    let e = tgUsers.get(acc.id);
+    // 上一次输错后，客户端要稍等一下才会再来要密码
+    for (let i = 0; i < 40 && e?.state === 'password' && !e.password; i++) {
+      await sleep(50);
+      e = tgUsers.get(acc.id);
+    }
+    if (e?.state !== 'password' || !e.password) throw new HttpError(409, 'not_waiting_password', '现在不需要输两步验证密码');
+    const waiter = e.password;
+    e.password = null;
+    const result = new Promise((resolve) => {
+      e.attempt = { resolve };
+    });
+    waiter.resolve(password);
+    const r = await tgUserWithin(result, 60_000, () => 'timeout');
+    if (r === 'invalid') throw new HttpError(400, 'wrong_password', '两步验证密码不对，请再输一次');
+    if (r === 'timeout') throw new HttpError(504, 'telegram_timeout', 'Telegram 没有及时回复，请稍后看看号的状态');
+    if (r === 'failed') throw new HttpError(502, 'telegram_error', tgUsers.get(acc.id)?.error || '登录失败');
+  }
+
+  /**
+   * 退出登录：从 Telegram 退出（这个设备从帐号的设备列表里消失），断开，删掉登录态。正在扫码的直接停下。
+   * quiet：删号时用，Telegram 那边退出失败只记日志
+   */
+  async function tgUserLogout(acc, { quiet = false } = {}) {
+    const e = tgUsers.get(acc.id);
+    if (e?.state === 'working' && e.client) {
+      try {
+        await tgUserWithin(e.client.logOut(), 15_000, () => {
+          throw new Error('超时');
+        });
+      } catch (err) {
+        log.warn(`[tguser] 号 ${acc.id} 从 Telegram 退出失败（本地的登录态照样删掉）：${err?.message || err}`);
+        if (!quiet && !(err instanceof TgUserError && err.authLost)) {
+          // 本地照样删掉，提示去手机上把这个设备结束掉
+          await tgUserStop(acc.id);
+          await tgUserWipe(acc.id);
+          throw new HttpError(502, 'telegram_error', `墨鸽这边已经退出，但没能通知 Telegram（${err?.message || err}）：请在手机的「设置 → 设备」里结束墨鸽`);
+        }
+      }
+    }
+    await tgUserStop(acc.id);
+    await tgUserWipe(acc.id);
+    log.info(`[tguser] 号 ${acc.id} 退出了 Telegram 登录`);
+  }
+
+  /** 全局代理开关变了：连着的客户端重连一次（新的连接按新的设置走） */
+  async function tgUserProxyChanged() {
+    for (const [id, e] of [...tgUsers]) {
+      if (e.state !== 'working' && e.state !== 'starting') continue;
+      await tgUserStop(id);
+      const acc = accounts.get(id);
+      if (acc && tgUserConfigured(acc) && tgUserHasSession(id) && !closed) tgUserStart(acc, { login: false });
+    }
+  }
+
+  /**
+   * 号的连接状态：没填 api_id / api_hash 是 not_configured；没登录是 logged_out（error 里是为什么，比如登录失效了）；
+   * 其余是 starting、scan_qr、password、working、failed。telegram 里给连接页面看：登录的是谁（名字、用户名）、二维码的版本和过期时间
+   * （二维码本身只经 tgUserQr 给）
+   */
+  function tgUserStatus(acc, base) {
+    if (!tgUserConfigured(acc)) return base;
+    const e = tgUsers.get(acc.id);
+    const telegram = {
+      me: e?.state === 'working' && e.me ? { name: e.me.name, username: e.me.username || null } : null,
+      qrVersion: e?.state === 'scan_qr' && e.qr ? e.qrVersion : null,
+      qrExpiresAt: e?.state === 'scan_qr' && e.qr ? new Date(e.qr.expiresAt).toISOString() : null,
+    };
+    if (!e) return { ...base, state: tgUserHasSession(acc.id) ? 'starting' : 'logged_out', telegram };
+    return { ...base, state: e.state, error: e.error, telegram };
+  }
+
+  /** 收到一条消息（客户发的，或者在手机等其他设备上发的） */
+  async function tgUserInbound(accountId, p) {
+    if (closed) return 'closed';
+    const acc = accounts.get(accountId);
+    if (!acc || acc.channel !== 'tguser') return 'ignored_account';
+    const skip = tgUserSkip(p);
+    if (skip) return skip;
+    const st = state(acc.id);
+    st.lastWebhookAt = nowIso();
+    st.statusCache = null;
+    const m = parseTelegramMessage(p, { fromMe: !!p.out, source: p.out ? 'app' : null });
+    return m ? handleInbound(acc, m) : 'ignored_non_private';
+  }
+
+  function tgUserEdited(accountId, p) {
+    if (closed) return 'closed';
+    const acc = accounts.get(accountId);
+    if (!acc || acc.channel !== 'tguser') return 'ignored_account';
+    const skip = tgUserSkip(p);
+    return skip || tgEdited(acc, p);
+  }
+
+  /** 删除通知只有消息 id：用户帐号的消息 id 在所有私聊里是同一个序列，按号 + 消息 id 找 */
+  function tgUserDeleted(accountId, ids) {
+    if (closed) return ['closed'];
+    const acc = accounts.get(accountId);
+    if (!acc || acc.channel !== 'tguser') return ['ignored_account'];
+    const at = nowIso();
+    pruneRevokeAttempts();
+    const find = db.prepare(
+      `SELECT m.* FROM messages m JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.account_id = ? AND m.external_id = ? LIMIT 1`,
+    );
+    return ids.map((id) => tgRowDeleted(acc, find.get(acc.id, String(id)), at));
+  }
+
+  /** 标已读到客户最后一条消息。失败只记警告 */
+  async function tgUserMarkRead(acc, chatId, ids) {
+    const last = ids[ids.length - 1];
+    if (!last) return;
+    try {
+      await tgUserClient(acc).readHistory(chatId, last);
+    } catch (err) {
+      log.warn(`[tguser] 标已读失败（号 ${acc.id}）：${err?.message || err}`);
+    }
   }
 
   /** LINE 客户资料里的名字（缓存 1 小时；不是好友时为空）。取失败的不缓存，下条消息再取 */
@@ -3924,6 +4348,11 @@ export function createWaService(ctx, opts = {}) {
     handleTelegramUpdate,
     syncTelegram,
     telegramRebind,
+    tgUserLogin,
+    tgUserQr,
+    tgUserPassword,
+    tgUserLogout,
+    tgUserProxyChanged,
     handleInbound,
     revokeMessage,
     notifier,
@@ -4265,6 +4694,7 @@ export function createWaService(ctx, opts = {}) {
       await Promise.allSettled([...docJobs]);
       await tgSyncChain;
       await Promise.allSettled([...tgPollers.keys()].map((id) => tgStop(id)));
+      await Promise.allSettled([...tgUsers.keys()].map((id) => tgUserStop(id)));
       for (const t of tgTypingTimers.values()) clearInterval(t);
       tgTypingTimers.clear();
       await relays.closeAll();

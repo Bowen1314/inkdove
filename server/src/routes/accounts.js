@@ -1,6 +1,7 @@
 // F7 号码接口。agent 只能看分给自己的号（GET 列表和详情，看不到 Meta 的 verifyToken 和通知收件人）；
 // 其余一律只有 admin：新建、删除、改设置（整个 PUT，含回复方式、persona、范围、名单、通知、改名、IP 代理、Meta 凭证）、
-// 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入、Telegram 私人号重新绑定。所有判断都在服务端。
+// 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入、Telegram 私人号重新绑定、Telegram 扫码登录（开始登录、
+// 二维码、两步验证密码、退出登录）。所有判断都在服务端。
 // Telegram 号新建、改设置、导入、删除后让服务同步收消息（wa.syncTelegram）。
 import express from 'express';
 import multer from 'multer';
@@ -11,6 +12,7 @@ import {
   CHANNELS,
   exportAccount,
   isTelegram,
+  isTgBotApi,
   parseAccountsExport,
   proxyFingerprint,
   publicAccount,
@@ -42,9 +44,9 @@ export function accountsRouter(ctx, auth) {
 
   /** 同一个 Telegram 机器人只能给一个号用：两个号一起收消息会互相顶掉（Telegram 返回 409） */
   function assertBotUnused(acc) {
-    const botId = isTelegram(acc.channel) ? botIdOf(acc.telegram.botToken) : '';
+    const botId = isTgBotApi(acc.channel) ? botIdOf(acc.telegram.botToken) : '';
     if (!botId) return;
-    const other = accounts.list().find((a) => a.id !== acc.id && isTelegram(a.channel) && botIdOf(a.telegram.botToken) === botId);
+    const other = accounts.list().find((a) => a.id !== acc.id && isTgBotApi(a.channel) && botIdOf(a.telegram.botToken) === botId);
     if (other) throw new HttpError(409, 'telegram_bot_in_use', `这个机器人已经给号「${other.name}」用了，同一个机器人只能接一个号`);
   }
 
@@ -187,6 +189,32 @@ export function accountsRouter(ctx, auth) {
     const acc = load(req);
     wa.telegramRebind(acc);
     ctx.log.info(`[accounts] ${req.user.email} 清掉了号 ${acc.id} 绑定的 Telegram 号主`);
+    res.json(await view(accounts.get(acc.id)));
+  });
+
+  // Telegram 扫码登录（只有 admin）：开始登录 → 取二维码（SVG，30 秒左右换一次）→ 开了两步验证的输密码；退出登录。
+  // 二维码就是登录凭证，只从这里给，不进状态和日志；两步验证密码只拿来登录，不存
+  router.post('/:id/telegram/login', auth.requireAdmin, async (req, res) => {
+    const acc = load(req);
+    await wa.tgUserLogin(acc);
+    ctx.log.info(`[accounts] ${req.user.email} 开始给号 ${acc.id} 扫码登录 Telegram`);
+    res.json(await view(accounts.get(acc.id)));
+  });
+  router.get('/:id/telegram/qr', auth.requireAdmin, (req, res) => {
+    const svg = wa.tgUserQr(load(req));
+    res.set('cache-control', 'no-store').type('image/svg+xml').send(svg);
+  });
+  router.post('/:id/telegram/password', auth.requireAdmin, async (req, res) => {
+    const acc = load(req);
+    if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
+    await wa.tgUserPassword(acc, req.body.password);
+    res.json(await view(accounts.get(acc.id)));
+  });
+  router.post('/:id/telegram/logout', auth.requireAdmin, async (req, res) => {
+    const acc = load(req);
+    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
+    await wa.tgUserLogout(acc);
+    ctx.log.info(`[accounts] ${req.user.email} 让号 ${acc.id} 退出了 Telegram 登录`);
     res.json(await view(accounts.get(acc.id)));
   });
 

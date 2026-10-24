@@ -15,6 +15,7 @@
     "test": "node --import ./src/builtin-fetch.js --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
+    "@mtcute/node": "0.32.7",
     "better-sqlite3": "^12.11.1",
     "cheerio": "^1.2.0",
     "countries-and-timezones": "^3.10.0",
@@ -29,6 +30,7 @@
     "socks-proxy-agent": "^10.1.0",
     "tinyld": "^1.3.4",
     "undici": "^7.30.0",
+    "uqr": "0.1.3",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yaml": "^2.9.1"
   }

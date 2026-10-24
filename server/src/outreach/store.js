@@ -226,6 +226,10 @@ export function createOutreach(ctx, opts = {}) {
       if (!a) throw badRequest('选的号不存在或已删除', 'account_not_found');
       // LINE 官方帐号只能给加了好友的人发消息，号码文件里的手机号对不上 LINE 用户
       if (a.channel === 'line') throw badRequest(`「${a.name}」是 LINE 官方帐号，不能外联群发：LINE 只能给加了好友的人发消息，按手机号找不到人`, 'line_unsupported');
+      // 扫码登录的是个人帐号：给没聊过的人群发很容易被 Telegram 判成垃圾消息封号
+      if (a.channel === 'tguser') {
+        throw badRequest(`「${a.name}」是 Telegram 扫码登录的个人帐号，不能外联群发：用个人帐号给没聊过的人群发很容易被 Telegram 封号，只能回复来找你的人`, 'telegram_unsupported');
+      }
       // Telegram 按手机号找不到人，机器人也不能先给没说过话的人发消息
       if (isTelegram(a.channel)) throw badRequest(`「${a.name}」是 Telegram 号，不能外联群发：Telegram 按手机号找不到人，只能回复来找你的人`, 'telegram_unsupported');
       return a;

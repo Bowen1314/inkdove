@@ -43,12 +43,21 @@ const STATE_LABEL = {
   stopped: '已停止',
   starting: '正在启动',
   scan_qr: '等待扫码',
+  password: '等待输入两步验证密码',
+  logged_out: '未登录',
   working: '已连接',
   failed: '连接失败',
   configured: '已配置',
   waiting: '等待连接',
 };
-const CHANNEL_LABEL = { waha: '扫码连接', meta: 'Meta 官方接口', line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号' };
+const CHANNEL_LABEL = {
+  waha: '扫码连接',
+  meta: 'Meta 官方接口',
+  line: 'LINE 官方帐号',
+  tgbot: 'Telegram 机器人',
+  tgbiz: 'Telegram 私人号',
+  tguser: 'Telegram 扫码登录',
+};
 const REPLY_MODE_LABEL = { off: '人工回复', auto: '自动回复' };
 const UNASSIGNED = '未分配';
 const DELETED_MEMBER = '已删除的成员';

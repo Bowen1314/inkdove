@@ -154,6 +154,8 @@ export function settingsRouter(ctx) {
     ctx.setSettings(next);
     plan.commit();
     await ctx.globalProxy.apply();
+    // 扫码登录的 Telegram 号是墨鸽自己连 Telegram 的长连接：全局代理开关变了，重连一次按新的设置走
+    if (!!cur.proxy?.enabled !== !!next.proxy?.enabled) await ctx.wa.tgUserProxyChanged();
     res.json(view());
   });
 

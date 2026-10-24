@@ -74,6 +74,8 @@ const DEFAULT_WEB_DIST = path.resolve(here, '..', '..', 'web', 'dist');
  *   mediaStoreMaxBytes?: number,
  *   docExtractTimeoutMs?: number,
  *   docExtractWorkerUrl?: URL,
+ *   tgUserClientFactory?: Function,
+ *   tgUserLoginTimeoutMs?: number,
  *   wahaPairWaitMs?: number,
  *   wahaPollMs?: number,
  *   historyImportDelayMs?: number,
@@ -222,6 +224,8 @@ export function createApp(config, options = {}) {
     tgRetryMs: options.tgRetryMs,
     docExtractTimeoutMs: options.docExtractTimeoutMs,
     docExtractWorkerUrl: options.docExtractWorkerUrl,
+    tgUserClientFactory: options.tgUserClientFactory,
+    tgUserLoginTimeoutMs: options.tgUserLoginTimeoutMs,
   });
   // F6：每 2 分钟扫一遍会话提取客户线索。leadsScanIntervalMs 为 0 时不启动定时器（测试里手动调 ctx.leads.scan()）
   ctx.leads = createLeadStore(ctx);

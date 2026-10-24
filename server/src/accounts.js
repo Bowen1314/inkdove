@@ -10,15 +10,22 @@ import { botIdOf, TG_TOKEN_RE } from './wa/telegram.js';
 /**
  * 接入方式：waha 扫码、meta Meta 官方 Cloud API、line LINE 官方帐号（LINE Messaging API）、
  * tgbot Telegram 机器人（客户和机器人聊）、tgbiz Telegram 私人号（Telegram 的「聊天自动化」：把机器人连到自己的号上，
- * 客户和这个私人号聊，机器人代收代发）。两种 Telegram 都走 Telegram Bot API
+ * 客户和这个私人号聊，机器人代收代发），这两种走 Telegram Bot API；
+ * tguser Telegram 扫码登录（墨鸽用 MTProto 直接登录用户自己的帐号，见 wa/tguser.js）
  */
-export const CHANNELS = ['waha', 'meta', 'line', 'tgbot', 'tgbiz'];
-export const isTelegram = (channel) => channel === 'tgbot' || channel === 'tgbiz';
+export const CHANNELS = ['waha', 'meta', 'line', 'tgbot', 'tgbiz', 'tguser'];
+/** 三种 Telegram：客户只有用户 id、没有手机号，不用白名单黑名单，不能开 WhatsApp 通知、不能外联 */
+export const isTelegram = (channel) => channel === 'tgbot' || channel === 'tgbiz' || channel === 'tguser';
+/** 走 Telegram Bot API、要填机器人 token 的两种 */
+export const isTgBotApi = (channel) => channel === 'tgbot' || channel === 'tgbiz';
 /** 发 WhatsApp 消息的接入方式：只有它们能开 WhatsApp 通知、能外联群发 */
 export const isWhatsapp = (channel) => channel === 'waha' || channel === 'meta';
 /** 客户没有手机号的接入方式，没名字时这样称呼客户（不露 LINE 的 userId、Telegram 的用户 id） */
-export const NO_NUMBER_NAMES = { line: 'LINE 用户', tgbot: 'Telegram 用户', tgbiz: 'Telegram 用户' };
-export const CHANNEL_NAMES = { line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号' };
+export const NO_NUMBER_NAMES = { line: 'LINE 用户', tgbot: 'Telegram 用户', tgbiz: 'Telegram 用户', tguser: 'Telegram 用户' };
+export const CHANNEL_NAMES = { line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号', tguser: 'Telegram 扫码登录' };
+/** my.telegram.org 给的 api_id（数字）、api_hash（32 位十六进制） */
+export const TG_API_ID_RE = /^\d{1,12}$/;
+export const TG_API_HASH_RE = /^[0-9a-f]{32}$/;
 /**
  * 回复方式：off 人工回复（只存消息，不调用模型；业务员需要时在会话页手动要推荐回复）、auto 自动回复。
  * v0.3.0 还有 suggest（客户来消息自动起草推荐回复），已取消：库里存的、PUT 收到的、导入文件里的 suggest 都按 off
@@ -49,8 +56,9 @@ function defaultConfig(channel) {
         : null,
     // LINE Developers Console 里 Messaging API channel 的 Channel ID、Channel secret、长期 Channel access token
     line: channel === 'line' ? { channelId: '', channelSecret: '', accessToken: '' } : null,
-    // @BotFather 给的机器人 token。私人号绑定了谁、连接的 id 这些是墨鸽收消息时记下的，存在 kv（见 wa/service.js 的 tgKv），不在这里
-    telegram: isTelegram(channel) ? { botToken: '' } : null,
+    // @BotFather 给的机器人 token。私人号绑定了谁、连接的 id 这些是墨鸽收消息时记下的，存在 kv（见 wa/service.js 的 tgKv），不在这里。
+    // 扫码登录：my.telegram.org 的 api_id、api_hash；登录态存在数据目录的 telegram/<号 id>.session（见 wa/tguser.js），不在这里
+    telegram: isTgBotApi(channel) ? { botToken: '' } : channel === 'tguser' ? { apiId: '', apiHash: '' } : null,
     notify: { email: { enabled: false, to: [] }, whatsapp: { enabled: false, number: '' } },
   };
 }
@@ -104,8 +112,15 @@ export function lineConfigured(acc) {
   return !!(l && l.channelId && l.channelSecret && l.accessToken);
 }
 
+/** 扫码登录的号：api_id、api_hash 都填了 */
+export function tgUserConfigured(acc) {
+  const t = acc.telegram;
+  return !!(acc.channel === 'tguser' && t && t.apiId && t.apiHash);
+}
+
 /**
- * 对外视图：密钥不回传（Meta 的 token、app secret，LINE 的 channel secret、access token，Telegram 的机器人 token 只给「设没设」）。
+ * 对外视图：密钥不回传（Meta 的 token、app secret，LINE 的 channel secret、access token，Telegram 的机器人 token、
+ * 扫码登录的 api_hash 只给「设没设」）。
  * viewer 是 agent 时再去掉 Meta 的 verifyToken、通知的收件人（邮箱、号码）和 Telegram 私人号的绑定链接，这些只有 admin 能看能改
  * @param {any} acc
  * @param {any} config
@@ -159,7 +174,11 @@ export function publicAccount(acc, config, status, viewer = null) {
           webhookUrl: `${config.publicBaseUrl}/webhooks/line/${acc.id}`,
         }
       : null,
-    telegram: acc.telegram ? { botTokenSet: !!acc.telegram.botToken } : null,
+    telegram: !acc.telegram
+      ? null
+      : acc.channel === 'tguser'
+        ? { apiId: acc.telegram.apiId, apiHashSet: !!acc.telegram.apiHash }
+        : { botTokenSet: !!acc.telegram.botToken },
     notify: {
       email: { enabled: acc.notify.email.enabled, to: hide ? [] : [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: hide ? '' : acc.notify.whatsapp.number },
@@ -319,7 +338,22 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (!isPlainObject(t)) throw badRequest('telegram 必须是对象');
     adminOnly();
     if (!a.telegram) throw badRequest('只有 Telegram 号才有这些字段');
-    if (t.botToken !== undefined) {
+    if (a.channel === 'tguser') {
+      if (t.botToken !== undefined) throw badRequest('扫码登录的号不用机器人 token');
+      if (t.apiId !== undefined) {
+        const v = typeof t.apiId === 'number' ? String(t.apiId) : str(t.apiId, 'telegram.apiId', 20).trim();
+        if (v && !TG_API_ID_RE.test(v)) throw badRequest('api_id 只能是数字（my.telegram.org 里 App api_id 那一串）', 'bad_api_id');
+        a.telegram.apiId = v;
+      }
+      if (t.apiHash !== undefined) {
+        const v = str(t.apiHash, 'telegram.apiHash', 100).trim().toLowerCase();
+        if (v && !TG_API_HASH_RE.test(v)) throw badRequest('api_hash 格式不对：应该是 my.telegram.org 里 App api_hash 那 32 位字母数字', 'bad_api_hash');
+        a.telegram.apiHash = v;
+      }
+    } else if (t.apiId !== undefined || t.apiHash !== undefined) {
+      throw badRequest('只有扫码登录的号才有 api_id、api_hash');
+    }
+    if (t.botToken !== undefined && a.channel !== 'tguser') {
       const v = str(t.botToken, 'telegram.botToken', 200).trim();
       if (v && !TG_TOKEN_RE.test(v)) throw badRequest('机器人 token 格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段', 'bad_token');
       a.telegram.botToken = v;
@@ -400,7 +434,7 @@ export function exportAccount(acc) {
         }
       : null,
     line: l ? { channelId: l.channelId, channelSecret: l.channelSecret, accessToken: l.accessToken } : null,
-    telegram: t ? { botToken: t.botToken } : null,
+    telegram: !t ? null : acc.channel === 'tguser' ? { apiId: t.apiId, apiHash: t.apiHash } : { botToken: t.botToken },
     notify: {
       email: { enabled: acc.notify.email.enabled, to: [...acc.notify.email.to] },
       whatsapp: { enabled: acc.notify.whatsapp.enabled, number: acc.notify.whatsapp.number },
@@ -524,7 +558,7 @@ export function createAccountStore(db, config) {
         const keyOf = (channel, cfg) => {
           if (channel === 'meta' && cfg.meta?.phoneNumberId) return `meta:${cfg.meta.phoneNumberId}`;
           if (channel === 'line' && cfg.line?.channelId) return `line:${cfg.line.channelId}`;
-          const botId = isTelegram(channel) ? botIdOf(cfg.telegram?.botToken) : '';
+          const botId = isTgBotApi(channel) ? botIdOf(cfg.telegram?.botToken) : '';
           return botId ? `tg:${botId}` : '';
         };
         /** @type {Map<string, {name:string, inFile:boolean}>} */

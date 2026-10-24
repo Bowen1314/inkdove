@@ -57,7 +57,14 @@ export const TARGET_TYPES = {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_LABELS = { admin: '管理员', agent: '业务员' };
-const CHANNEL_LABELS = { waha: '扫码连接', meta: 'Meta 官方接口', line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号' };
+const CHANNEL_LABELS = {
+  waha: '扫码连接',
+  meta: 'Meta 官方接口',
+  line: 'LINE 官方帐号',
+  tgbot: 'Telegram 机器人',
+  tgbiz: 'Telegram 私人号',
+  tguser: 'Telegram 扫码登录',
+};
 const STATUS_VALUES = { active: '启用中', disabled: '已停用' };
 
 /* ---------------- 小工具 ---------------- */
@@ -132,6 +139,8 @@ const ACCOUNT_SPECS = {
   'line.channelSecret': { label: 'LINE Channel secret', kind: 'secret' },
   'line.accessToken': { label: 'LINE Channel access token', kind: 'secret' },
   'telegram.botToken': { label: 'Telegram 机器人 token', kind: 'secret' },
+  'telegram.apiId': { label: 'Telegram api_id' },
+  'telegram.apiHash': { label: 'Telegram api_hash', kind: 'secret' },
   'notify.email.enabled': { label: '邮件通知' },
   'notify.email.to': { label: '通知邮箱', kind: 'list' },
   'notify.whatsapp.enabled': { label: 'WhatsApp 通知' },
@@ -475,6 +484,10 @@ export const RULES = [
     ['proxy/test', 'account.proxy_test', (n) => `测试{了}号${n}的 IP 代理`],
     ['notify/test', 'account.notify_test', (n) => `给号${n}发{了}测试通知`],
     ['telegram/rebind', 'account.telegram_rebind', (n) => `清掉{了}号${n}绑定的 Telegram 号主`],
+    ['telegram/login', 'account.telegram_login', (n) => `启动{了}号${n}的 Telegram 扫码登录`],
+    // 只记有人输过密码，密码本身不进审计
+    ['telegram/password', 'account.telegram_password', (n) => `为号${n}输入{了} Telegram 两步验证密码`],
+    ['telegram/logout', 'account.telegram_logout', (n) => `让号${n}退出{了} Telegram 登录`],
   ].map(([sub, a, say]) => ({
     m: 'POST',
     p: `/accounts/:id/${sub}`,
