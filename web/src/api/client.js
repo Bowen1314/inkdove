@@ -318,6 +318,8 @@ export const api = {
   /** 手机号配对码 → {code}。phoneNumber 原样提交（带国家码），由服务端规范化和校验 */
   wahaRequestCode: (id, phoneNumber, o) => post(`/api/accounts/${enc(id)}/waha/request-code`, { phoneNumber }, o),
   testProxy: (id, o) => post(`/api/accounts/${enc(id)}/proxy/test`, {}, o),
+  /** Telegram 私人号换号主：清掉绑定的号主，换一个新的绑定链接 → Account（只有 admin） */
+  telegramRebind: (id, o) => post(`/api/accounts/${enc(id)}/telegram/rebind`, {}, o),
   testNotify: (id) => post(`/api/accounts/${enc(id)}/notify/test`, {}),
 
   // 会话（id 形如 <accountId>:<chatId>，一律 encodeURIComponent）

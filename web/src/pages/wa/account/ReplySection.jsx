@@ -6,7 +6,7 @@ import { toast } from '../../../ui/toastBus.js';
 import { Callout, Segmented, Spinner, Switch } from '../../../ui/common.jsx';
 import { SaveBar, SettingsRow, SettingsSection } from '../../../ui/Settings.jsx';
 import { StatusDot } from '../../../ui/StatusDot.jsx';
-import { REPLY_MODES, REPLY_SCOPES, replyModeLabel, replyModeOf } from '../../../lib/labels.js';
+import { CHANNEL_LABEL, isWhatsapp, REPLY_MODES, REPLY_SCOPES, replyModeLabel, replyModeOf } from '../../../lib/labels.js';
 import { isConnected, patchAccountCache } from '../../../lib/accounts.js';
 
 /** 每行一个号码 → 数组（规范化交给后端） */
@@ -64,14 +64,18 @@ const MODE_OPTIONS = REPLY_MODES.map(({ value, label }) => ({ value, label }));
 const modeDesc = (m) => REPLY_MODES.find((x) => x.value === m)?.desc || '';
 const scopeLabel = (s) => REPLY_SCOPES.find((x) => x.value === (s === 'allowlist' ? 'allowlist' : 'all'))?.label;
 
-/** LINE 官方帐号的客户只有 userId、没有手机号：按号码的回复范围、白名单、黑名单都用不上（服务端也一律当范围内） */
-const LINE_SCOPE_TEXT = '全部客户。LINE 官方帐号只收得到加了好友的人发来的消息，客户没有手机号，白名单和黑名单用不上。';
+/** LINE 官方帐号、Telegram 号的客户只有用户 id、没有手机号：按号码的回复范围、白名单、黑名单都用不上（服务端也一律当范围内） */
+const NO_NUMBER_SCOPE_TEXT = {
+  line: '全部客户。LINE 官方帐号只收得到加了好友的人发来的消息，客户没有手机号，白名单和黑名单用不上。',
+  tgbot: '全部客户。Telegram 机器人只收得到主动给机器人发消息的人，客户没有手机号，白名单和黑名单用不上。',
+  tgbiz: '全部客户。客户没有手机号，白名单和黑名单用不上；不想让机器人管的聊天（比如亲友），请在 Telegram 的「聊天自动化」里排除。',
+};
 
 /**
  * 号详情的「回复」分组。admin：回复方式（Segmented，即时生效）、persona、回复范围、黑白名单（走保存栏）；
  * agent：同样几项只读展示（PUT /api/accounts/:id 对 agent 一律 403）。
  * 回复范围和名单对两种回复方式都生效（范围外的消息不保存），persona 自动回复和推荐回复都用，所以一直显示。
- * LINE 官方帐号没有回复范围和名单，只显示一句说明。
+ * LINE 官方帐号、Telegram 号没有回复范围和名单，只显示一句说明。
  * globalSettings：admin 才拿得到，用来在 persona 占位里显示全局设置。
  */
 export default function ReplySection({ account, setAccount, globalSettings, isAdmin }) {
@@ -96,9 +100,9 @@ function ReplyReadOnly({ account }) {
           <div className="muted numbers-readonly">使用全局设置</div>
         )}
       </SettingsRow>
-      {account.channel === 'line' ? (
+      {NO_NUMBER_SCOPE_TEXT[account.channel] ? (
         <SettingsRow label="回复范围">
-          <div className="muted numbers-readonly">{LINE_SCOPE_TEXT}</div>
+          <div className="muted numbers-readonly">{NO_NUMBER_SCOPE_TEXT[account.channel]}</div>
         </SettingsRow>
       ) : (
         <>
@@ -227,9 +231,9 @@ function ReplyForm({ account, setAccount, globalSettings }) {
         />
       </SettingsRow>
 
-      {account.channel === 'line' ? (
+      {NO_NUMBER_SCOPE_TEXT[account.channel] ? (
         <SettingsRow label="回复范围" hint="群聊、多人聊天一律不回复。">
-          <div className="muted numbers-readonly">{LINE_SCOPE_TEXT}</div>
+          <div className="muted numbers-readonly">{NO_NUMBER_SCOPE_TEXT[account.channel]}</div>
         </SettingsRow>
       ) : (
         <>
@@ -362,7 +366,7 @@ function NotifyReadOnly({ account }) {
       <SettingsRow inline label="邮件通知">
         <OnOff on={!!account.notify?.email?.enabled} />
       </SettingsRow>
-      {account.channel !== 'line' && (
+      {isWhatsapp(account.channel) && (
         <SettingsRow inline label="WhatsApp 通知">
           <OnOff on={!!account.notify?.whatsapp?.enabled} />
         </SettingsRow>
@@ -391,8 +395,9 @@ function NotifyForm({ account, setAccount, globalSettings }) {
   const errOf = (k) => (showErrors ? errors[k] : undefined);
   const savedEmailOn = !!account.notify?.email?.enabled;
   const savedWaOn = !!account.notify?.whatsapp?.enabled;
-  // LINE 官方帐号发不了 WhatsApp 通知（服务端拒绝开启）；万一已经开着，开关留着让人关掉
-  const isLine = account.channel === 'line';
+  // LINE 官方帐号、Telegram 号发不了 WhatsApp 通知（服务端拒绝开启）；万一已经开着，开关留着让人关掉
+  const noWa = !isWhatsapp(account.channel);
+  const channelName = CHANNEL_LABEL[account.channel] || '这个号';
   const anyNotify = draft.emailEnabled || draft.waEnabled;
   // null = 不知道（全局设置还没拿到）
   const emailConfigured = globalSettings ? !!globalSettings.email?.provider : emailBlocked ? false : null;
@@ -513,21 +518,21 @@ function NotifyForm({ account, setAccount, globalSettings }) {
         </SettingsRow>
       )}
 
-      {isLine && !draft.waEnabled ? (
-        <SettingsRow inline label="WhatsApp 通知" hint="WhatsApp 通知要由这个号发给一个手机号，LINE 官方帐号发不了，请用邮件通知">
+      {noWa && !draft.waEnabled ? (
+        <SettingsRow inline label="WhatsApp 通知" hint={`WhatsApp 通知要由这个号发给一个手机号，${channelName}发不了，请用邮件通知`}>
           <span className="muted nowrap">不支持</span>
         </SettingsRow>
       ) : (
         <SettingsRow
           inline
           label="WhatsApp 通知"
-          hint={isLine ? 'LINE 官方帐号发不了 WhatsApp 通知，请关掉，改用邮件通知' : '用这个号发给下面的号码；这个号码发来的消息不会被自动回复'}
+          hint={noWa ? `${channelName}发不了 WhatsApp 通知，请关掉，改用邮件通知` : '用这个号发给下面的号码；这个号码发来的消息不会被自动回复'}
         >
           <Switch checked={draft.waEnabled} onChange={(v) => set('waEnabled', v)} label="开启 WhatsApp 通知" />
         </SettingsRow>
       )}
 
-      {draft.waEnabled && !isLine && (
+      {draft.waEnabled && !noWa && (
         <SettingsRow
           label="接收通知的号码"
           htmlFor="nt-wa"

@@ -7,7 +7,7 @@ import { CellText, DataTable } from '../ui/DataTable.jsx';
 import { StatusDot } from '../ui/StatusDot.jsx';
 import { Avatar } from '../ui/Avatar.jsx';
 import { Tooltip } from '../ui/Popover.jsx';
-import { ENTRY_TYPES, waState, CHANNEL_LABEL, replyModeLabel, replyModeOf } from '../lib/labels.js';
+import { ENTRY_TYPES, waState, CHANNEL_LABEL, noNumberName, replyModeLabel, replyModeOf } from '../lib/labels.js';
 import { fmtNum, fmtShortTime, fmtTime } from '../lib/format.js';
 import { useAuth } from '../lib/auth.jsx';
 import { isConnected, useAccounts } from '../lib/accounts.js';
@@ -21,7 +21,7 @@ function settle(p) {
   );
 }
 
-const convName = (c) => c?.contactName || c?.contactNumber || (c?.channel === 'line' ? 'LINE 用户' : c?.id) || '未知联系人';
+const convName = (c) => c?.contactName || c?.contactNumber || noNumberName(c?.channel) || c?.id || '未知联系人';
 const chatLink = (id) => `/whatsapp/chats?${new URLSearchParams({ chat: id })}`;
 
 /** 指标卡外面套一层栅格格子（Metric 自己不接 className） */
@@ -326,7 +326,7 @@ export default function Overview() {
   const steps = [
     { key: 'llm', title: '配置 AI 模型', done: llmReady, to: '/settings', action: '去设置' },
     { key: 'kb', title: '上传资料并整理知识库', done: kbReady, to: '/files/sources', action: '上传资料' },
-    { key: 'wa', title: '添加一个 WhatsApp 号', done: waReady, to: '/whatsapp/numbers', action: '添加号码' },
+    { key: 'wa', title: '添加一个号码', done: waReady, to: '/whatsapp/numbers', action: '添加号码' },
   ];
 
   const convList = data?.convs.ok ? data.convs.value || [] : null;

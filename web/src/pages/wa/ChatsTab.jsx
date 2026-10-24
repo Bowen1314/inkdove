@@ -38,10 +38,12 @@ import {
   BOT_DECISION_NOTE,
   LEAD_STAGES,
   MEDIA_LABEL,
+  NO_NUMBER_PLATFORM,
   SKIP_NO_AUTO_REPLY,
   SKIP_REVOKED,
   isManualMode,
   leadStageLabel,
+  noNumberName,
   replyModeOf,
   suggestErrorText,
   translationProviderLabel,
@@ -76,8 +78,8 @@ function readChatParam(params) {
   return id;
 }
 
-/** 会话里客户的称呼：名字、号码；LINE 的客户没有号码，没名字时叫「LINE 用户」（不显示 userId） */
-export const convName = (c) => c?.contactName || c?.contactNumber || (c?.channel === 'line' ? 'LINE 用户' : c?.id) || '未知联系人';
+/** 会话里客户的称呼：名字、号码；LINE、Telegram 的客户没有号码，没名字时叫「LINE 用户」「Telegram 用户」（不显示用户 id） */
+export const convName = (c) => c?.contactName || c?.contactNumber || noNumberName(c?.channel) || c?.id || '未知联系人';
 
 function sortConvs(list) {
   // needsHuman 置顶，其余按 updatedAt 倒序
@@ -1034,10 +1036,10 @@ function CustomerInfo({ conv }) {
       <div className="info__section">
         <h3 className="info__title">联系方式</h3>
         <dl className="kv">
-          {conv.channel === 'line' ? (
+          {NO_NUMBER_PLATFORM[conv.channel] ? (
             <>
               <dt>渠道</dt>
-              <dd>LINE（没有手机号）</dd>
+              <dd>{NO_NUMBER_PLATFORM[conv.channel]}（没有手机号）</dd>
             </>
           ) : (
             <>
@@ -1374,7 +1376,7 @@ function ChatPane({
           <div className="chat-head__name">{name}</div>
           <div className="chat-head__sub">
             {conv?.contactNumber && conv.contactName && <span className="num">{conv.contactNumber}</span>}
-            {conv?.channel === 'line' && <span>LINE</span>}
+            {NO_NUMBER_PLATFORM[conv?.channel] && <span>{NO_NUMBER_PLATFORM[conv.channel]}</span>}
             {conv?.accountName && <span className="chat-head__acct">经 {conv.accountName}</span>}
             {conv && !isAdmin && <AssigneeText assignee={conv.assignee} />}
             {conv && <ConvState conv={conv} showActive replyMode={replyMode} />}

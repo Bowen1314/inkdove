@@ -11,7 +11,7 @@ import { StatusDot } from '../../../ui/StatusDot.jsx';
 import { SecretField } from '../../../ui/SecretField.jsx';
 import { Avatar } from '../../../ui/Avatar.jsx';
 import { usePolling } from '../../../hooks/usePolling.js';
-import { waState } from '../../../lib/labels.js';
+import { isTelegram, waState } from '../../../lib/labels.js';
 import { fmtTime } from '../../../lib/format.js';
 import { mapServerError } from '../../settings/shared.jsx';
 
@@ -1085,10 +1085,260 @@ function LinePanel({ account, setAccount, isAdmin }) {
   );
 }
 
-/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号、LINE 官方帐号显示凭证；业务员只看状态 */
+/* ---------- Telegram（机器人、私人号） ---------- */
+
+const TG_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,}$/;
+
+/** 私人号「聊天自动化」里给机器人的一项权限：有就绿点，没有就灰点 */
+function TgRight({ on, children }) {
+  return (
+    <StatusDot tone={on ? 'success' : 'neutral'} size="sm">
+      {children}
+      {on ? '：已打开' : '：没打开'}
+    </StatusDot>
+  );
+}
+
+/**
+ * Telegram 号的「连接」：机器人 token、机器人的用户名；私人号再加绑定号主（绑定链接、换号主）和「聊天自动化」的连接、权限。
+ * 墨鸽主动去 Telegram 取消息，不需要回调地址。没连好之前每 3 秒刷新一次状态，连好后每 15 秒（看有没有断开、改权限）
+ */
+function TelegramPanel({ account, setAccount, isAdmin }) {
+  const confirm = useConfirm();
+  const isBiz = account.channel === 'tgbiz';
+  const tokenSet = !!account.telegram?.botTokenSet;
+  const status = account.status || {};
+  const tg = status.telegram || {};
+  const [token, setToken] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [rebinding, setRebinding] = useState(false);
+  const [pollFailed, setPollFailed] = useState(false);
+
+  const tokenError = token.trim() && !TG_TOKEN_RE.test(token.trim()) ? '格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段' : null;
+  const dirty = token.trim() !== '';
+
+  usePolling(
+    async () => {
+      try {
+        const a = await api.getAccount(account.id, { silent: true });
+        setPollFailed(false);
+        if (a) setAccount((prev) => ({ ...prev, ...a }));
+      } catch {
+        setPollFailed(true);
+      }
+    },
+    status.state === 'working' ? 15000 : 3000,
+    tokenSet,
+  );
+
+  const save = async (e) => {
+    e?.preventDefault();
+    if (saving || tokenError || !dirty) return;
+    setSaving(true);
+    try {
+      const res = await api.putAccount(account.id, { telegram: { botToken: token.trim() } });
+      if (res && res.id) setAccount(res);
+      setToken('');
+      toast.success('已保存，正在连接 Telegram');
+    } catch {
+      // 已提示
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearToken = async () => {
+    const ok = await confirm({
+      title: '清除机器人 token？',
+      message: `清除后「${account.name}」不再收发 Telegram 消息，已有的聊天记录不受影响。填回同一个机器人的 token 后接着用。`,
+      confirmText: '清除',
+      danger: true,
+    });
+    if (!ok) return;
+    setClearing(true);
+    try {
+      const res = await api.putAccount(account.id, { telegram: { botToken: '' } });
+      if (res && res.id) setAccount(res);
+      toast.success('已清除');
+    } catch {
+      // 已提示
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const rebind = async () => {
+    const ok = await confirm({
+      title: '换号主？',
+      message: '会清掉现在绑定的号主，生成新的绑定链接。重新绑定之前，这个号收不到也发不出 Telegram 消息。',
+      confirmText: '换号主',
+      danger: true,
+    });
+    if (!ok) return;
+    setRebinding(true);
+    try {
+      const res = await api.telegramRebind(account.id);
+      if (res && res.id) setAccount(res);
+      toast.success('已清掉号主，请用新的绑定链接重新绑定');
+    } catch {
+      // 已提示
+    } finally {
+      setRebinding(false);
+    }
+  };
+
+  const tone = status.state === 'failed' ? 'danger' : 'warning';
+  const errorBlock = status.error && (
+    <div className="numbers-block">
+      <Callout tone={tone}>{status.error}</Callout>
+    </div>
+  );
+
+  const botLink = tg.botUsername ? `https://t.me/${tg.botUsername}` : '';
+  const botRow = botLink && (
+    <SettingsRow
+      label="机器人"
+      hint={isBiz ? '这个机器人只给这个号用，不要再给别的程序。' : '客户打开这个链接、或者在 Telegram 里搜索机器人的用户名就能来聊。'}
+    >
+      <div className="numbers-inline">
+        <a className="mono" href={botLink} target="_blank" rel="noreferrer">
+          @{tg.botUsername}
+        </a>
+        <CopyButton text={botLink} label="复制链接" />
+      </div>
+    </SettingsRow>
+  );
+
+  const c = tg.connection;
+  const bizRows = isBiz && tokenSet && (
+    <>
+      <SettingsRow
+        label="号主"
+        hint={
+          tg.owner
+            ? '只收号主本人在「聊天自动化」里连上的消息。'
+            : isAdmin
+              ? '用这个私人号本人的 Telegram 打开链接，点「开始」（Start），机器人会回一句「已绑定到墨鸽」。链接只能用一次，不要发给别人。'
+              : null
+        }
+      >
+        {tg.owner ? (
+          <div className="numbers-inline">
+            <StatusDot tone="success">{tg.owner.name || '已绑定'}</StatusDot>
+            {isAdmin && (
+              <button type="button" className="btn btn--sm" onClick={rebind} disabled={rebinding}>
+                {rebinding ? <Spinner /> : <RefreshCw />}
+                换号主
+              </button>
+            )}
+          </div>
+        ) : tg.bindLink ? (
+          <div className="numbers-inline">
+            <input className="input input--mono" value={tg.bindLink} readOnly onFocus={(e) => e.target.select()} aria-label="绑定链接" />
+            <CopyButton text={tg.bindLink} size="md" />
+          </div>
+        ) : (
+          <span className="muted">{isAdmin ? '连上 Telegram 后显示绑定链接…' : '还没有绑定，由管理员绑定'}</span>
+        )}
+      </SettingsRow>
+      <SettingsRow
+        label="聊天自动化"
+        hint="在 Telegram 的「设置 → 聊天自动化」（英文界面是 Settings → Chat Automation）里添加这个机器人。要撤回消息，再打开删除消息的权限；要标已读，再打开读消息的权限。"
+      >
+        {!c ? (
+          <span className="muted">还没有连上</span>
+        ) : !c.enabled ? (
+          <StatusDot tone="neutral">已断开{c.at ? `（${fmtTime(c.at)}）` : ''}</StatusDot>
+        ) : !c.byOwner ? (
+          <StatusDot tone="warning">连上的是「{c.name || '另一个帐号'}」，不是号主</StatusDot>
+        ) : (
+          <div className="vstack" style={{ gap: 'var(--sp-1)' }}>
+            <StatusDot tone="success">已连上</StatusDot>
+            <TgRight on={c.canReply}>回复消息</TgRight>
+            <TgRight on={c.canRead}>标已读</TgRight>
+            <TgRight on={c.canDelete}>删除消息（撤回）</TgRight>
+          </div>
+        )}
+      </SettingsRow>
+    </>
+  );
+
+  const limits = (
+    <div className="numbers-block muted text-sm">
+      {isBiz
+        ? '和 WhatsApp 不一样的地方：客户看到的是你本人在回复；机器人只能回复 24 小时内给你发过消息的私聊，不能外联群发；客户没有手机号，白名单和黑名单用不上；你在手机上发的消息也会同步进墨鸽，记为手机回复；客户发来的文件超过 20MB 时下载不了。'
+        : '和 WhatsApp 不一样的地方：客户要先在 Telegram 里给机器人发消息，机器人不能主动找人，不能外联群发；客户没有手机号，白名单和黑名单用不上；机器人不能把消息标成已读；发出的消息 48 小时内能撤回；客户发来的文件超过 20MB 时下载不了。'}
+      服务器访问不了 Telegram 时，请在「设置 → 代理」里开启全局代理。
+    </div>
+  );
+
+  // token 只有 admin 能看和改；业务员看得到状态、机器人、号主和连接，看不到绑定链接
+  if (!isAdmin) {
+    return (
+      <SettingsSection title="连接">
+        <StatusRow label="连接状态" account={account} pollFailed={pollFailed} />
+        {errorBlock}
+        {!tokenSet && <div className="numbers-block muted">这个号还没有填机器人 token，由管理员配置。</div>}
+        {botRow}
+        {bizRows}
+        {limits}
+      </SettingsSection>
+    );
+  }
+
+  return (
+    <SettingsSection title="连接" as="form" onSubmit={save}>
+      <StatusRow label="连接状态" account={account} pollFailed={pollFailed} />
+      {errorBlock}
+      {isBiz && (
+        <div className="numbers-block">
+          <Callout tone="warning">
+            {'墨鸽会收到这个 Telegram 号的私聊消息（「聊天自动化」里排除的聊天除外），亲友发来的也会进来；开着自动回复时，机器人以你本人的身份回复。' +
+              '建议在「聊天自动化」里排除联系人、只管新聊天，或者这个号用人工回复。'}
+          </Callout>
+        </div>
+      )}
+      {!tokenSet && (
+        <div className="numbers-block">
+          <Callout tone="info">
+            {isBiz
+              ? '第 1 步：在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，再在 Bot Settings → Business Mode 里打开 Business Mode，把 token 填到下面。第 2 步：保存后这里出现绑定链接，用这个私人号本人的 Telegram 打开。第 3 步：在 Telegram 的「设置 → 聊天自动化」里添加这个机器人，打开回复消息的权限。'
+              : '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，把它给的 token 填到下面。墨鸽主动去 Telegram 取消息，不需要公网地址。'}
+          </Callout>
+        </div>
+      )}
+
+      <SettingsRow label="机器人 token" htmlFor={`tg-token-${account.id}`}>
+        <SecretField
+          id={`tg-token-${account.id}`}
+          hint={
+            isBiz
+              ? '在 @BotFather 里选这个机器人 → API Token。换成别的机器人时，要重新绑定号主、重新在「聊天自动化」里添加。'
+              : '在 @BotFather 里选这个机器人 → API Token。'
+          }
+          error={tokenError}
+          isSet={tokenSet}
+          value={token}
+          onChange={setToken}
+          onClear={clearToken}
+          clearing={clearing}
+        />
+      </SettingsRow>
+      {botRow}
+      {bizRows}
+
+      {limits}
+      <SaveBar dirty={dirty} saving={saving} onDiscard={() => setToken('')} />
+    </SettingsSection>
+  );
+}
+
+/** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号、LINE 官方帐号、Telegram 号显示凭证；业务员只看状态 */
 export default function ConnectSection({ account, setAccount, isAdmin }) {
   if (account.channel === 'meta') return <MetaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
   if (account.channel === 'line') return <LinePanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
+  if (isTelegram(account.channel)) return <TelegramPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
   if (account.channel !== 'waha') {
     return (
       <SettingsSection title="连接">

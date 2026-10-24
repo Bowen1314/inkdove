@@ -7,7 +7,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 添加号码：接入方式三选一 */
+/* 添加号码：选接入方式（三列，放不下的换行） */
 .numbers-channel {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

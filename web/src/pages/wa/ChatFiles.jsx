@@ -213,6 +213,10 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
             LINE 发不了文件：1MB 以内的 jpg、png 按图片发，其他文件会发成一条带文件名和下载链接的消息，链接 30 天内有效。
           </div>
         )}
+        {/* Telegram：10MB 以内的 jpg、png 按图片发（会压缩），其他按文件原样发 */}
+        {(conv.channel === 'tgbot' || conv.channel === 'tgbiz') && (
+          <div className="field__hint">Telegram：10MB 以内的 jpg、png 按图片发（Telegram 会压缩），其他文件原样发；说明文字最多 1024 字。</div>
+        )}
         {/* 人工回复的号没有机器人可暂停 */}
         {!conv.botPaused && !manual && <div className="field__hint">发送后机器人会暂停这个会话。</div>}
       </div>

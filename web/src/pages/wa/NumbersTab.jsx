@@ -12,7 +12,7 @@ import { StatusDot } from '../../ui/StatusDot.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAuth } from '../../lib/auth.jsx';
 import { invalidateAccounts, isConnected, patchAccountCache, useAccounts } from '../../lib/accounts.js';
-import { CHANNEL_LABEL, REPLY_MODES, replyModeLabel, replyModeOf, waState } from '../../lib/labels.js';
+import { CHANNEL_LABEL, isTelegram, REPLY_MODES, replyModeLabel, replyModeOf, waState } from '../../lib/labels.js';
 import { fmtDay, fmtHm } from '../../lib/format.js';
 
 export const CHANNEL_OPTIONS = [
@@ -31,7 +31,20 @@ export const CHANNEL_OPTIONS = [
     title: 'LINE 官方帐号',
     desc: '接 LINE 官方帐号（Messaging API），客户加好友后来聊。需要在 LINE Developers Console 配置。',
   },
+  {
+    value: 'tgbot',
+    title: 'Telegram 机器人',
+    desc: '客户在 Telegram 里找到你的机器人来聊。在 @BotFather 创建机器人、填 token 即可，不需要公网地址。',
+  },
+  {
+    value: 'tgbiz',
+    title: 'Telegram 私人号',
+    desc: '用你本人的 Telegram 号回复私聊：通过 Telegram 官方的「聊天自动化」把一个机器人连到你的号上。',
+  },
 ];
+
+const TG_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,}$/;
+export const TG_TOKEN_ERROR = '格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段';
 
 /** status.me.id（如 8613800138000@c.us）→ +8613800138000 */
 export function phoneOf(account) {
@@ -39,6 +52,12 @@ export function phoneOf(account) {
   if (!id) return '';
   const raw = String(id).split('@')[0];
   return /^\d+$/.test(raw) ? `+${raw}` : raw;
+}
+
+/** 列表里名字下面那一行：手机号；Telegram 号没有手机号，显示机器人的用户名 */
+function handleOf(account) {
+  const bot = account?.status?.telegram?.botUsername;
+  return phoneOf(account) || (bot ? `@${bot}` : '');
 }
 
 /** DESIGN.md 第 8 节：今天 10:42，其余按日期；悬停显示完整时间 */
@@ -64,7 +83,7 @@ const STATE_FILTERS = [
 function stateGroup(account) {
   const s = account?.status?.state;
   if (isConnected(account)) return 'connected';
-  if (s === 'starting' || s === 'scan_qr') return 'pending';
+  if (s === 'starting' || s === 'scan_qr' || s === 'waiting') return 'pending';
   if (s === 'failed') return 'failed';
   return 'off';
 }
@@ -74,6 +93,8 @@ const CHANNEL_FILTERS = [
   { value: 'waha', label: CHANNEL_LABEL.waha },
   { value: 'meta', label: CHANNEL_LABEL.meta },
   { value: 'line', label: CHANNEL_LABEL.line },
+  { value: 'tgbot', label: CHANNEL_LABEL.tgbot },
+  { value: 'tgbiz', label: CHANNEL_LABEL.tgbiz },
 ];
 
 const EMPTY_LINE = { channelId: '', channelSecret: '', accessToken: '' };
@@ -83,6 +104,8 @@ function AddAccountModal({ open, onClose, onCreated }) {
   const [channel, setChannel] = useState('waha');
   // LINE 官方帐号的三项配置：可以先空着，添加后在号详情的「连接」里再填
   const [line, setLine] = useState(EMPTY_LINE);
+  // Telegram 机器人的 token：也可以先空着，之后在「连接」里填
+  const [tgToken, setTgToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -90,10 +113,13 @@ function AddAccountModal({ open, onClose, onCreated }) {
     setName('');
     setChannel('waha');
     setLine(EMPTY_LINE);
+    setTgToken('');
     setTouched(false);
   };
   const setLineField = (k, v) => setLine((l) => ({ ...l, [k]: v }));
   const lineIdError = channel === 'line' && line.channelId.trim() && !/^\d+$/.test(line.channelId.trim()) ? 'Channel ID 只能是数字' : null;
+  const isTg = isTelegram(channel);
+  const tgTokenError = isTg && tgToken.trim() && !TG_TOKEN_RE.test(tgToken.trim()) ? TG_TOKEN_ERROR : null;
 
   const close = () => {
     if (busy) return;
@@ -104,7 +130,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
   const submit = async (e) => {
     e?.preventDefault();
     setTouched(true);
-    if (!name.trim() || lineIdError || busy) return;
+    if (!name.trim() || lineIdError || tgTokenError || busy) return;
     setBusy(true);
     try {
       let acc = await api.createAccount({ name: name.trim(), channel });
@@ -113,6 +139,15 @@ function AddAccountModal({ open, onClose, onCreated }) {
       if (channel === 'line' && Object.keys(linePatch).length) {
         try {
           const res = await api.putAccount(acc.id, { line: linePatch });
+          if (res && res.id) acc = res;
+        } catch {
+          // 已提示
+        }
+      }
+      // Telegram：同上，token 填了才存（同一个机器人已经给别的号用了时这里报错，号照样建好）
+      if (isTg && tgToken.trim()) {
+        try {
+          const res = await api.putAccount(acc.id, { telegram: { botToken: tgToken.trim() } });
           if (res && res.id) acc = res;
         } catch {
           // 已提示
@@ -196,7 +231,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
             ))}
           </div>
           <div className="field__hint">添加后不能更改。要换接入方式，需要删除这个号再重新添加。</div>
-          <div className="field__hint">每个扫码号大约占用 100–200MB 内存</div>
+          {channel === 'waha' && <div className="field__hint">每个扫码号大约占用 100–200MB 内存</div>}
         </div>
         {channel === 'line' && (
           <>
@@ -235,6 +270,35 @@ function AddAccountModal({ open, onClose, onCreated }) {
                 autoComplete="new-password"
                 spellCheck={false}
                 onChange={(e) => setLineField('accessToken', e.target.value)}
+              />
+            </Field>
+          </>
+        )}
+        {isTg && (
+          <>
+            {channel === 'tgbiz' ? (
+              <Callout tone="warning">
+                <strong>用私人号接入前请注意：</strong>
+                {'墨鸽会收到这个 Telegram 号的私聊消息（「聊天自动化」里排除的聊天除外），亲友发来的也会进来；开着自动回复时，机器人以你本人的身份回复。' +
+                  '建议在 Telegram 的「聊天自动化」里排除联系人、只管新聊天，或者这个号用人工回复。机器人只能回复 24 小时内给你发过消息的私聊。'}
+              </Callout>
+            ) : null}
+            <Callout tone="info">
+              {channel === 'tgbiz'
+                ? '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人（只给这个号用），再在 Bot Settings → Business Mode 里打开 Business Mode。添加后到「连接」里按步骤绑定号主、在「聊天自动化」里添加机器人。'
+                : '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，把它给的 token 填到下面。客户在 Telegram 里搜索机器人的用户名就能来聊。'}
+              token 可以先空着，之后在「连接」里填。
+            </Callout>
+            <Field label="机器人 token" htmlFor="acc-tg-token" error={tgTokenError} optional>
+              <input
+                {...fieldProps('acc-tg-token', tgTokenError)}
+                type="password"
+                className="input input--mono"
+                value={tgToken}
+                placeholder="123456789:AA…"
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={(e) => setTgToken(e.target.value)}
               />
             </Field>
           </>
@@ -281,6 +345,8 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
   const hasWaha = items.some((a) => a.channel === 'waha');
   const hasMeta = items.some((a) => a.channel === 'meta');
   const hasLine = items.some((a) => a.channel === 'line');
+  const hasTgBiz = items.some((a) => a.channel === 'tgbiz');
+  const hasTgBot = items.some((a) => a.channel === 'tgbot');
 
   const close = () => {
     if (!busy) onClose();
@@ -389,6 +455,12 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
         {hasLine && (
           <div className="field__hint">
             LINE 官方帐号导入后 Webhook URL 会变成新地址，要到 LINE Developers Console 改一下；Channel ID 和已有的号重复的会跳过。
+          </div>
+        )}
+        {(hasTgBot || hasTgBiz) && (
+          <div className="field__hint">
+            Telegram 号导入后马上开始收消息，原来的墨鸽要先删掉这个号或停掉，同一个机器人只能在一处收消息；机器人已经给别的号用的会跳过。
+            {hasTgBiz && '私人号导入后要重新绑定号主，并在「聊天自动化」里重新添加一次机器人。'}
           </div>
         )}
       </div>
@@ -501,7 +573,7 @@ export default function NumbersTab() {
       if (stateFilter && stateGroup(a) !== stateFilter) return false;
       if (channelFilter && a.channel !== channelFilter) return false;
       if (!kw) return true;
-      return [a.name, phoneOf(a), a.status?.me?.pushName].some((s) => String(s || '').toLowerCase().includes(kw));
+      return [a.name, handleOf(a), a.status?.me?.pushName].some((s) => String(s || '').toLowerCase().includes(kw));
     });
   }, [accounts, q, stateFilter, channelFilter]);
 
@@ -517,7 +589,7 @@ export default function NumbersTab() {
       header: '名称',
       sortValue: (a) => a.name || '',
       render: (a) => (
-        <CellText primary={a.name || '未命名号码'} secondary={phoneOf(a) && <span className="num">{phoneOf(a)}</span>} />
+        <CellText primary={a.name || '未命名号码'} secondary={handleOf(a) && <span className="num">{handleOf(a)}</span>} />
       ),
     },
     {
@@ -598,7 +670,7 @@ export default function NumbersTab() {
   const exportAll = async () => {
     const ok = await confirm({
       title: '导出号码配置',
-      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、LINE 的 channel secret 和 access token、代理密码等密钥的明文，请妥善保管。`,
+      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、LINE 的 channel secret 和 access token、Telegram 机器人 token、代理密码等密钥的明文，请妥善保管。`,
       confirmText: '导出',
     });
     if (!ok) return;
@@ -664,7 +736,7 @@ export default function NumbersTab() {
         title={isAdmin ? '还没有添加号码' : '还没有分配给你的号码'}
         desc={
           isAdmin
-            ? '添加一个 WhatsApp 号，扫码或接入 Meta 官方接口后，客户消息会进到「会话」里，需要时让 AI 推荐回复，也可以开自动回复。一个企业可以接多个号，共用同一个知识库。'
+            ? '添加一个 WhatsApp、LINE 或 Telegram 号，接入后客户消息会进到「会话」里，需要时让 AI 推荐回复，也可以开自动回复。一个企业可以接多个号，共用同一个知识库。'
             : '请联系管理员把号码分配给你。'
         }
         action={addButton}
