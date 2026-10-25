@@ -320,6 +320,11 @@ export const api = {
   testProxy: (id, o) => post(`/api/accounts/${enc(id)}/proxy/test`, {}, o),
   /** Telegram 私人号换号主：清掉绑定的号主，换一个新的绑定链接 → Account（只有 admin） */
   telegramRebind: (id, o) => post(`/api/accounts/${enc(id)}/telegram/rebind`, {}, o),
+  // Telegram 扫码登录：开始扫码、二维码（v 是二维码的版本，换了就换图）、两步验证密码、退出登录（正在扫码时是取消）
+  tgUserLogin: (id, o) => post(`/api/accounts/${enc(id)}/telegram/login`, {}, o),
+  tgUserQrUrl: (id, v) => `/api/accounts/${enc(id)}/telegram/qr?v=${encodeURIComponent(v ?? '')}`,
+  tgUserPassword: (id, password, o) => post(`/api/accounts/${enc(id)}/telegram/password`, { password }, o),
+  tgUserLogout: (id, o) => post(`/api/accounts/${enc(id)}/telegram/logout`, {}, o),
   testNotify: (id) => post(`/api/accounts/${enc(id)}/notify/test`, {}),
 
   // 会话（id 形如 <accountId>:<chatId>，一律 encodeURIComponent）

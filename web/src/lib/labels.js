@@ -63,6 +63,9 @@ export const WA_STATE = {
   configured: { label: '已配置', tone: 'green' },
   // Telegram 私人号：还没绑定号主，或者号主还没在「聊天自动化」里连上机器人
   waiting: { label: '等待连接', tone: 'amber' },
+  // Telegram 扫码登录：扫完码要输两步验证密码；没登录（还没扫码、退出了、登录失效了）
+  password: { label: '等待输入密码', tone: 'amber', pulse: true },
+  logged_out: { label: '未登录', tone: 'gray' },
 };
 export const waState = (s) => WA_STATE[s] || { label: s || '未知', tone: 'gray' };
 
@@ -72,13 +75,16 @@ export const CHANNEL_LABEL = {
   line: 'LINE 官方帐号',
   tgbot: 'Telegram 机器人',
   tgbiz: 'Telegram 私人号',
+  tguser: 'Telegram 扫码登录',
 };
 
-export const isTelegram = (channel) => channel === 'tgbot' || channel === 'tgbiz';
+export const isTelegram = (channel) => channel === 'tgbot' || channel === 'tgbiz' || channel === 'tguser';
+/** 经机器人 token 接入的 Telegram 号（机器人、私人号）；扫码登录的号是登录个人帐号，没有 token */
+export const isTgBotApi = (channel) => channel === 'tgbot' || channel === 'tgbiz';
 /** 发 WhatsApp 消息的接入方式：只有它们能开 WhatsApp 通知、能外联群发、有按号码的白名单和黑名单 */
 export const isWhatsapp = (channel) => channel === 'waha' || channel === 'meta';
 /** 客户没有手机号的接入方式（会话的 channel 就是号的接入方式）：显示的渠道名，没名字时叫「X 用户」（不显示用户 id） */
-export const NO_NUMBER_PLATFORM = { line: 'LINE', tgbot: 'Telegram', tgbiz: 'Telegram' };
+export const NO_NUMBER_PLATFORM = { line: 'LINE', tgbot: 'Telegram', tgbiz: 'Telegram', tguser: 'Telegram' };
 export const noNumberName = (channel) => (NO_NUMBER_PLATFORM[channel] ? `${NO_NUMBER_PLATFORM[channel]} 用户` : null);
 
 // 消息作者（author）。owner = 机主在手机上直接回复（F12）

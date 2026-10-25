@@ -25,10 +25,20 @@ const ME = { id: '5000000001', name: 'Bowen Rui', username: 'bowen_r' };
  *   signal 中止时抛 signal.reason。登录成功时像真客户端一样写登录态文件（主文件和 -wal）
  * - sendText、sendFile 从 5001 开始编消息 id（用户帐号的消息 id 在所有私聊里是同一个序列）；deleteFail 时删除报错
  * - openFile、download：files 里登记的；已知大小超过上限的抛 TooLargeError，不记 openFile
- * - logOut：logOutFail 时报错（连不上 Telegram）
+ * - logOut：logOutFail 时报错（连不上 Telegram）；restore：restoreFails 大于 0 时报连不上（每次减一）
  */
 function fakeTgUser() {
-  const state = { clients: [], sessions: new Map(), files: new Map(), twoFa: '', nextId: 5000, qrSeq: 0, deleteFail: false, logOutFail: false };
+  const state = {
+    clients: [],
+    sessions: new Map(),
+    files: new Map(),
+    twoFa: '',
+    nextId: 5000,
+    qrSeq: 0,
+    deleteFail: false,
+    logOutFail: false,
+    restoreFails: 0,
+  };
   async function factory(o) {
     const c = { o, calls: [], closed: false, login: null };
     const call = (name, ...args) => c.calls.push({ name, args });
@@ -49,6 +59,10 @@ function fakeTgUser() {
     Object.assign(c, {
       async restore() {
         call('restore');
+        if (state.restoreFails > 0) {
+          state.restoreFails--;
+          throw new TgUserError('连不上 Telegram：timeout');
+        }
         return state.sessions.get(o.storagePath) ?? null;
       },
       loginQr({ onQr, onScanned, password, onPasswordInvalid, signal }) {
@@ -199,7 +213,7 @@ describe('Telegram 扫码登录', () => {
 
   before(async () => {
     fake = fakeTgUser();
-    t = await startApp({ options: { tgUserClientFactory: fake.factory } });
+    t = await startApp({ options: { tgUserClientFactory: fake.factory, tgUserRetryMs: 100 } });
     await t.login();
     await t.req('POST', '/api/kb/entries', { body: KB });
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });
@@ -449,6 +463,18 @@ describe('Telegram 扫码登录', () => {
     await waitState('working');
     assert.equal(fake.named(client, 'checkPassword').length, 1);
     fake.state.twoFa = '';
+  });
+
+  it('用登录态重连时连不上 Telegram：failed，说明会自动重试，登录态留着；过一会儿自己连上', async () => {
+    fake.state.restoreFails = 2;
+    await t.ctx.wa.tgUserProxyChanged();
+    const st = await waitState('failed');
+    assert.match(st.error, /连不上 Telegram.*秒后自动重试/);
+    assert.ok(fs.existsSync(sessionPath()), '登录态留着');
+    await waitState('working');
+    client = fake.of(acc);
+    assert.equal(fake.state.restoreFails, 0);
+    assert.equal(fake.named(client, 'restore').length, 1);
   });
 
   it('登录失效（比如在手机上结束了墨鸽）：logged_out、说明原因，删掉登录态；发消息失败', async () => {

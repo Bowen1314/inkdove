@@ -620,11 +620,13 @@ export const draftEntryIds = (raw, entries) => {
  *   historyImportDelayMs?: number,
  *   tgUserClientFactory?: typeof createMtcuteClient,
  *   tgUserLoginTimeoutMs?: number,
+ *   tgUserRetryMs?: number,
  * }} [opts]
  *   onDecision：每写一行处理记录调一次（测试用）；onDeclined：会话被判 declined 时调（测试用；外联对象记 declinedAt 走 ctx.outreach）；
  *   lineReplyWindowMs：LINE 的 reply token 多久以内拿来回复；lineContentRetryMs：下载 LINE 客户文件返回 202 后隔多久再取（测试里调小）；
  *   tgPollTimeoutSec：Telegram 长轮询每次等多久；tgRetryMs：Telegram 收消息出错后第一次等多久再试（测试里调小）；
- *   tgUserClientFactory：Telegram 扫码登录的客户端（测试里换成假的）；tgUserLoginTimeoutMs：扫码登录多久没完成就放弃
+ *   tgUserClientFactory：Telegram 扫码登录的客户端（测试里换成假的）；tgUserLoginTimeoutMs：扫码登录多久没完成就放弃；
+ *   tgUserRetryMs：用登录态重连失败后第一次等多久再试（测试里调小）
  */
 export function createWaService(ctx, opts = {}) {
   const { db, config, log, accounts, relays } = ctx;
@@ -3957,6 +3959,7 @@ export function createWaService(ctx, opts = {}) {
 
   const tgUserFactory = opts.tgUserClientFactory ?? createMtcuteClient;
   const tgUserLoginTimeoutMs = opts.tgUserLoginTimeoutMs ?? TGU_LOGIN_TIMEOUT_MS;
+  const tgUserRetryMs = opts.tgUserRetryMs ?? 30_000;
   const tgUserDir = path.join(config.dataDir, 'telegram');
   const tgUserSessionPath = (accountId) => path.join(tgUserDir, `${accountId}.session`);
   const tgUserHasSession = (accountId) => fs.existsSync(tgUserSessionPath(accountId));
@@ -3996,11 +3999,12 @@ export function createWaService(ctx, opts = {}) {
   }
 
   /**
-   * 给号起一个客户端。login=false：用存着的登录态；login=true：扫码登录（之前的登录态先删掉）
+   * 给号起一个客户端。login=false：用存着的登录态；login=true：扫码登录（之前的登录态先删掉）。
+   * retry：用登录态重连失败后第几次自动重试
    * @param {any} acc
-   * @param {{login: boolean}} o
+   * @param {{login: boolean, retry?: number}} o
    */
-  function tgUserStart(acc, { login }) {
+  function tgUserStart(acc, { login, retry = 0 }) {
     const entry = {
       key: tgUserKey(acc),
       client: null,
@@ -4124,14 +4128,30 @@ export function createWaService(ctx, opts = {}) {
         // 被 tgUserStop 停掉的不动状态（那边会收尾）；超时的、出错的：半截的登录态删掉
         if (signal.aborted && !timedOut) return;
         if (tgUsers.get(acc.id) !== entry || closed) return;
+        // 用登录态重连失败（比如刚启动时代理还没好、连不上 Telegram）：过一会儿自己再试，间隔逐次加倍，最长 10 分钟
+        const again = !login && !err?.authLost ? Math.min(tgUserRetryMs * 2 ** retry, 10 * 60_000) : 0;
         const msg = timedOut
           ? `扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，已经停下：要登录时再点「扫码登录」`
           : err instanceof TgUserError
             ? err.message
             : `连接 Telegram 出错：${err?.message || err}`;
         if (!timedOut) log.warn(`[tguser] 号 ${acc.id} ${login ? '扫码登录' : '连接'}失败：${msg}`);
-        set({ state: login || err?.authLost ? 'logged_out' : 'failed', error: msg, qr: null, password: null, me: null });
+        set({
+          state: login || err?.authLost ? 'logged_out' : 'failed',
+          error: again ? `${msg}（${Math.max(1, Math.round(again / 1000))} 秒后自动重试）` : msg,
+          qr: null,
+          password: null,
+          me: null,
+        });
         await tgUserRelease(acc.id, entry, { wipe: login || !!err?.authLost });
+        if (again) {
+          entry.timer = setTimeout(() => {
+            if (closed || tgUsers.get(acc.id) !== entry) return;
+            const cur = accounts.get(acc.id);
+            if (cur && tgUserConfigured(cur) && tgUserHasSession(acc.id)) tgUserStart(cur, { login: false, retry: retry + 1 });
+          }, again);
+          entry.timer.unref?.();
+        }
       }
     })();
     return entry;

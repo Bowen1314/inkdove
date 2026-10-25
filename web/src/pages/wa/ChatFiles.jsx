@@ -9,6 +9,7 @@ import { EmptyState, ErrorState, SkeletonRows, Spinner } from '../../ui/common.j
 import { useAuth } from '../../lib/auth.jsx';
 import { fmtSize } from '../../lib/format.js';
 import { fileErrorText, fileIcon, fileTypeLabel } from '../../lib/files.js';
+import { isTelegram } from '../../lib/labels.js';
 
 // 会话页里和产品资料库（F15）有关的部分：消息里的文件卡片、"发送文件"按钮和选择弹窗。草稿附带的文件在 DraftBasis.jsx。
 
@@ -214,7 +215,7 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
           </div>
         )}
         {/* Telegram：10MB 以内的 jpg、png 按图片发（会压缩），其他按文件原样发 */}
-        {(conv.channel === 'tgbot' || conv.channel === 'tgbiz') && (
+        {isTelegram(conv.channel) && (
           <div className="field__hint">Telegram：10MB 以内的 jpg、png 按图片发（Telegram 会压缩），其他文件原样发；说明文字最多 1024 字。</div>
         )}
         {/* 人工回复的号没有机器人可暂停 */}

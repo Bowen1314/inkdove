@@ -14,6 +14,7 @@ import { usePolling } from '../../../hooks/usePolling.js';
 import { isTelegram, waState } from '../../../lib/labels.js';
 import { fmtTime } from '../../../lib/format.js';
 import { mapServerError } from '../../settings/shared.jsx';
+import { tgApiHashError, tgApiIdError, TGUSER_WARNING } from '../../../lib/tguser.js';
 
 /**
  * waha/start、waha/logout "语义同 SPEC.md 3.6"，返回的可能是 status 对象，也可能是整个 Account。
@@ -1334,10 +1335,391 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
   );
 }
 
+/* ---------- Telegram 扫码登录 ---------- */
+
+/** 登录的帐号：名字和用户名 */
+function TgUserMe({ me, children }) {
+  return (
+    <div className="numbers-me">
+      <Avatar name={me?.name || me?.username} />
+      <div className="numbers-me__text">
+        <span className="text-strong ellipsis">{me?.name || '已登录的帐号'}</span>
+        {me?.username && <span className="muted text-sm mono ellipsis">@{me.username}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const TGUSER_LIMITS =
+  '和 WhatsApp 不一样的地方：客户没有手机号，白名单和黑名单用不上；只收私聊，群、频道、机器人发来的不收；第一次登录不导入以前的聊天，登录以后的新消息才进墨鸽；' +
+  '你在手机上发的消息也会同步进墨鸽，记为手机回复；发出的消息随时可以撤回；不能外联群发；客户发来的文件超过存储上限时不下载。服务器访问不了 Telegram 时，请在「设置 → 代理」里开启全局代理。';
+
+/**
+ * Telegram 扫码登录的「连接」：api_id、api_hash；扫码登录（二维码约 30 秒换一次，按 qrVersion 换图），开了两步验证的接着输密码；
+ * 登录的帐号和退出登录。等扫码、等密码时每 2 秒刷新一次状态，其余每 15 秒（看登录有没有失效）。业务员只看状态和登录的帐号
+ */
+function TgUserPanel({ account, setAccount, isAdmin }) {
+  const confirm = useConfirm();
+  const cfg = account.telegram || {};
+  const configured = !!cfg.apiId && !!cfg.apiHashSet;
+  const status = account.status || {};
+  const state = status.state || 'not_configured';
+  const tg = status.telegram || {};
+  const [apiId, setApiId] = useState(cfg.apiId || '');
+  const [apiHash, setApiHash] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [busy, setBusy] = useState(null); // 'login' | 'logout' | 'cancel' | 'password'
+  const [password, setPassword] = useState('');
+  const [pwError, setPwError] = useState(null);
+  const [qrState, setQrState] = useState('loading'); // loading | ok | error
+  const [pollFailed, setPollFailed] = useState(false);
+  // 点「扫码登录」后 10 秒内也按等扫码的频率刷新（服务端先回 starting，二维码随后才有）
+  const [kickUntil, setKickUntil] = useState(0);
+
+  const pending = state === 'starting' || state === 'scan_qr' || state === 'password';
+  usePolling(
+    async () => {
+      try {
+        const a = await api.getAccount(account.id, { silent: true });
+        setPollFailed(false);
+        if (a) setAccount((prev) => ({ ...prev, ...a }));
+      } catch {
+        setPollFailed(true);
+      }
+    },
+    pending || Date.now() < kickUntil ? 2000 : 15000,
+    configured,
+  );
+
+  useEffect(() => {
+    if (state === 'scan_qr') setQrState('loading');
+    if (state !== 'password') {
+      setPassword('');
+      setPwError(null);
+    }
+  }, [state]);
+
+  const apiIdErr = tgApiIdError(apiId);
+  const apiHashErr = tgApiHashError(apiHash);
+  const dirty = apiId.trim() !== (cfg.apiId || '') || apiHash.trim() !== '';
+  const discard = () => {
+    setApiId(cfg.apiId || '');
+    setApiHash('');
+  };
+
+  const save = async (e) => {
+    e?.preventDefault();
+    if (saving || apiIdErr || apiHashErr || !dirty) return;
+    const patch = { apiId: apiId.trim() };
+    // api_hash 只在输入了新值时提交，留空不改
+    if (apiHash.trim()) patch.apiHash = apiHash.trim();
+    setSaving(true);
+    try {
+      const res = await api.putAccount(account.id, { telegram: patch });
+      if (res && res.id) setAccount(res);
+      setApiId(res?.telegram?.apiId ?? patch.apiId);
+      setApiHash('');
+      toast.success('已保存');
+    } catch {
+      // 已提示
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const clearHash = async () => {
+    const ok = await confirm({
+      title: '清除 api_hash？',
+      message: `清除后「${account.name}」断开 Telegram，不再收发消息；登录态还留着，填回 api_hash 后自动连上。`,
+      confirmText: '清除',
+      danger: true,
+    });
+    if (!ok) return;
+    setClearing(true);
+    try {
+      const res = await api.putAccount(account.id, { telegram: { apiHash: '' } });
+      if (res && res.id) setAccount(res);
+      toast.success('已清除');
+    } catch {
+      // 已提示
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const login = async () => {
+    setBusy('login');
+    try {
+      const res = await api.tgUserLogin(account.id);
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+      setKickUntil(Date.now() + 10000);
+    } catch {
+      // 已提示
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // 正在扫码、等密码时停下：服务端按退出登录处理（还没登录上，不用通知 Telegram）
+  const cancel = async () => {
+    setBusy('cancel');
+    try {
+      const res = await api.tgUserLogout(account.id);
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+    } catch {
+      // 已提示
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const logout = async () => {
+    const ok = await confirm({
+      title: '退出 Telegram 登录？',
+      message: `退出后「${account.name}」不再收发 Telegram 消息，帐号的设备列表里也不再有墨鸽，要重新扫码才能恢复。手机上的聊天记录不受影响。`,
+      confirmText: '退出登录',
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy('logout');
+    try {
+      const res = await api.tgUserLogout(account.id);
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+      toast.success('已退出登录');
+    } catch {
+      // 已提示；服务端这时也已经删掉了本地的登录态，刷新一下状态
+      api
+        .getAccount(account.id, { silent: true })
+        .then((a) => a && setAccount((prev) => ({ ...prev, ...a })))
+        .catch(() => {});
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const submitPassword = async (e) => {
+    e?.preventDefault();
+    if (busy === 'password') return;
+    if (!password) {
+      setPwError('请输入两步验证密码');
+      return;
+    }
+    setBusy('password');
+    setPwError(null);
+    try {
+      const res = await api.tgUserPassword(account.id, password, { silent: true });
+      setPassword('');
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+      toast.success('已登录 Telegram');
+    } catch (err) {
+      if (err?.status === 401) return;
+      if (err?.code === 'wrong_password') setPwError(err.message);
+      else toast.error(err?.message || '登录失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const errorBlock = status.error && (
+    <div className="numbers-block">
+      <Callout tone={state === 'failed' ? 'danger' : 'warning'}>{status.error}</Callout>
+    </div>
+  );
+  const limits = <div className="numbers-block muted text-sm">{TGUSER_LIMITS}</div>;
+
+  // api_id、api_hash、扫码、密码、退出登录只有 admin 能做（业务员调会 403），二维码图片也不请求
+  if (!isAdmin) {
+    return (
+      <SettingsSection title="连接">
+        <StatusRow label="连接状态" account={account} pollFailed={pollFailed} />
+        {errorBlock}
+        {state === 'working' ? (
+          <SettingsRow label="登录的帐号">
+            <TgUserMe me={tg.me} />
+          </SettingsRow>
+        ) : (
+          <div className="numbers-block muted">这个号还没登录 Telegram。扫码登录由管理员操作，有问题请联系管理员。</div>
+        )}
+        {limits}
+      </SettingsSection>
+    );
+  }
+
+  let loginBlock = null;
+  if (state === 'working') {
+    loginBlock = (
+      <SettingsRow label="登录的帐号" hint="在手机 Telegram 的「设置 → 设备」里能看到墨鸽（Inkdove），在那里结束它和在这里退出登录一样。">
+        <TgUserMe me={tg.me}>
+          <span className="spacer" />
+          <button type="button" className="btn btn--danger" onClick={logout} disabled={busy === 'logout'}>
+            {busy === 'logout' ? <Spinner /> : <LogOut />}
+            退出登录
+          </button>
+        </TgUserMe>
+      </SettingsRow>
+    );
+  } else if (state === 'scan_qr' || state === 'starting') {
+    loginBlock = (
+      <div className="numbers-block">
+        <div className="numbers-qr">
+          <div className="card numbers-qr__card">
+            {state === 'scan_qr' && tg.qrVersion != null ? (
+              <img
+                src={api.tgUserQrUrl(account.id, tg.qrVersion)}
+                alt="Telegram 登录二维码"
+                className={`numbers-qr__img${qrState === 'ok' ? '' : ' is-loading'}`}
+                onLoad={() => setQrState('ok')}
+                onError={() => setQrState('error')}
+              />
+            ) : (
+              <div className="numbers-qr__img is-loading" aria-hidden="true" />
+            )}
+            {(state === 'starting' || qrState !== 'ok') && (
+              <div className="numbers-qr__placeholder" role="status">
+                <Spinner size={20} />
+                <span>{state === 'starting' ? '正在连接 Telegram…' : qrState === 'error' ? '二维码生成中…' : '加载中…'}</span>
+              </div>
+            )}
+          </div>
+          <div className="numbers-qr__steps">
+            <h3>用手机 Telegram 扫码登录</h3>
+            <ol className="numbers-qr__list">
+              <li>打开手机上的 Telegram，用要接入的这个帐号</li>
+              <li>
+                进入 <strong>设置 → 设备</strong>
+              </li>
+              <li>
+                点 <strong>连接桌面设备</strong>（英文界面是 Link Desktop Device），扫描二维码
+              </li>
+            </ol>
+            <div className="field__hint">二维码约 30 秒换一次，这里会自动刷新；扫码后开了两步验证的帐号要在这里输密码。5 分钟内没有完成会自动停下。</div>
+            <div>
+              <button type="button" className="btn btn--sm" onClick={cancel} disabled={busy === 'cancel'}>
+                {busy === 'cancel' ? <Spinner /> : null}
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  } else if (state === 'password') {
+    loginBlock = (
+      <SettingsRow
+        label="两步验证密码"
+        htmlFor={`tgu-pw-${account.id}`}
+        hint="这个帐号开了两步验证（Telegram 的「设置 → 隐私与安全 → 两步验证」）。密码只用来这一次登录，墨鸽不保存。"
+      >
+        <div className="numbers-phone">
+          <input
+            id={`tgu-pw-${account.id}`}
+            className="input"
+            type="password"
+            autoComplete="off"
+            value={password}
+            onChange={(e) => {
+              setPwError(null);
+              setPassword(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitPassword(e);
+            }}
+            aria-invalid={pwError ? true : undefined}
+            aria-describedby={pwError ? `tgu-pw-${account.id}-err` : undefined}
+          />
+          <button type="button" className="btn btn--primary" onClick={submitPassword} disabled={busy === 'password'}>
+            {busy === 'password' ? <Spinner /> : <KeyRound />}
+            登录
+          </button>
+          <button type="button" className="btn" onClick={cancel} disabled={busy === 'cancel'}>
+            取消
+          </button>
+        </div>
+        {pwError && (
+          <div className="field__error" id={`tgu-pw-${account.id}-err`}>
+            {pwError}
+          </div>
+        )}
+      </SettingsRow>
+    );
+  } else if (configured) {
+    loginBlock = (
+      <SettingsRow
+        inline
+        label="扫码登录"
+        hint={state === 'failed' ? '连接出了问题，墨鸽会自动重试；也可以重新扫码登录。' : '点按钮生成二维码，用手机 Telegram 扫码登录这个帐号。'}
+      >
+        <button type="button" className="btn btn--primary" onClick={login} disabled={busy === 'login'}>
+          {busy === 'login' ? <Spinner /> : <PlayCircle />}
+          {state === 'failed' ? '重新扫码登录' : '扫码登录'}
+        </button>
+      </SettingsRow>
+    );
+  }
+
+  return (
+    <SettingsSection title="连接" as="form" onSubmit={save}>
+      <StatusRow label="连接状态" account={account} pollFailed={pollFailed} />
+      {errorBlock}
+      {state !== 'working' && (
+        <div className="numbers-block">
+          <Callout tone="warning">{TGUSER_WARNING}</Callout>
+        </div>
+      )}
+      {!configured && (
+        <div className="numbers-block">
+          <Callout tone="info">
+            第 1 步：用这个 Telegram 帐号登录 my.telegram.org，进入 API development tools，随便填一个应用名称创建，把 App api_id 和 App api_hash
+            填到下面并保存。第 2 步：点「扫码登录」，用手机 Telegram 扫码。
+          </Callout>
+        </div>
+      )}
+      {loginBlock}
+
+      <SettingsRow label="api_id" htmlFor={`tgu-api-id-${account.id}`} hint="my.telegram.org → API development tools 里的 App api_id。">
+        <input
+          id={`tgu-api-id-${account.id}`}
+          className="input input--mono"
+          value={apiId}
+          inputMode="numeric"
+          placeholder="一串数字"
+          onChange={(e) => setApiId(e.target.value)}
+          autoComplete="off"
+          aria-invalid={apiIdErr ? true : undefined}
+          aria-describedby={apiIdErr ? `tgu-api-id-${account.id}-err` : undefined}
+        />
+        {apiIdErr && (
+          <div className="field__error" id={`tgu-api-id-${account.id}-err`}>
+            {apiIdErr}
+          </div>
+        )}
+      </SettingsRow>
+      <SettingsRow label="api_hash" htmlFor={`tgu-api-hash-${account.id}`}>
+        <SecretField
+          id={`tgu-api-hash-${account.id}`}
+          hint="同一页的 App api_hash。"
+          error={apiHashErr}
+          isSet={!!cfg.apiHashSet}
+          value={apiHash}
+          onChange={setApiHash}
+          onClear={clearHash}
+          clearing={clearing}
+        />
+      </SettingsRow>
+
+      {limits}
+      <SaveBar dirty={dirty} saving={saving} onDiscard={discard} />
+    </SettingsSection>
+  );
+}
+
 /** 号详情的「连接」分组：扫码号显示扫码流程和 IP 代理，Meta 号、LINE 官方帐号、Telegram 号显示凭证；业务员只看状态 */
 export default function ConnectSection({ account, setAccount, isAdmin }) {
   if (account.channel === 'meta') return <MetaPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
   if (account.channel === 'line') return <LinePanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
+  if (account.channel === 'tguser') return <TgUserPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
   if (isTelegram(account.channel)) return <TelegramPanel account={account} setAccount={setAccount} isAdmin={isAdmin} />;
   if (account.channel !== 'waha') {
     return (

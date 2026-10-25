@@ -230,7 +230,8 @@ export async function createMtcuteClient(o) {
     logger,
     transport,
     updates: { catchUp: o.catchUp },
-    initConnectionOptions: { appVersion: 'Inkdove' },
+    // 帐号的「设置 → 设备」里显示成 Inkdove，好认、好结束
+    initConnectionOptions: { deviceModel: 'Inkdove', systemVersion: process.platform, appVersion: 'Inkdove' },
   });
 
   let lost = false;

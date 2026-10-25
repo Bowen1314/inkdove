@@ -12,7 +12,8 @@ import { StatusDot } from '../../ui/StatusDot.jsx';
 import { usePolling } from '../../hooks/usePolling.js';
 import { useAuth } from '../../lib/auth.jsx';
 import { invalidateAccounts, isConnected, patchAccountCache, useAccounts } from '../../lib/accounts.js';
-import { CHANNEL_LABEL, isTelegram, REPLY_MODES, replyModeLabel, replyModeOf, waState } from '../../lib/labels.js';
+import { CHANNEL_LABEL, isTgBotApi, REPLY_MODES, replyModeLabel, replyModeOf, waState } from '../../lib/labels.js';
+import { tgApiHashError, tgApiIdError, TGUSER_WARNING } from '../../lib/tguser.js';
 import { fmtDay, fmtHm } from '../../lib/format.js';
 
 export const CHANNEL_OPTIONS = [
@@ -41,6 +42,11 @@ export const CHANNEL_OPTIONS = [
     title: 'Telegram 私人号',
     desc: '用你本人的 Telegram 号回复私聊：通过 Telegram 官方的「聊天自动化」把一个机器人连到你的号上。',
   },
+  {
+    value: 'tguser',
+    title: 'Telegram 扫码登录',
+    desc: '墨鸽像电脑版 Telegram 一样扫码登录你本人的帐号，收发所有私聊。需要先在 my.telegram.org 申请 api_id 和 api_hash。',
+  },
 ];
 
 const TG_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,}$/;
@@ -54,10 +60,11 @@ export function phoneOf(account) {
   return /^\d+$/.test(raw) ? `+${raw}` : raw;
 }
 
-/** 列表里名字下面那一行：手机号；Telegram 号没有手机号，显示机器人的用户名 */
+/** 列表里名字下面那一行：手机号；Telegram 号没有手机号，显示机器人的用户名，扫码登录的号显示登录的帐号的用户名 */
 function handleOf(account) {
-  const bot = account?.status?.telegram?.botUsername;
-  return phoneOf(account) || (bot ? `@${bot}` : '');
+  const tg = account?.status?.telegram;
+  const user = tg?.botUsername || tg?.me?.username;
+  return phoneOf(account) || (user ? `@${user}` : '');
 }
 
 /** DESIGN.md 第 8 节：今天 10:42，其余按日期；悬停显示完整时间 */
@@ -83,7 +90,7 @@ const STATE_FILTERS = [
 function stateGroup(account) {
   const s = account?.status?.state;
   if (isConnected(account)) return 'connected';
-  if (s === 'starting' || s === 'scan_qr' || s === 'waiting') return 'pending';
+  if (s === 'starting' || s === 'scan_qr' || s === 'waiting' || s === 'password') return 'pending';
   if (s === 'failed') return 'failed';
   return 'off';
 }
@@ -95,6 +102,7 @@ const CHANNEL_FILTERS = [
   { value: 'line', label: CHANNEL_LABEL.line },
   { value: 'tgbot', label: CHANNEL_LABEL.tgbot },
   { value: 'tgbiz', label: CHANNEL_LABEL.tgbiz },
+  { value: 'tguser', label: CHANNEL_LABEL.tguser },
 ];
 
 const EMPTY_LINE = { channelId: '', channelSecret: '', accessToken: '' };
@@ -106,6 +114,8 @@ function AddAccountModal({ open, onClose, onCreated }) {
   const [line, setLine] = useState(EMPTY_LINE);
   // Telegram 机器人的 token：也可以先空着，之后在「连接」里填
   const [tgToken, setTgToken] = useState('');
+  // Telegram 扫码登录的 api_id、api_hash：同上
+  const [tgApi, setTgApi] = useState({ apiId: '', apiHash: '' });
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
 
@@ -114,12 +124,16 @@ function AddAccountModal({ open, onClose, onCreated }) {
     setChannel('waha');
     setLine(EMPTY_LINE);
     setTgToken('');
+    setTgApi({ apiId: '', apiHash: '' });
     setTouched(false);
   };
   const setLineField = (k, v) => setLine((l) => ({ ...l, [k]: v }));
   const lineIdError = channel === 'line' && line.channelId.trim() && !/^\d+$/.test(line.channelId.trim()) ? 'Channel ID 只能是数字' : null;
-  const isTg = isTelegram(channel);
+  const isTg = isTgBotApi(channel);
   const tgTokenError = isTg && tgToken.trim() && !TG_TOKEN_RE.test(tgToken.trim()) ? TG_TOKEN_ERROR : null;
+  const isTgUser = channel === 'tguser';
+  const apiIdError = isTgUser ? tgApiIdError(tgApi.apiId) : null;
+  const apiHashError = isTgUser ? tgApiHashError(tgApi.apiHash) : null;
 
   const close = () => {
     if (busy) return;
@@ -130,7 +144,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
   const submit = async (e) => {
     e?.preventDefault();
     setTouched(true);
-    if (!name.trim() || lineIdError || tgTokenError || busy) return;
+    if (!name.trim() || lineIdError || tgTokenError || apiIdError || apiHashError || busy) return;
     setBusy(true);
     try {
       let acc = await api.createAccount({ name: name.trim(), channel });
@@ -148,6 +162,15 @@ function AddAccountModal({ open, onClose, onCreated }) {
       if (isTg && tgToken.trim()) {
         try {
           const res = await api.putAccount(acc.id, { telegram: { botToken: tgToken.trim() } });
+          if (res && res.id) acc = res;
+        } catch {
+          // 已提示
+        }
+      }
+      const apiPatch = Object.fromEntries(Object.entries(tgApi).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
+      if (isTgUser && Object.keys(apiPatch).length) {
+        try {
+          const res = await api.putAccount(acc.id, { telegram: apiPatch });
           if (res && res.id) acc = res;
         } catch {
           // 已提示
@@ -303,6 +326,40 @@ function AddAccountModal({ open, onClose, onCreated }) {
             </Field>
           </>
         )}
+        {isTgUser && (
+          <>
+            <Callout tone="warning">
+              <strong>用扫码登录接入前请注意：</strong>
+              {TGUSER_WARNING}
+            </Callout>
+            <Callout tone="info">
+              用这个 Telegram 帐号登录 my.telegram.org，进入 API development tools，随便填一个应用名称创建，把 App api_id 和 App api_hash
+              填到下面。添加后到「连接」里点「扫码登录」，用手机 Telegram 扫码。两项可以先空着，之后在「连接」里填。
+            </Callout>
+            <Field label="api_id" htmlFor="acc-tg-api-id" error={apiIdError} optional>
+              <input
+                {...fieldProps('acc-tg-api-id', apiIdError)}
+                className="input input--mono"
+                value={tgApi.apiId}
+                inputMode="numeric"
+                placeholder="一串数字"
+                autoComplete="off"
+                onChange={(e) => setTgApi((v) => ({ ...v, apiId: e.target.value }))}
+              />
+            </Field>
+            <Field label="api_hash" htmlFor="acc-tg-api-hash" error={apiHashError} optional>
+              <input
+                {...fieldProps('acc-tg-api-hash', apiHashError)}
+                type="password"
+                className="input input--mono"
+                value={tgApi.apiHash}
+                autoComplete="new-password"
+                spellCheck={false}
+                onChange={(e) => setTgApi((v) => ({ ...v, apiHash: e.target.value }))}
+              />
+            </Field>
+          </>
+        )}
       </form>
     </Modal>
   );
@@ -347,6 +404,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
   const hasLine = items.some((a) => a.channel === 'line');
   const hasTgBiz = items.some((a) => a.channel === 'tgbiz');
   const hasTgBot = items.some((a) => a.channel === 'tgbot');
+  const hasTgUser = items.some((a) => a.channel === 'tguser');
 
   const close = () => {
     if (!busy) onClose();
@@ -401,6 +459,9 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
         )}
         {result.created.length > 0 && hasWaha && (
           <div className="field__hint">扫码接入的号还没有连接，请到各号的「连接」里重新扫码或用配对码连接。</div>
+        )}
+        {result.created.length > 0 && hasTgUser && (
+          <div className="field__hint">Telegram 扫码登录的号还没有登录，请到各号的「连接」里扫码登录。</div>
         )}
       </div>
     );
@@ -463,6 +524,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
             {hasTgBiz && '私人号导入后要重新绑定号主，并在「聊天自动化」里重新添加一次机器人。'}
           </div>
         )}
+        {hasTgUser && <div className="field__hint">Telegram 扫码登录的号导入后要重新扫码登录：文件里只有 api_id 和 api_hash，没有登录态。</div>}
       </div>
     );
     footer = (
