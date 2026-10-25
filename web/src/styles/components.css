@@ -2200,3 +2200,45 @@
 .blockword-alert-modal .modal__foot {
   flex-wrap: wrap;
 }
+
+/* 国际手机号（ui/PhoneInput.jsx）：区号按钮 + 号码框并排；下拉上面是搜索框，下面是国家列表 */
+.phone-input {
+  display: flex;
+  gap: var(--sp-2);
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.phone-input > .input {
+  flex: 1;
+  min-width: 0;
+}
+.select.phone-input__cc {
+  flex: none;
+  width: auto;
+  font-family: var(--font-mono);
+}
+.popover.phone-input__pop {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  padding: 0;
+}
+.phone-input__search {
+  padding: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+.phone-input__list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--sp-1);
+}
+.phone-input__dial {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.phone-input__empty {
+  padding: var(--sp-3);
+  color: var(--text-muted);
+  text-align: center;
+}

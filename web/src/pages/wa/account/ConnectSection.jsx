@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { KeyRound, LogOut, PlayCircle, PlugZap, RefreshCw, Shuffle } from 'lucide-react';
+import { KeyRound, LogOut, PlayCircle, PlugZap, RefreshCw, Send, Shuffle } from 'lucide-react';
 import { api } from '../../../api/client.js';
 import { toast } from '../../../ui/toastBus.js';
 import { useConfirm } from '../../../ui/Modal.jsx';
@@ -15,6 +15,8 @@ import { isTelegram, waState } from '../../../lib/labels.js';
 import { fmtTime } from '../../../lib/format.js';
 import { mapServerError } from '../../settings/shared.jsx';
 import { tgApiHashError, tgApiIdError, TGUSER_WARNING } from '../../../lib/tguser.js';
+import { defaultCountry, formatPhone, toE164 } from '../../../lib/phone.js';
+import { PhoneInput } from '../../../ui/PhoneInput.jsx';
 
 /**
  * waha/start、waha/logout "语义同 SPEC.md 3.6"，返回的可能是 status 对象，也可能是整个 Account。
@@ -1356,7 +1358,149 @@ const TGUSER_LIMITS =
   '你在手机上发的消息也会同步进墨鸽，记为手机回复；发出的消息随时可以撤回；不能外联群发；客户发来的文件超过存储上限时不下载。服务器访问不了 Telegram 时，请在「设置 → 代理」里开启全局代理。';
 
 /**
- * Telegram 扫码登录的「连接」：api_id、api_hash；扫码登录（二维码约 30 秒换一次，按 qrVersion 换图），开了两步验证的接着输密码；
+ * 从 my.telegram.org 自动取 api_id、api_hash：填手机号 → my.telegram.org 往这个帐号的 Telegram 里发验证码 → 填验证码 → 服务端登录、
+ * 读出（没有就新建）应用并存进号。验证码填错可以再填，别的错回到填手机号这一步。这块在外层表单里，回车只做这一步，不提交外层
+ */
+function TgApiFetch({ account, onGot }) {
+  const [stage, setStage] = useState('phone'); // phone | code
+  const [phone, setPhone] = useState(() => ({ iso: defaultCountry(), digits: '' }));
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(null); // 'send' | 'apply'
+  const [error, setError] = useState(null);
+  const id = `tgu-fetch-${account.id}`;
+
+  const send = async (e) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!phone.digits) {
+      setError('请输入手机号');
+      return;
+    }
+    setBusy('send');
+    setError(null);
+    try {
+      await api.tgUserApiCode(account.id, toE164(phone), { silent: true });
+      setCode('');
+      setStage('code');
+    } catch (err) {
+      if (err?.status === 401) return;
+      setError(err?.message || '发送失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const apply = async (e) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!code.trim()) {
+      setError('请输入验证码');
+      return;
+    }
+    setBusy('apply');
+    setError(null);
+    try {
+      const res = await api.tgUserApiApply(account.id, code, { silent: true });
+      onGot(res.account);
+      toast.success(res.created ? '已创建应用 Inkdove，凭证已填入' : '凭证已填入');
+    } catch (err) {
+      if (err?.status === 401) return;
+      // 验证码填错可以再填；别的错这个验证码已经作废，回到填手机号
+      if (err?.code !== 'bad_code' && err?.code !== 'busy') setStage('phone');
+      setError(err?.message || '获取失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const enter = (fn) => (e) => {
+    if (e.key === 'Enter') fn(e);
+  };
+  const errorLine = error && (
+    <div className="field__error" id={`${id}-err`}>
+      {error}
+    </div>
+  );
+
+  if (stage === 'code') {
+    return (
+      <SettingsRow
+        key="code"
+        label="验证码"
+        htmlFor={`${id}-code`}
+        hint={`已发送至 ${formatPhone(phone)} 的 Telegram（发件人：Telegram 官方），非短信。该验证码也可用于删除帐号，仅用于本次获取，不保存、不记录。`}
+      >
+        <div className="numbers-phone">
+          <input
+            id={`${id}-code`}
+            className="input input--mono"
+            autoComplete="one-time-code"
+            spellCheck={false}
+            value={code}
+            onChange={(e) => {
+              setError(null);
+              setCode(e.target.value);
+            }}
+            onKeyDown={enter(apply)}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? `${id}-err` : undefined}
+          />
+          <button type="button" className="btn btn--primary" onClick={apply} disabled={!!busy}>
+            {busy === 'apply' ? <Spinner /> : <KeyRound />}
+            {busy === 'apply' ? '获取中…' : '获取凭证'}
+          </button>
+          <button type="button" className="btn" onClick={send} disabled={!!busy}>
+            {busy === 'send' ? <Spinner /> : null}
+            重新发送
+          </button>
+          <button
+            type="button"
+            className="btn btn--link"
+            onClick={() => {
+              setError(null);
+              setStage('phone');
+            }}
+            disabled={!!busy}
+          >
+            更换号码
+          </button>
+        </div>
+        {errorLine}
+      </SettingsRow>
+    );
+  }
+
+  return (
+    <SettingsRow
+      key="phone"
+      label="自动获取"
+      htmlFor={`${id}-phone`}
+      hint="通过 my.telegram.org 获取 api_id 和 api_hash；帐号下无应用时自动创建（名称 Inkdove）。"
+    >
+      <div className="numbers-phone">
+        <PhoneInput
+          id={`${id}-phone`}
+          value={phone}
+          onChange={(v) => {
+            setError(null);
+            setPhone(v);
+          }}
+          onEnter={send}
+          invalid={!!error}
+          describedBy={error ? `${id}-err` : undefined}
+        />
+        <button type="button" className="btn btn--primary" onClick={send} disabled={!!busy}>
+          {busy === 'send' ? <Spinner /> : <Send />}
+          {busy === 'send' ? '发送中…' : '发送验证码'}
+        </button>
+      </div>
+      {errorLine}
+    </SettingsRow>
+  );
+}
+
+/**
+ * Telegram 扫码登录的「连接」：api_id、api_hash（可以从 my.telegram.org 自动获取）；扫码登录（二维码约 30 秒换一次，按 qrVersion 换图），开了两步验证的接着输密码；
  * 登录的帐号和退出登录。等扫码、等密码时每 2 秒刷新一次状态，其余每 15 秒（看登录有没有失效）。业务员只看状态和登录的帐号
  */
 function TgUserPanel({ account, setAccount, isAdmin }) {
@@ -1427,6 +1571,13 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
     } finally {
       setSaving(false);
     }
+  };
+
+  // 自动获取到了：号已经存好，输入框跟着换成新的 api_id
+  const onGot = (acc) => {
+    if (acc && acc.id) setAccount((prev) => ({ ...prev, ...acc }));
+    setApiId(acc?.telegram?.apiId ?? '');
+    setApiHash('');
   };
 
   const clearHash = async () => {
@@ -1669,12 +1820,18 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
         </div>
       )}
       {!configured && (
-        <div className="numbers-block">
-          <Callout tone="info">
-            第 1 步：用这个 Telegram 帐号登录 my.telegram.org，进入 API development tools，随便填一个应用名称创建，把 App api_id 和 App api_hash
-            填到下面并保存。第 2 步：点「扫码登录」，用手机 Telegram 扫码。
-          </Callout>
-        </div>
+        <>
+          <div className="numbers-block">
+            <Callout tone="info">
+              1. 获取 api_id 和 api_hash：在下方自动获取，或在{' '}
+              <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">
+                my.telegram.org
+              </a>{' '}
+              → API development tools 创建应用后手动填入。2. 点击「扫码登录」，用手机 Telegram 扫码。
+            </Callout>
+          </div>
+          <TgApiFetch account={account} onGot={onGot} />
+        </>
       )}
       {loginBlock}
 

@@ -325,6 +325,9 @@ export const api = {
   tgUserQrUrl: (id, v) => `/api/accounts/${enc(id)}/telegram/qr?v=${encodeURIComponent(v ?? '')}`,
   tgUserPassword: (id, password, o) => post(`/api/accounts/${enc(id)}/telegram/password`, { password }, o),
   tgUserLogout: (id, o) => post(`/api/accounts/${enc(id)}/telegram/logout`, {}, o),
+  // 从 my.telegram.org 自动取 api_id / api_hash：先发验证码，再交验证码（返回 {created, account}）
+  tgUserApiCode: (id, phone, o) => post(`/api/accounts/${enc(id)}/telegram/api/code`, { phone }, o),
+  tgUserApiApply: (id, code, o) => post(`/api/accounts/${enc(id)}/telegram/api/apply`, { code }, o),
   testNotify: (id) => post(`/api/accounts/${enc(id)}/notify/test`, {}),
 
   // 会话（id 形如 <accountId>:<chatId>，一律 encodeURIComponent）

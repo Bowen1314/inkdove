@@ -45,7 +45,7 @@ export const CHANNEL_OPTIONS = [
   {
     value: 'tguser',
     title: 'Telegram 扫码登录',
-    desc: '墨鸽像电脑版 Telegram 一样扫码登录你本人的帐号，收发所有私聊。需要先在 my.telegram.org 申请 api_id 和 api_hash。',
+    desc: '以桌面端方式扫码登录个人帐号，收发全部私聊。需 my.telegram.org 的 api_id 和 api_hash（支持自动获取）。',
   },
 ];
 
@@ -333,8 +333,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
               {TGUSER_WARNING}
             </Callout>
             <Callout tone="info">
-              用这个 Telegram 帐号登录 my.telegram.org，进入 API development tools，随便填一个应用名称创建，把 App api_id 和 App api_hash
-              填到下面。添加后到「连接」里点「扫码登录」，用手机 Telegram 扫码。两项可以先空着，之后在「连接」里填。
+              api_id 和 api_hash 可留空，添加后在「连接」中自动获取；已有凭证可直接填入（my.telegram.org → API development tools）。
             </Callout>
             <Field label="api_id" htmlFor="acc-tg-api-id" error={apiIdError} optional>
               <input

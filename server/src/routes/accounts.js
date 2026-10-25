@@ -1,7 +1,7 @@
 // F7 号码接口。agent 只能看分给自己的号（GET 列表和详情，看不到 Meta 的 verifyToken 和通知收件人）；
 // 其余一律只有 admin：新建、删除、改设置（整个 PUT，含回复方式、persona、范围、名单、通知、改名、IP 代理、Meta 凭证）、
 // 扫码连接 / 取二维码 / 配对码 / 登出、测试代理、测试通知、配置导出导入、Telegram 私人号重新绑定、Telegram 扫码登录（开始登录、
-// 二维码、两步验证密码、退出登录）。所有判断都在服务端。
+// 二维码、两步验证密码、退出登录、从 my.telegram.org 自动取 api_id）。所有判断都在服务端。
 // Telegram 号新建、改设置、导入、删除后让服务同步收消息（wa.syncTelegram）。
 import express from 'express';
 import multer from 'multer';
@@ -20,6 +20,7 @@ import {
 import { canAccessAccount, forbidden } from '../auth.js';
 import { emailConfigured, str } from '../settings.js';
 import { badRequest, HttpError, isPlainObject, notFound, nowIso } from '../util.js';
+import { createMyTelegram } from '../wa/mytelegram.js';
 import { testProxy } from '../wa/proxy-test.js';
 import { botIdOf } from '../wa/telegram.js';
 
@@ -32,6 +33,7 @@ const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
 export function accountsRouter(ctx, auth) {
   const router = express.Router();
   const { accounts, wa } = ctx;
+  const myTelegram = createMyTelegram({ baseUrl: ctx.config.myTelegramUrl });
 
   /** 先判权限再判存在：agent 探不出别人的号是否存在 */
   function load(req) {
@@ -155,6 +157,7 @@ export function accountsRouter(ctx, auth) {
   router.delete('/:id', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
     await wa.deleteAccount(acc, req.user);
+    myTelegram.cancel(acc.id);
     ctx.log.info(`[accounts] ${req.user.email} 删除了号 ${acc.id}`);
     res.json({ ok: true });
   });
@@ -216,6 +219,39 @@ export function accountsRouter(ctx, auth) {
     await wa.tgUserLogout(acc);
     ctx.log.info(`[accounts] ${req.user.email} 让号 ${acc.id} 退出了 Telegram 登录`);
     res.json(await view(accounts.get(acc.id)));
+  });
+
+  // 从 my.telegram.org 自动取 api_id / api_hash（只有 admin）：先让它往这个手机号的 Telegram 里发验证码，再交验证码，
+  // 取到就存进这个号（已有应用就用已有的，没有就新建一个）。手机号和验证码不存、不进日志
+  const loadTgUser = (req) => {
+    const acc = load(req);
+    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
+    if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
+    return acc;
+  };
+  router.post('/:id/telegram/api/code', auth.requireAdmin, async (req, res) => {
+    const acc = loadTgUser(req);
+    await myTelegram.sendCode(acc.id, req.body.phone);
+    ctx.log.info(`[accounts] ${req.user.email} 为号 ${acc.id} 向 my.telegram.org 要了验证码`);
+    res.json({ ok: true });
+  });
+  router.post('/:id/telegram/api/apply', auth.requireAdmin, async (req, res) => {
+    const acc = loadTgUser(req);
+    const got = await myTelegram.apply(acc.id, req.body.code);
+    // 取的这几秒里号可能被删了
+    const cur = accounts.get(acc.id);
+    if (!cur) throw notFound('号不存在');
+    const next = applyAccountPatch(
+      cur,
+      { telegram: { apiId: got.apiId, apiHash: got.apiHash } },
+      { isAdmin: true, emailReady: emailConfigured(ctx.getSettings()), globalProxyReady: ctx.globalProxy.enabled() },
+    );
+    const saved = accounts.save(next);
+    await wa.syncTelegram();
+    ctx.log.info(
+      `[accounts] ${req.user.email} 为号 ${acc.id} 从 my.telegram.org 取得了 api_id 和 api_hash（${got.created ? '新建了应用' : '用的已有应用'}）`,
+    );
+    res.json({ created: got.created, account: await view(saved) });
   });
 
   return router;

@@ -488,6 +488,9 @@ export const RULES = [
     // 只记有人输过密码，密码本身不进审计
     ['telegram/password', 'account.telegram_password', (n) => `为号${n}输入{了} Telegram 两步验证密码`],
     ['telegram/logout', 'account.telegram_logout', (n) => `让号${n}退出{了} Telegram 登录`],
+    // 手机号、验证码不进审计
+    ['telegram/api/code', 'account.telegram_api_code', (n) => `为号${n}向 my.telegram.org 获取{了}验证码`],
+    ['telegram/api/apply', 'account.telegram_api_apply', (n) => `为号${n}从 my.telegram.org 取得{了} api_id 和 api_hash`],
   ].map(([sub, a, say]) => ({
     m: 'POST',
     p: `/accounts/:id/${sub}`,

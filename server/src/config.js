@@ -63,6 +63,8 @@ export function loadConfig(env = process.env) {
     lineDataApiUrl: (get('INKDOVE_LINE_DATA_API_URL').trim() || 'https://api-data.line.me').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Telegram Bot API 的基址（发消息、收消息、下载文件都走它）
     telegramApiUrl: (get('INKDOVE_TELEGRAM_API_URL').trim() || 'https://api.telegram.org').replace(/\/+$/, ''),
+    // 仅测试用：覆盖 my.telegram.org 的地址（Telegram 扫码登录的号自动取 api_id / api_hash）
+    myTelegramUrl: (get('INKDOVE_MY_TELEGRAM_URL').trim() || 'https://my.telegram.org').replace(/\/+$/, ''),
     // 仅测试用：覆盖 Resend API 地址
     resendApiUrl: get('INKDOVE_RESEND_API_URL').trim() || 'https://api.resend.com/emails',
   };
