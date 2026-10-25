@@ -11,7 +11,7 @@ const DEFAULTS = { companyPrompt: '' };
 const FIELDS = { 'suggest.companyPrompt': 'companyPrompt' };
 const LABELS = { companyPrompt: '公司话术' };
 
-const PLACEHOLDER = `例如：
+const PLACEHOLDER = `示例：
 - 英文客户开头用 Dear + 名字，结尾署名「XX Trading Team」
 - 语气专业、简洁，一段话不超过 3 句，不用表情
 - 常用说法：Thanks for your inquiry / We will get back to you shortly`;
@@ -51,8 +51,8 @@ export default function SuggestSection({ settings, onSaved }) {
       <SettingsRow
         label="公司话术"
         htmlFor="sg-company"
-        hint="在会话页点「推荐回复」时，AI 按这里的要求起草：称呼、署名、语气、常用说法。每个人还可以在左下角「我的资料」里填自己的称呼、联系方式和说话习惯。"
-        help="优先级：起草规则 > 公司话术 > 个人习惯，冲突时以前者为准。话术只管怎么说，不能让 AI 编造价格、交期和承诺；需要人拍板的地方 AI 仍会写成【待你确认：…】。"
+        hint="会话页生成推荐回复时按此要求起草：称呼、署名、语气、常用说法。成员可在左下角「我的资料」设置个人习惯。"
+        help="优先级：起草规则 > 公司话术 > 个人习惯，冲突时以前者为准。话术仅约束表达方式，不得编造价格、交期和承诺；需人工确认处标记为【待你确认：…】。"
       >
         <textarea
           {...fieldProps('sg-company', serverErr)}

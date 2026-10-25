@@ -115,10 +115,10 @@ export function BlockwordAlerts() {
   const stopMember = async () => {
     if (working) return;
     const userId = hit.userId;
-    const name = hit.userName || '这个业务员';
+    const name = hit.userName || '该业务员';
     const ok = await confirm({
       title: `停用「${name}」？`,
-      message: '停用后他马上退出登录，登不上也发不了消息。他负责的客户还记在他名下，可以之后在「成员」页面转交，也可以在那里重新启用他。',
+      message: '停用后该成员立即退出登录，无法登录和发送消息。其名下客户保持不变，可在「成员」页转交或重新启用。',
       confirmText: '停用',
       danger: true,
     });
@@ -145,11 +145,11 @@ export function BlockwordAlerts() {
       className="blockword-alert-modal"
       footer={
         <>
-          {more > 0 && <span className="blockword-alert__more muted">还有 {more} 条</span>}
+          {more > 0 && <span className="blockword-alert__more muted">另有 {more} 条</span>}
           {canStop && (
             <button type="button" className="btn btn--danger" onClick={stopMember} disabled={working}>
               {stopping && <Spinner />}
-              停用这个业务员
+              停用该业务员
             </button>
           )}
           {stopped && (
@@ -169,18 +169,18 @@ export function BlockwordAlerts() {
           )}
           <button type="button" className="btn btn--primary" onClick={() => ack(false)} disabled={working}>
             {busy && <Spinner />}
-            知道了
+            标记已处理
           </button>
         </>
       }
     >
       <dl className="blockword-alert">
-        <dt>谁</dt>
+        <dt>发送方</dt>
         <dd>
           {blockwordWho(hit)}
           <span className="muted"> · {blockwordSourceLabel(hit.source)}</span>
         </dd>
-        <dt>号和会话</dt>
+        <dt>号码与会话</dt>
         <dd>{blockwordWhere(hit)}</dd>
         <dt>时间</dt>
         <dd className="num">{fmtFull(hit.ts)}</dd>

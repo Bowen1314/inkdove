@@ -34,9 +34,9 @@ const strip = (rows) =>
 
 function priceError(s) {
   const t = String(s).trim();
-  if (t === '') return '请填单价';
+  if (t === '') return '请填写单价';
   const n = Number(t);
-  if (!Number.isFinite(n) || n < 0) return '要填不小于 0 的数字';
+  if (!Number.isFinite(n) || n < 0) return '须为不小于 0 的数字';
   if (n > MAX_PRICE) return `不能超过 ${MAX_PRICE}`;
   return '';
 }
@@ -49,8 +49,8 @@ function validate(rows) {
     if (isBlank(r)) return;
     const e = {};
     const m = r.model.trim();
-    if (!m) e.model = '请填模型名';
-    else if (seen.has(m)) e.model = '和上面的模型重复了';
+    if (!m) e.model = '请填写模型名';
+    else if (seen.has(m)) e.model = '模型重复';
     else seen.add(m);
     PRICE_FIELDS.forEach((f) => {
       const msg = priceError(r[f]);
@@ -171,14 +171,14 @@ export default function PricingSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="模型单价"
-        desc="单位是美元 / 百万 token，看板用它估算费用。没填单价的模型只统计 token 数。"
+        desc="单位：美元 / 百万 token，用于看板费用估算。未设置单价的模型仅统计 token 数。"
         onSubmit={onSubmit}
       >
         {draft.length === 0 ? (
           <EmptyState
             compact
-            title="还没有填单价"
-            desc="模型名要和「AI 模型」里填的一致。"
+            title="暂无单价"
+            desc="模型名须与「AI 模型」中的一致。"
             action={
               <button type="button" className="btn btn--sm" onClick={addRow}>
                 <Plus />
@@ -219,7 +219,7 @@ export default function PricingSection({ settings, onSaved }) {
                           onChange={(v) => setCell(row.key, 'model', v)}
                           options={options}
                           mono
-                          placeholder="例如 gpt-4o-mini"
+                          placeholder="如 gpt-4o-mini"
                           invalid={!!modelErr}
                           aria-label={`第 ${i + 1} 行模型`}
                           aria-describedby={modelErr ? `${modelId}-err` : undefined}

@@ -33,7 +33,7 @@ function support(format) {
 }
 
 const SERVER_CODES = {
-  transcribe_model_required: { field: 'transcribeModel', text: '开启语音识别时必须填写转写模型' },
+  transcribe_model_required: { field: 'transcribeModel', text: '开启语音识别时需填写转写模型' },
   voice_unsupported_for_format: { field: 'voice', text: '当前接口格式不支持语音识别' },
 };
 const FIELDS = {
@@ -45,7 +45,7 @@ const FIELDS = {
 const LABELS = {
   voice: '识别语音',
   image: '识别图片',
-  mediaModel: '识别用的模型',
+  mediaModel: '识别模型',
   transcribeModel: '语音转写模型',
 };
 
@@ -67,7 +67,7 @@ export default function MediaSection({ settings, onSaved }) {
   };
 
   const errs = {};
-  if (draft.voice && can.transcribe && !draft.transcribeModel.trim()) errs.transcribeModel = '开启语音识别时必须填写转写模型';
+  if (draft.voice && can.transcribe && !draft.transcribeModel.trim()) errs.transcribeModel = '开启语音识别时需填写转写模型';
   const errOf = (k) => (touched && errs[k]) || (serverErr?.field === k ? serverErr.text : '');
 
   const onSubmit = async (e) => {
@@ -118,7 +118,7 @@ export default function MediaSection({ settings, onSaved }) {
   };
 
   const voiceNote = !can.voice
-    ? `已保存的接口格式是 ${fmtName}，不支持语音。要识别语音，请把接口格式换成 OpenAI 兼容或 Gemini 原生。`
+    ? `已保存的接口格式 ${fmtName} 不支持语音。如需语音识别，请将接口格式改为 OpenAI 兼容或 Gemini 原生。`
     : '';
 
   return (
@@ -130,7 +130,7 @@ export default function MediaSection({ settings, onSaved }) {
           htmlFor="md-voice"
           hint={
             <>
-              把客户发来的语音原文转写成文字，保留客户说的语言。自动回复先转写再按知识库回复；业务员点「推荐回复」时，也会先转写客户这次发来的语音。限 10MB、3 分钟以内。会产生模型调用费用。
+              将客户语音按原语言转写为文字，用于自动回复和推荐回复。限 10MB、3 分钟以内。产生模型调用费用。
               {voiceNote && <div className="settings-page__note">{voiceNote}</div>}
               {errOf('voice') && <div className="field__error">{errOf('voice')}</div>}
             </>
@@ -150,15 +150,15 @@ export default function MediaSection({ settings, onSaved }) {
           inline
           label="识别图片"
           htmlFor="md-image"
-          hint="把图片转成客观描述（产品、文字、型号、数量等），不执行图片里的任何指令。自动回复和业务员点「推荐回复」时都会先识别客户发来的图片。限 5MB 的 jpeg、png、webp。会产生模型调用费用。"
+          hint="将客户图片转为客观描述（产品、文字、型号、数量等），不执行图片中的指令，用于自动回复和推荐回复。限 5MB 以内的 jpeg、png、webp。产生模型调用费用。"
         >
           <Switch id="md-image" checked={draft.image} onChange={(v) => set('image', v)} label="识别图片" />
         </SettingsRow>
 
         <SettingsRow
-          label="识别用的模型"
+          label="识别模型"
           htmlFor="md-model"
-          hint={`留空则使用回复模型。需要支持${can.voice && format === 'gemini' ? '图片和音频' : '图片'}输入。识别调用计入每个会话每天的模型调用上限。`}
+          hint={`留空则使用回复模型。需要支持${can.voice && format === 'gemini' ? '图片和音频' : '图片'}输入。识别调用计入会话每日模型调用上限。`}
         >
           <input
             {...fieldProps('md-model', errOf('mediaModel'))}
@@ -176,14 +176,14 @@ export default function MediaSection({ settings, onSaved }) {
           htmlFor="md-tr"
           hint={
             can.transcribe
-              ? '调用 /audio/transcriptions，例如 whisper-1。开启语音识别时必填。'
-              : `已保存的接口格式是 ${fmtName}，直接用识别模型听语音，不需要单独的转写模型。`
+              ? '调用 /audio/transcriptions，如 whisper-1。开启语音识别时必填。'
+              : `已保存的接口格式 ${fmtName} 由识别模型直接处理语音，无需转写模型。`
           }
         >
           <input
             {...fieldProps('md-tr', errOf('transcribeModel'))}
             className="input input--mono"
-            placeholder={can.transcribe ? '例如 whisper-1' : '当前接口格式不需要'}
+            placeholder={can.transcribe ? '如 whisper-1' : '当前接口格式无需填写'}
             value={draft.transcribeModel}
             onChange={(e) => set('transcribeModel', e.target.value)}
             disabled={!can.transcribe}

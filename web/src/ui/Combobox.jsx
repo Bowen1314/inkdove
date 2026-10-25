@@ -19,7 +19,7 @@ export function Combobox({
   mono = false,
   disabled,
   className = '',
-  emptyText = '没有匹配项',
+  emptyText = '无匹配项',
   'aria-label': ariaLabel,
   'aria-describedby': ariaDescribedby,
 }) {

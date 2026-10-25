@@ -15,9 +15,9 @@ const FIELDS = {
 };
 const LABELS = {
   persona: '默认 persona',
-  debounceSeconds: '等客户说完再回',
-  maxBotRepliesPerChatPerHour: '每个会话每小时最多自动回复',
-  humanize: '回复像真人',
+  debounceSeconds: '合并等待时间',
+  maxBotRepliesPerChatPerHour: '每会话每小时自动回复上限',
+  humanize: '拟人化回复',
 };
 
 function toDraft(r) {
@@ -32,9 +32,9 @@ function toDraft(r) {
 function validate(d) {
   const e = {};
   const deb = Number(d.debounceSeconds);
-  if (d.debounceSeconds.trim() === '' || !Number.isFinite(deb) || deb < 0 || deb > 120) e.debounceSeconds = '请填 0–120 之间的数字';
+  if (d.debounceSeconds.trim() === '' || !Number.isFinite(deb) || deb < 0 || deb > 120) e.debounceSeconds = '请输入 0–120 的数字';
   const max = Number(d.maxBotRepliesPerChatPerHour);
-  if (!Number.isInteger(max) || max < 1 || max > 1000) e.maxBotRepliesPerChatPerHour = '请填 1–1000 之间的整数';
+  if (!Number.isInteger(max) || max < 1 || max > 1000) e.maxBotRepliesPerChatPerHour = '请输入 1–1000 的整数';
   return e;
 }
 
@@ -107,13 +107,13 @@ export default function ReplySettingsSection({ settings, onSaved }) {
         <SettingsRow
           label="默认 persona（语气和身份）"
           htmlFor="rs-persona"
-          hint="对所有号生效；号详情里单独填了 persona 的号用自己的。只能改语气和称呼，不能改变机器人只按知识库回答的规则。"
+          hint="对所有号码生效；号码详情中单独设置了 persona 的以号码设置为准。仅影响语气和称呼，不改变仅依据知识库回答的规则。"
         >
           <textarea
             {...fieldProps('rs-persona', errOf('persona'))}
             className="textarea"
             rows={3}
-            placeholder="例如：你是 XX 公司的客服小王，语气热情专业。"
+            placeholder="示例：你是 XX 公司的客服小王，语气热情专业。"
             value={draft.persona}
             onChange={(e) => set('persona', e.target.value)}
           />
@@ -122,18 +122,18 @@ export default function ReplySettingsSection({ settings, onSaved }) {
 
         <SettingsRow
           inline
-          label="回复像真人"
+          label="拟人化回复"
           htmlFor="rs-humanize"
-          hint="先标已读、显示正在输入、按字数等几秒再发。只对机器人会回复的消息生效；转人工的消息保持未读。"
+          hint="先标记已读并显示正在输入，按字数延迟数秒后发送。仅对自动回复的消息生效；转人工的消息保持未读。"
         >
-          <Switch id="rs-humanize" checked={draft.humanize} onChange={(v) => set('humanize', v)} label="回复像真人" />
+          <Switch id="rs-humanize" checked={draft.humanize} onChange={(v) => set('humanize', v)} label="拟人化回复" />
         </SettingsRow>
 
         <Advanced>
           <SettingsRow
-            label="等客户说完再回（秒）"
+            label="合并等待时间（秒）"
             htmlFor="rs-deb"
-            hint="客户连发几条时，等这么久没有新消息再合并成一次回答。"
+            hint="客户连续发送多条消息时，在此时长内无新消息后合并回复。"
           >
             <input
               {...fieldProps('rs-deb', errOf('debounceSeconds'))}
@@ -149,9 +149,9 @@ export default function ReplySettingsSection({ settings, onSaved }) {
             <FieldError id="rs-deb">{errOf('debounceSeconds')}</FieldError>
           </SettingsRow>
           <SettingsRow
-            label="每个会话每小时最多自动回复"
+            label="每会话每小时自动回复上限"
             htmlFor="rs-max"
-            hint="超过后这个会话转人工并暂停机器人，防止和别的机器人互相回个没完。"
+            hint="超出后该会话转人工并暂停自动回复，防止与其他机器人循环对话。"
           >
             <input
               {...fieldProps('rs-max', errOf('maxBotRepliesPerChatPerHour'))}

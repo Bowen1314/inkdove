@@ -22,8 +22,8 @@ const toDraft = (title) => ({ title: title || '' });
 /** 上传前在前端先查一遍，不合格不发请求 → 错误文字或 '' */
 function checkLogo(file) {
   const typeOk = LOGO_TYPES.includes(file.type) || (!file.type && LOGO_EXT.test(file.name));
-  if (!typeOk) return '只支持 PNG、JPG、WebP 或 SVG 图片';
-  if (file.size > MAX_LOGO) return '图片超过 512 KB，请压缩后再上传';
+  if (!typeOk) return '仅支持 PNG、JPG、WebP 或 SVG 图片';
+  if (file.size > MAX_LOGO) return '图片超过 512 KB，请压缩后上传';
   return '';
 }
 
@@ -113,7 +113,7 @@ export default function BrandSection({ settings, onSaved }) {
         <SettingsRow
           label="网站名称"
           htmlFor="brand-title"
-          hint={`显示在侧边栏、登录页和浏览器标签上。留空使用默认名称 ${DEFAULT_TITLE}。`}
+          hint={`显示于侧边栏、登录页和浏览器标签。留空则使用默认名称 ${DEFAULT_TITLE}。`}
         >
           <input
             {...fieldProps('brand-title', titleErr)}
@@ -126,7 +126,7 @@ export default function BrandSection({ settings, onSaved }) {
           <FieldError id="brand-title">{titleErr}</FieldError>
         </SettingsRow>
 
-        <SettingsRow label="Logo" hint="PNG、JPG、WebP 或 SVG，不超过 512 KB，建议用正方形图片。也会用作浏览器标签图标。">
+        <SettingsRow label="Logo" hint="PNG、JPG、WebP 或 SVG，不超过 512 KB，建议使用正方形图片。同时用作浏览器标签图标。">
           <div className="settings-page__logo">
             <BrandMark logoUrl={logoUrl} className="settings-page__logo-preview" />
             <button

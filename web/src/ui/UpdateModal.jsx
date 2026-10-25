@@ -27,7 +27,7 @@ const COMMANDS = 'docker compose pull\ndocker compose up -d';
 /** 更新助手接手后多久问一次版本号、等多久算太久 */
 const POLL_MS = 3000;
 const GIVE_UP_MS = 5 * 60_000;
-const BAD_TIME = '要选 1 分钟之后、7 天之内的时间';
+const BAD_TIME = '请选择 1 分钟后至 7 天内的时间';
 
 /** 手动更新的命令（docker-compose.yml 所在目录执行），带复制按钮 */
 export function UpdateCommands({ lead }) {
@@ -44,12 +44,12 @@ export function UpdateCommands({ lead }) {
 
 /** 不能一键更新时，说明原因并给出命令；能一键更新时返回 null */
 function manualLead(s, target) {
-  const dir = '在服务器上 docker-compose.yml 所在的目录执行：';
+  const dir = '在服务器 docker-compose.yml 所在目录执行：';
   if (s.pinned) {
-    return `镜像标签钉在了 ${imageTagOf(s.image)}，一键更新升不上去。先把 .env 里的 INKDOVE_IMAGE_TAG 改成 ${target}（或删掉这一行，用 latest），再${dir}`;
+    return `镜像标签已固定为 ${imageTagOf(s.image)}，无法一键更新。请将 .env 中的 INKDOVE_IMAGE_TAG 改为 ${target}（或删除该行以使用 latest），然后${dir}`;
   }
-  if (!s.updater?.configured) return `没有装更新助手，${dir}`;
-  if (s.updater.reachable === false) return `连不上更新助手（compose 里的 updater 服务没在运行？），${dir}`;
+  if (!s.updater?.configured) return `未安装更新助手，请${dir}`;
+  if (s.updater.reachable === false) return `无法连接更新助手（请检查 compose 中的 updater 服务是否运行），或${dir}`;
   return null;
 }
 
@@ -125,8 +125,8 @@ export function UpdateModal() {
   const apply = async () => {
     const ok = await confirm({
       title: `更新到 v${target}`,
-      message: `会先备份数据库，再下载新版本并重启。更新期间约 1 分钟无法访问后台，WhatsApp 连接不受影响。${
-        schedule ? '\n已有的预约会作废。' : ''
+      message: `将先备份数据库，再下载新版本并重启。期间约 1 分钟无法访问后台，WhatsApp 连接不受影响。${
+        schedule ? '\n现有预约将作废。' : ''
       }`,
       confirmText: '立即更新',
     });
@@ -193,16 +193,16 @@ export function UpdateModal() {
               {waiting ? `正在更新到 v${target}…` : `正在按预约更新到 v${schedule.to || target}…`}
             </div>
             <div className="muted">
-              {waiting && backup ? `更新前的数据库已备份到 data/${backup}。` : ''}新版本启动后页面会自动刷新。
+              {waiting && backup ? `更新前的数据库已备份到 data/${backup}。` : ''}新版本启动后页面将自动刷新。
             </div>
           </div>
         </div>
         {phase === 'slow' && (
           <>
             <Callout tone="warning">
-              过了 5 分钟还没更新好。请到服务器上用 docker compose logs updater 看看更新助手的日志，或者手动更新。
+              更新超过 5 分钟未完成。请在服务器执行 docker compose logs updater 查看日志，或手动更新。
             </Callout>
-            <UpdateCommands lead="在服务器上 docker-compose.yml 所在的目录执行：" />
+            <UpdateCommands lead="在服务器 docker-compose.yml 所在目录执行：" />
           </>
         )}
       </div>
@@ -215,7 +215,7 @@ export function UpdateModal() {
   } else if (picking) {
     body = (
       <div className="update-modal">
-        <div>选一个时间，到时间自动更新到 v{target}，只更新这一次。</div>
+        <div>到达指定时间后自动更新到 v{target}，仅执行一次。</div>
         <ScheduleFields
           base={pickBase}
           pick={pick}
@@ -226,7 +226,7 @@ export function UpdateModal() {
           error={pickError}
         />
         <div className="update-modal__hint">
-          到时间会先备份数据库，再下载新版本并重启，期间约 1 分钟无法访问后台。到时间服务器没在运行的话，超过 1 小时就不再更新。
+          届时将先备份数据库，再下载新版本并重启，期间约 1 分钟无法访问后台。若服务器未运行，超过预约时间 1 小时后不再执行。
         </div>
         {error && <Callout tone="danger">{error}</Callout>}
       </div>
@@ -253,13 +253,13 @@ export function UpdateModal() {
                 {scheduleText(schedule)}
               </StatusDot>
               <div className="update-modal__hint">
-                {schedule.scheduledBy?.email ? `${schedule.scheduledBy.email} 预约的，` : ''}时间按这台电脑的时区显示
+                {schedule.scheduledBy?.email ? `${schedule.scheduledBy.email} 预约，` : ''}按本机时区显示
               </div>
             </div>
             <div className="update-actions">
               {canUpdate && (
                 <button type="button" className="btn btn--sm" onClick={() => setUpdateModalView('schedule')}>
-                  改时间
+                  修改时间
                 </button>
               )}
               <button type="button" className="btn btn--sm" onClick={cancelSchedule} disabled={busy === 'cancel'}>
@@ -292,7 +292,7 @@ export function UpdateModal() {
             </div>
             {/* 纯文本显示，不当 HTML / Markdown 渲染 */}
             <div className="update-modal__notes" tabIndex={0} aria-label="更新说明">
-              {latest.notes.trim() || '这个版本没有写更新说明。'}
+              {latest.notes.trim() || '该版本无更新说明。'}
             </div>
           </div>
         )}

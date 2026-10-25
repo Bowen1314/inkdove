@@ -36,14 +36,14 @@ const LABELS = {
 
 /** 发送方式下面的一行说明 */
 const PROVIDER_DESC = {
-  '': '号码详情里的邮件通知不能开启，转人工只能用 WhatsApp 通知。',
+  '': '号码详情中的邮件通知不可用，转人工仅支持 WhatsApp 通知。',
   resend: (
     <>
       在{' '}
       <a className="link" href="https://resend.com" target="_blank" rel="noreferrer">
         resend.com
       </a>{' '}
-      创建 API key，并验证发件域名。发件人的域名必须是验证过的域名。
+      创建 API key 并验证发件域名，发件人须使用已验证的域名。
     </>
   ),
 };
@@ -70,7 +70,7 @@ function validate(d) {
   if (d.provider === 'smtp') {
     if (!d.host.trim()) errs.host = '请填写 SMTP 服务器';
     const p = Number(d.port);
-    if (!Number.isInteger(p) || p < 1 || p > 65535) errs.port = '端口是 1–65535 的整数';
+    if (!Number.isInteger(p) || p < 1 || p > 65535) errs.port = '端口须为 1–65535 的整数';
   }
   return errs;
 }
@@ -183,7 +183,7 @@ export default function EmailSection({ settings, onSaved }) {
       const r = await api.testEmail(testTo.trim());
       setTestResult(
         r?.ok
-          ? { ok: true, text: '测试邮件已发出，请到收件箱查看（没收到的话也看看垃圾邮件）。' }
+          ? { ok: true, text: '测试邮件已发送，请查看收件箱（含垃圾邮件）。' }
           : { ok: false, text: `发送失败：${r?.error || '原因未知'}` },
       );
     } catch {
@@ -200,7 +200,7 @@ export default function EmailSection({ settings, onSaved }) {
       <SettingsSection as="form" title="发信方式" onSubmit={onSubmit} actions={<ResetButton onClick={restoreDefaults} />}>
         <SettingsRow
           label="发送方式"
-          hint="转人工的邮件通知、测试邮件都用这里配置的方式发送。各号的邮件通知开关和收件人在号码详情里设置。"
+          hint="用于发送转人工邮件通知和测试邮件。各号码的邮件通知开关和收件人在号码详情中设置。"
         >
           <div className="choice-list" role="radiogroup" aria-label="发送方式">
             {EMAIL_PROVIDERS.map((p) => (
@@ -224,7 +224,7 @@ export default function EmailSection({ settings, onSaved }) {
         </SettingsRow>
 
         {draft.provider && (
-          <SettingsRow label="发件人" htmlFor="em-from" hint="收件人看到的发件人，可以带名字。">
+          <SettingsRow label="发件人" htmlFor="em-from" hint="收件人看到的发件人，可含名称。">
             <input
               {...fieldProps('em-from', errOf('from'))}
               className="input"
@@ -337,7 +337,7 @@ export default function EmailSection({ settings, onSaved }) {
                 className="input"
                 type="email"
                 inputMode="email"
-                placeholder="收件地址，例如 you@example.com"
+                placeholder="收件地址，如 you@example.com"
                 value={testTo}
                 onChange={(e) => setTestTo(e.target.value)}
                 onKeyDown={(e) => {
@@ -365,7 +365,7 @@ export default function EmailSection({ settings, onSaved }) {
           dirty={dirty}
           saving={saving}
           onDiscard={discard}
-          text={draft.provider ? '有未保存的更改，发送测试邮件会先保存' : '有未保存的更改'}
+          text={draft.provider ? '有未保存的更改，发送测试邮件前将自动保存' : '有未保存的更改'}
         />
       </SettingsSection>
     </div>

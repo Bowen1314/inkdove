@@ -29,12 +29,12 @@ import {
 
 const PROFILE_FIELDS = [
   { key: 'companyName', label: '公司名称', placeholder: '例如：深圳某某电子有限公司' },
-  { key: 'summary', label: '公司简介', multiline: true, placeholder: '一两句话介绍公司是做什么的' },
+  { key: 'summary', label: '公司简介', multiline: true, placeholder: '一两句话概述主营业务' },
   { key: 'offerings', label: '产品与服务', multiline: true, placeholder: '主要产品、服务范围' },
   { key: 'contact', label: '联系方式', multiline: true, placeholder: '电话、邮箱、地址等' },
   { key: 'hours', label: '营业时间', placeholder: '例如：周一至周六 9:00–18:00（北京时间）' },
   { key: 'languages', label: '服务语言', placeholder: '例如：中文、英文、西班牙语' },
-  { key: 'other', label: '其他说明', multiline: true, placeholder: '其他需要机器人知道的信息' },
+  { key: 'other', label: '其他说明', multiline: true, placeholder: '机器人需了解的其他信息' },
 ];
 
 /** 左边标签、右边值；点"编辑"后就地变成表单，改动后出现保存栏。readOnly（业务员）没有编辑入口。 */
@@ -151,8 +151,8 @@ export function ProfileTab({ readOnly }) {
           <EmptyState
             compact
             icon={Building2}
-            title="还没有企业画像"
-            desc={readOnly ? null : '整理知识库时会自动生成，你也可以点"编辑"手动填写。'}
+            title="暂无企业画像"
+            desc={readOnly ? null : '整理知识库时自动生成，也可点击「编辑」手动填写。'}
           />
         ) : (
           PROFILE_FIELDS.map((f) => (
@@ -243,8 +243,8 @@ function EntryDrawer({ entry, onClose, onSaved, onDeleted }) {
 
   const remove = async () => {
     const ok = await confirm({
-      title: '删除这个条目？',
-      message: `「${entry.title}」删除后，机器人将不再使用这条知识，且无法恢复。`,
+      title: `删除条目「${entry.title}」？`,
+      message: '删除后机器人不再使用该条目，且无法恢复。',
       confirmText: '删除',
       danger: true,
     });
@@ -301,11 +301,11 @@ function EntryDrawer({ entry, onClose, onSaved, onDeleted }) {
               {...fieldProps('en-title', titleErr)}
               className="input"
               value={form.title}
-              placeholder={form.type === 'faq' ? '写成客户会问的问题，例如：最低起订量是多少？' : '例如：A100 型号蓝牙耳机'}
+              placeholder={form.type === 'faq' ? '以客户提问的形式填写，例如：最低起订量是多少？' : '例如：A100 型号蓝牙耳机'}
               onChange={(e) => set('title', e.target.value)}
             />
           </Field>
-          <Field label="内容" htmlFor="en-content" error={contentErr} hint="写完整、能单独看懂；保留具体数字、型号、价格和条件。">
+          <Field label="内容" htmlFor="en-content" error={contentErr} hint="内容需完整、可独立理解，保留具体数字、型号、价格和条件。">
             <textarea
               {...fieldProps('en-content', contentErr)}
               className="textarea"
@@ -314,13 +314,13 @@ function EntryDrawer({ entry, onClose, onSaved, onDeleted }) {
               onChange={(e) => set('content', e.target.value)}
             />
           </Field>
-          <Field label="标签" htmlFor="en-tags" hint="用逗号分隔，方便搜索，例如：价格，批发，耳机">
+          <Field label="标签" htmlFor="en-tags" hint="以逗号分隔，用于搜索，例如：价格，批发，耳机">
             <input id="en-tags" className="input" value={tagText} onChange={(e) => setTagText(e.target.value)} />
           </Field>
           <div className="kb-entry__switch">
             <div className="kb-entry__switch-text">
               <div className="field__label">状态</div>
-              <div className="field__hint">{form.status === 'active' ? '启用：机器人会使用这条知识' : '停用：机器人暂时不使用'}</div>
+              <div className="field__hint">{form.status === 'active' ? '启用：机器人使用该条目' : '停用：机器人不使用该条目'}</div>
             </div>
             <Switch checked={form.status === 'active'} onChange={(on) => set('status', on ? 'active' : 'disabled')} label="启用条目" />
           </div>
@@ -341,7 +341,7 @@ function EntryDrawer({ entry, onClose, onSaved, onDeleted }) {
                   </div>
                 ))
               ) : (
-                <div className="muted text-sm">这个条目没有关联的来源资料。</div>
+                <div className="muted text-sm">该条目无关联资料。</div>
               )}
             </div>
           )}
@@ -436,7 +436,7 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
     if (found) {
       if (readOnly) setPeekId(found.id);
       else setEditing(found);
-    } else if (!query && !type && !status) toast.info('没有找到这个条目，可能已被删除');
+    } else if (!query && !type && !status) toast.info('条目不存在，可能已被删除');
     else {
       clearFilters();
       return;
@@ -471,7 +471,7 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
     if (kind === 'delete') {
       const ok = await confirm({
         title: `删除选中的 ${list.length} 个条目？`,
-        message: '删除后，机器人将不再使用这些知识，且无法恢复。',
+        message: '删除后机器人不再使用这些条目，且无法恢复。',
         confirmText: '删除',
         danger: true,
       });
@@ -553,8 +553,8 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
   const emptyNode = filtering ? (
     <EmptyState
       icon={Search}
-      title="没有符合条件的条目"
-      desc="换个关键词，或清除筛选条件再试试。"
+      title="无符合条件的条目"
+      desc="请更换关键词或清除筛选条件。"
       action={
         <button type="button" className="btn" onClick={clearFilters}>
           清除筛选
@@ -564,8 +564,8 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
   ) : (
     <EmptyState
       icon={FileText}
-      title="知识库还没有条目"
-      desc={readOnly ? '管理员整理知识库后，这里会显示机器人回复时依据的条目。' : '上传资料并整理后会自动生成条目，也可以手动新建。'}
+      title="知识库暂无条目"
+      desc={readOnly ? '管理员整理知识库后，此处显示机器人回复所依据的条目。' : '上传资料并整理后自动生成条目，也可手动新建。'}
       action={
         !readOnly && (
           <div className="hstack">

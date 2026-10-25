@@ -23,8 +23,8 @@ import { fmtNum, fmtTime } from '../../lib/format.js';
  */
 
 const HINT =
-  '用约 35 道题扮演客户：要折扣砍价、按量报价、下单付款、问是不是 AI、让机器人干别的活、注入指令，' +
-  '看机器人会不会自己回复（没有自己回复就算守住）。另外从知识库抽几条正常问题，答不上来的算误伤。';
+  '以约 35 道题模拟客户（议价、报价、下单付款、询问是否为 AI、越权请求、指令注入），机器人未自行回复即为守住。' +
+  '另从知识库抽取正常问题，未能回答计为误伤。';
 
 const isRunning = (r) => r?.status === 'running';
 /** GET /runs 直接给数组；也兼容包一层 {runs} */
@@ -43,7 +43,7 @@ function passOf(r) {
 const OUTCOME = {
   failed: { rank: 0, label: '失守', tone: 'danger' },
   refused: { rank: 1, label: '误伤', tone: 'warning' },
-  mismatch: { rank: 2, label: '通过', tone: 'success', note: '和期望不一致' },
+  mismatch: { rank: 2, label: '通过', tone: 'success', note: '与期望不一致' },
   passed: { rank: 3, label: '通过', tone: 'success' },
 };
 
@@ -113,7 +113,7 @@ function ResultDetail({ r }) {
       <dl className="kv kb-redteam__kv">
         {history.length > 0 && (
           <>
-            <dt>前面的对话</dt>
+            <dt>历史对话</dt>
             <dd>
               <ol className="kb-redteam__turns">
                 {history.map((t, i) => {
@@ -129,17 +129,17 @@ function ResultDetail({ r }) {
             </dd>
           </>
         )}
-        <dt>{history.length > 0 ? '最后一问' : '问题'}</dt>
+        <dt>{history.length > 0 ? '最后提问' : '问题'}</dt>
         <dd className="pre-wrap">{r.input || <span className="muted">—</span>}</dd>
         <dt>回复</dt>
-        <dd className="pre-wrap">{r.reply || <span className="muted">没有回复客户</span>}</dd>
+        <dd className="pre-wrap">{r.reply || <span className="muted">未回复客户</span>}</dd>
         <dt>原因</dt>
         <dd className="pre-wrap">{r.reason || <span className="muted">未提供</span>}</dd>
         {outcome === 'mismatch' && (
           <>
             <dt>结果</dt>
             <dd>
-              期望{expectLabel(r)}，实际{ASK_DECISION[r.decision]?.label || r.decision || '—'}；没有自己回复客户，仍算通过
+              期望{expectLabel(r)}，实际{ASK_DECISION[r.decision]?.label || r.decision || '—'}；未自行回复客户，判定通过
             </dd>
           </>
         )}
@@ -162,7 +162,7 @@ function SummaryCards({ summary, counts }) {
           label="红线题通过"
           value={fmtNum(redlinePassed)}
           unit={`/ ${fmtNum(redlinePassed + redlineFailed)}`}
-          foot={counts.mismatch > 0 ? `其中 ${counts.mismatch} 条和期望不一致` : null}
+          foot={counts.mismatch > 0 ? `其中 ${counts.mismatch} 条与期望不一致` : null}
         />
       </div>
       <div className="span-3 kb-redteam__metric">
@@ -176,7 +176,7 @@ function SummaryCards({ summary, counts }) {
         />
       </div>
       <div className="span-3 kb-redteam__metric">
-        <Metric label="正常题答上" value={fmtNum(legitReplied)} unit={`/ ${fmtNum(legitReplied + legitRefused)}`} />
+        <Metric label="正常题已回答" value={fmtNum(legitReplied)} unit={`/ ${fmtNum(legitReplied + legitRefused)}`} />
       </div>
       <div className="span-3 kb-redteam__metric">
         {/* SPEC：误伤用琥珀色 */}
@@ -194,7 +194,7 @@ function RunProgress({ run }) {
   return (
     <div className="kb-redteam__progress">
       <div className="kb-redteam__progress-label">
-        <span>正在体检</span>
+        <span>体检中</span>
         {total > 0 && (
           <span className="muted text-sm num">
             {fmtNum(done)} / {fmtNum(total)}
@@ -234,7 +234,7 @@ const RESULT_COLUMNS = [
                 {r.lang ? ` · ${redteamLangLabel(r.lang)}` : ''}
                 {n > 0 ? ' · ' : ''}
               </span>
-              {n > 0 && <span>多轮，前面还有 {n} 条对话</span>}
+              {n > 0 && <span>多轮，含 {n} 条历史对话</span>}
             </>
           }
         />
@@ -406,7 +406,7 @@ export default function RedteamTab({ actionsSlot }) {
       .getRedteamRun(selectedId, { silent: true })
       .then((r) => {
         if (!alive) return;
-        if (!r || typeof r !== 'object') throw new Error('没有拿到这次体检的结果');
+        if (!r || typeof r !== 'object') throw new Error('未获取到体检结果');
         setRun({ ...r, id: r.id || selectedId });
       })
       .catch((e) => alive && setRunError(e));
@@ -446,7 +446,7 @@ export default function RedteamTab({ actionsSlot }) {
           : resultsOf(run).filter((r) => !r.isLegit && !passOf(r)).length;
         toast.success(n > 0 ? `体检完成，红线失守 ${n} 条` : '体检完成，红线全部守住');
       } else if (run.status === 'failed') {
-        toast.error(run.error || '体检没有完成');
+        toast.error(run.error || '体检未完成');
       }
     }
   }, [running, run, loadRuns]);
@@ -465,7 +465,7 @@ export default function RedteamTab({ actionsSlot }) {
   const start = async () => {
     const ok = await confirm({
       title: '开始红线体检？',
-      message: '约 35 题，每题 1–2 次模型调用。',
+      message: '共约 35 题，每题调用模型 1–2 次。',
       confirmText: '开始体检',
     });
     if (!ok) return;
@@ -483,7 +483,7 @@ export default function RedteamTab({ actionsSlot }) {
         setLlmMissing(false);
         const list = await loadRuns();
         const id = e.data?.runId || list?.find(isRunning)?.id;
-        toast.info('已有一次体检在进行，下面显示的就是这次');
+        toast.info('已有体检正在进行，下方为其进度');
         if (id) selectRun(id);
       } else if (e.code === 'llm_not_configured') {
         setLlmMissing(true);
@@ -497,8 +497,8 @@ export default function RedteamTab({ actionsSlot }) {
 
   const cancel = async () => {
     const ok = await confirm({
-      title: '取消这次体检？',
-      message: '取消后体检会停止，之后可以重新开始。',
+      title: '取消本次体检？',
+      message: '取消后体检停止，可重新开始。',
       confirmText: '取消体检',
       cancelText: '继续体检',
       danger: true,
@@ -544,9 +544,9 @@ export default function RedteamTab({ actionsSlot }) {
   const shown = filter ? rows.filter((r) => r._outcome === filter) : rows;
   const filterOptions = [
     { value: '', label: `全部结果（${rows.length}）` },
-    { value: 'failed', label: `只看失守（${counts.failed}）` },
-    { value: 'refused', label: `只看误伤（${counts.refused}）` },
-    { value: 'mismatch', label: `期望不一致但通过（${counts.mismatch}）` },
+    { value: 'failed', label: `仅失守（${counts.failed}）` },
+    { value: 'refused', label: `仅误伤（${counts.refused}）` },
+    { value: 'mismatch', label: `通过但与期望不一致（${counts.mismatch}）` },
   ];
 
   const headerActions =
@@ -565,12 +565,12 @@ export default function RedteamTab({ actionsSlot }) {
         tone="danger"
         action={
           <Link to="/settings/llm" className="btn btn--sm">
-            去设置
+            前往设置
             <ArrowRight />
           </Link>
         }
       >
-        还没有配置 AI 模型，体检要调用模型才能跑。请先到设置里填好。
+        未配置 AI 模型，体检需调用模型。请先在设置中配置。
       </Callout>
     </div>
   );
@@ -595,7 +595,7 @@ export default function RedteamTab({ actionsSlot }) {
   } else if (selectedId && runError && !run) {
     body = (
       <>
-        <ErrorState title="这次体检的结果加载失败" error={runError} onRetry={() => setReloadKey((k) => k + 1)} />
+        <ErrorState title="体检结果加载失败" error={runError} onRetry={() => setReloadKey((k) => k + 1)} />
         {history}
       </>
     );
@@ -622,8 +622,8 @@ export default function RedteamTab({ actionsSlot }) {
       <EmptyState
         fill
         icon={ShieldCheck}
-        title="还没有做过红线体检"
-        desc="用约 35 道题扮演客户砍价、要报价、下单、问是不是 AI、让机器人干别的活或注入指令，看机器人会不会越界自己回复；再抽几条知识库里的正常问题，看会不会误伤。体检不会给客户发消息。"
+        title="暂无红线体检记录"
+        desc="以约 35 道题模拟客户议价、报价、下单、询问是否为 AI、越权请求和指令注入，检查机器人是否越界自行回复；另抽取知识库正常问题检查误伤。体检不向客户发送消息。"
       />
     );
   } else {
@@ -658,7 +658,7 @@ export default function RedteamTab({ actionsSlot }) {
           {running ? <RunProgress run={run} /> : <SummaryCards summary={run.summary} counts={counts} />}
           {run.error && <Callout tone="danger">{run.error}</Callout>}
           {unfinished && rows.length > 0 && (
-            <div className="muted text-sm">这次体检没有跑完，上面只统计了已跑完的 {rows.length} 题。</div>
+            <div className="muted text-sm">本次体检未完成，仅统计已完成的 {rows.length} 题。</div>
           )}
         </div>
 
@@ -685,7 +685,7 @@ export default function RedteamTab({ actionsSlot }) {
               empty={
                 <EmptyState
                   compact
-                  title="没有符合条件的题目"
+                  title="无符合条件的题目"
                   action={
                     <button type="button" className="btn btn--sm" onClick={() => setFilter('')}>
                       查看全部
@@ -696,7 +696,7 @@ export default function RedteamTab({ actionsSlot }) {
             />
           </>
         ) : (
-          !running && <EmptyState compact title="这次体检没有结果" />
+          !running && <EmptyState compact title="本次体检无结果" />
         )}
 
         {history}

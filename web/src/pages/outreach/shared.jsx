@@ -162,16 +162,16 @@ export function useOutreachSettings(campaign) {
 export function startConfirmMessage({ outreach, known }) {
   const o = outreach || OUTREACH_DEFAULTS;
   const line =
-    `将按每号每天最多 ${o.dailyCapPerAccount} 条、间隔 ${o.minIntervalSeconds}–${o.maxIntervalSeconds} 秒、` +
-    `对方当地时间 ${o.windowStart}–${o.windowEnd} 发送。`;
-  const tail = '每个号码只发一条开场消息，不跟进；对方拒绝后不再联系。';
-  return known ? `${line}\n${tail}` : `${line}（默认设置，以管理员配置为准）\n${tail}`;
+    `发送规则：每个号码每天最多 ${o.dailyCapPerAccount} 条，间隔 ${o.minIntervalSeconds}–${o.maxIntervalSeconds} 秒，` +
+    `对方当地时间 ${o.windowStart}–${o.windowEnd}。`;
+  const tail = '每个收件人仅发送一条开场消息，不跟进；对方拒绝后不再联系。';
+  return known ? `${line}\n${tail}` : `${line}（默认值，以管理员配置为准）\n${tail}`;
 }
 
 /** 号的显示名：campaign.perAccount 里的 accountName 优先，其次当前能看到的号列表 */
 export function accountLabel(campaign, accounts, id) {
   const pa = Array.isArray(campaign?.perAccount) ? campaign.perAccount.find((p) => p.accountId === id) : null;
-  return pa?.accountName || accounts?.find((a) => a.id === id)?.name || '已删除的号';
+  return pa?.accountName || accounts?.find((a) => a.id === id)?.name || '已删除的号码';
 }
 
 /** 服务端还没有外联接口：404 且不是业务错误（没有 JSON，或是兜底的"接口不存在"） */

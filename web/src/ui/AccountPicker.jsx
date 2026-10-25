@@ -9,7 +9,7 @@ export function AccountPicker({ accounts, value, onChange, showState = true, dis
   const selected = new Set(value || []);
   if (accounts == null) return <div className="muted text-sm">正在加载号码…</div>;
   if (!accounts.length) {
-    return <div className="muted text-sm">{empty || '还没有号码，请先在「号码」里添加。'}</div>;
+    return <div className="muted text-sm">{empty || '暂无号码，请先在「号码」页添加。'}</div>;
   }
   const toggle = (id) => {
     const next = new Set(selected);

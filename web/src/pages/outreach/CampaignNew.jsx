@@ -23,7 +23,7 @@ const MAX_BYTES = 1024 * 1024;
 const MAX_LINES = 10000;
 const INVALID_SHOWN = 200;
 
-const STEPS = ['上传号码', '选号', '开场消息'];
+const STEPS = ['上传号码', '选择号码', '开场消息'];
 
 /** 本地数一下文件里有多少行号码（空行、# 开头的行不算），只用来估算每个号分到多少；真正的解析和校验在服务端 */
 function countNumberLines(text) {
@@ -72,7 +72,7 @@ function AccountChoices({ accounts, mode, value, onChange }) {
     <div
       className="choice-list outreach-new__accounts"
       role={single ? 'radiogroup' : 'group'}
-      aria-label={single ? '用哪个号发' : '用哪些号发'}
+      aria-label="发送号码"
     >
       {accounts.map((a) => {
         const st = waState(a.status?.state);
@@ -112,10 +112,10 @@ function PreviewResult({ preview }) {
     <div className="outreach-new__preview">
       <div className="grid-12" role="group" aria-label="预检汇总">
         <div className="span-4 outreach-metric">
-          <Metric label="有效号码" value={fmtNum(p.valid ?? 0)} unit="个" foot="开始后会给这些号码各发一条" />
+          <Metric label="有效号码" value={fmtNum(p.valid ?? 0)} unit="个" foot="开始后各发送一条" />
         </div>
         <div className="span-4 outreach-metric">
-          <Metric label="格式不对" value={fmtNum(invalidCount)} unit="行" tone={invalidCount > 0 ? 'warning' : undefined} />
+          <Metric label="格式错误" value={fmtNum(invalidCount)} unit="行" tone={invalidCount > 0 ? 'warning' : undefined} />
         </div>
         <div className="span-4 outreach-metric">
           <Metric label="跳过" value={fmtNum(skippedTotal)} unit="个" />
@@ -140,7 +140,7 @@ function PreviewResult({ preview }) {
         <details className="disclosure outreach-new__invalid">
           <summary>
             <ChevronRight aria-hidden="true" />
-            查看格式不对的 {fmtNum(invalidLines.length)} 行
+            查看格式错误的 {fmtNum(invalidLines.length)} 行
           </summary>
           <ul className="outreach-new__invalid-list">
             {invalidLines.slice(0, INVALID_SHOWN).map((l, i) => (
@@ -152,7 +152,7 @@ function PreviewResult({ preview }) {
           </ul>
           {invalidLines.length > INVALID_SHOWN && (
             <div className="muted text-sm outreach-new__invalid-more">
-              还有 {fmtNum(invalidLines.length - INVALID_SHOWN)} 行没有列出
+              另有 {fmtNum(invalidLines.length - INVALID_SHOWN)} 行未列出
             </div>
           )}
         </details>
@@ -169,7 +169,7 @@ export default function CampaignNew() {
   // LINE 官方帐号、Telegram 号按手机号找不到人，只能给来找你的人发消息，不能外联群发：不列出来（服务端也会拒绝）
   const accounts = useMemo(() => (allAccounts == null ? allAccounts : allAccounts.filter((a) => isWhatsapp(a.channel))), [allAccounts]);
   const excluded = [...new Set((allAccounts || []).filter((a) => !isWhatsapp(a.channel)).map((a) => CHANNEL_LABEL[a.channel] || a.channel))];
-  const excludedText = excluded.length ? `${excluded.join('、')}不能外联群发（按手机号找不到人，只能给来找你的人发消息）` : '';
+  const excludedText = excluded.length ? `${excluded.join('、')}不支持外联（无法通过手机号发起会话）` : '';
   const fileRef = useRef(null);
 
   const [step, setStep] = useState(0);
@@ -235,7 +235,7 @@ export default function CampaignNew() {
     clearErr('file');
     if (!/\.txt$/i.test(f.name)) {
       setFile(null);
-      setErrors((x) => ({ ...x, file: '只支持 .txt 文件' }));
+      setErrors((x) => ({ ...x, file: '仅支持 .txt 文件' }));
       return;
     }
     if (f.size > MAX_BYTES) {
@@ -253,12 +253,12 @@ export default function CampaignNew() {
     }
     if (lines === 0) {
       setFile(null);
-      setErrors((x) => ({ ...x, file: '文件里没有号码' }));
+      setErrors((x) => ({ ...x, file: '文件中无号码' }));
       return;
     }
     if (lines > MAX_LINES) {
       setFile(null);
-      setErrors((x) => ({ ...x, file: `号码不能超过 ${fmtNum(MAX_LINES)} 行，这个文件有 ${fmtNum(lines)} 行` }));
+      setErrors((x) => ({ ...x, file: `号码不能超过 ${fmtNum(MAX_LINES)} 行，当前文件 ${fmtNum(lines)} 行` }));
       return;
     }
     setFile({ file: f, lines });
@@ -275,11 +275,11 @@ export default function CampaignNew() {
       if (!name.trim()) e.name = '请填写任务名称';
       if (!country) e.country = '请选择默认国家';
     } else if (i === 1) {
-      if (!accountIds.length) e.accounts = mode === 'single' ? '请选择一个号' : '至少选择一个号';
-      else if (mode === 'single' && accountIds.length > 1) e.accounts = '「指定一个号」只能选一个';
+      if (!accountIds.length) e.accounts = mode === 'single' ? '请选择一个号码' : '请至少选择一个号码';
+      else if (mode === 'single' && accountIds.length > 1) e.accounts = '「指定号码」仅可选择一个号码';
     } else if (i === 2) {
       if (!message.trim()) e.message = '请填写开场消息';
-      if (hasMeta && !tplName.trim()) e.tplName = '选中的号里有 Meta 号，请填写模板名';
+      if (hasMeta && !tplName.trim()) e.tplName = '所选号码包含 Meta 官方接口号码，请填写模板名';
       if (hasMeta && !tplLang.trim()) e.tplLang = '请填写模板语言';
     }
     return e;
@@ -340,7 +340,7 @@ export default function CampaignNew() {
         { silent: true },
       );
       const campaign = toCampaign(res);
-      if (!campaign) throw new Error('服务端没有返回创建好的任务，请到外联列表里查看');
+      if (!campaign) throw new Error('服务端未返回任务数据，请在外联列表中查看');
       setCreated({ campaign, preview: res?.preview || null });
       scrollTop();
     } catch (e) {
@@ -348,10 +348,10 @@ export default function CampaignNew() {
       if (e?.code === 'template_required') {
         setErrors((x) => ({
           ...x,
-          tplName: tplName.trim() ? x.tplName : '选中的号里有 Meta 号，必须填模板名',
-          tplLang: tplLang.trim() ? x.tplLang : '必须填模板语言',
+          tplName: tplName.trim() ? x.tplName : '所选号码包含 Meta 官方接口号码，请填写模板名',
+          tplLang: tplLang.trim() ? x.tplLang : '请填写模板语言',
         }));
-        setSubmitError({ message: e.message || 'Meta 号主动发起会话必须用审核通过的模板消息，请填写模板名和语言' });
+        setSubmitError({ message: e.message || 'Meta 官方接口号码主动发起会话需使用已审核的模板消息，请填写模板名和语言' });
         setStep(2);
         focusFirstInvalid();
       } else {
@@ -389,7 +389,7 @@ export default function CampaignNew() {
         label="号码文件"
         htmlFor="on-file"
         error={errors.file}
-        hint="每行一个号码，可以带 +、00、空格、横线和括号；# 开头的行忽略。UTF-8 编码的 .txt，不超过 1MB、10,000 行。"
+        hint="每行一个号码，可含 +、00、空格、横线和括号；忽略 # 开头的行。UTF-8 编码 .txt，不超过 1MB、10,000 行。"
       >
         <div className="outreach-new__file">
           <button
@@ -410,7 +410,7 @@ export default function CampaignNew() {
                 {file.file.name}
               </span>
               <span className="muted text-sm num nowrap">
-                {fmtSize(file.file.size)} · {fmtNum(file.lines)} 行号码
+                {fmtSize(file.file.size)} · {fmtNum(file.lines)} 行
               </span>
             </span>
           )}
@@ -433,7 +433,7 @@ export default function CampaignNew() {
         label="默认国家"
         htmlFor="on-country"
         error={errors.country}
-        hint="号码没带国家码时，按这个国家的区号补全。"
+        hint="号码无区号时，按该国家区号补全。"
       >
         <CountrySelect
           id="on-country"
@@ -453,24 +453,24 @@ export default function CampaignNew() {
   if (accounts == null) {
     accountsBody = (
       <div className="muted text-sm hstack">
-        <Spinner /> 正在加载号码…
+        <Spinner /> 加载号码中…
       </div>
     );
   } else if (!accounts.length && excludedText) {
-    accountsBody = <div className="muted">{excludedText}，没有可以用来外联的号。</div>;
+    accountsBody = <div className="muted">{excludedText}，无可用于外联的号码。</div>;
   } else if (!accounts.length) {
     accountsBody = (
       <div className="muted">
         {isAdmin ? (
           <>
-            还没有号码，先去
+            暂无号码，请前往
             <Link className="link" to="/whatsapp/numbers">
               号码
             </Link>
-            里添加一个。
+            添加。
           </>
         ) : (
-          '还没有分配给你的号码，请联系管理员。'
+          '暂无分配的号码，请联系管理员。'
         )}
       </div>
     );
@@ -492,11 +492,11 @@ export default function CampaignNew() {
   if (perAccount != null) {
     accountsHint =
       mode === 'single'
-        ? `${fmtNum(file.lines)} 个号码都由这个号发。`
-        : `每个号约分到 ${fmtNum(perAccount)} 个（共 ${fmtNum(file.lines)} 行号码，去掉无效和跳过的之后平均分）。`;
+        ? `${fmtNum(file.lines)} 个号码均由该号码发送。`
+        : `每个号码约分配 ${fmtNum(perAccount)} 个（共 ${fmtNum(file.lines)} 行，剔除无效和跳过后平均分配）。`;
   }
   if (excludedText && accounts?.length) {
-    accountsHint = `${accountsHint ? `${accountsHint}` : ''}${excludedText}，没有列出。`;
+    accountsHint = `${accountsHint ? `${accountsHint}` : ''}${excludedText}，未列出。`;
   }
 
   const step2 = (
@@ -507,7 +507,7 @@ export default function CampaignNew() {
         </div>
       </Field>
       <Field
-        label={mode === 'single' ? '用哪个号发' : '用哪些号发'}
+        label="发送号码"
         error={errors.accounts}
         hint={accountsHint}
       >
@@ -515,7 +515,7 @@ export default function CampaignNew() {
       </Field>
       {offline.length > 0 && (
         <div className="muted text-sm">
-          {offline.map((a) => `「${a.name || '未命名号码'}」`).join('')}还没连接，连上之后才会发送。
+          {offline.map((a) => `「${a.name || '未命名号码'}」`).join('')}未连接，连接后开始发送。
         </div>
       )}
     </div>
@@ -528,14 +528,14 @@ export default function CampaignNew() {
           label="开场消息"
           htmlFor="on-message"
           error={errors.message}
-          hint="每个号码只发这一条；对方不回复就不会再发。"
+          hint="每个号码仅发送一次，对方未回复不再跟进。"
         >
           <textarea
             {...fieldProps('on-message', errors.message)}
             className="textarea"
             rows={6}
             maxLength={4000}
-            placeholder="例如：您好，我是 XX 公司的小王，之前在展会上加过您，想跟您确认一下样品的需求。"
+            placeholder="示例：您好，我是 XX 公司的小王，想与您确认样品需求。"
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -549,7 +549,7 @@ export default function CampaignNew() {
               label="Meta 模板名"
               htmlFor="on-tpl-name"
               error={errors.tplName}
-              hint="Meta 号主动联系客户只能发审核通过的模板消息，Meta 号发的是这个模板，不是上面的开场消息。"
+              hint="Meta 官方接口号码主动联系客户仅可发送已审核的模板消息，将发送该模板而非开场消息。"
             >
               <input
                 {...fieldProps('on-tpl-name', errors.tplName)}
@@ -564,7 +564,7 @@ export default function CampaignNew() {
                 }}
               />
             </Field>
-            <Field label="模板语言" htmlFor="on-tpl-lang" error={errors.tplLang} hint="和模板审核时的语言代码一致，例如 zh_CN、en_US。">
+            <Field label="模板语言" htmlFor="on-tpl-lang" error={errors.tplLang} hint="与模板审核时的语言代码一致，例如 zh_CN。">
               <input
                 {...fieldProps('on-tpl-lang', errors.tplLang)}
                 className="input input--mono"
@@ -592,13 +592,13 @@ export default function CampaignNew() {
               </div>
             </div>
           ) : (
-            <div className="outreach-new__chat-empty">写好开场消息后，这里显示对方看到的样子。</div>
+            <div className="outreach-new__chat-empty">填写开场消息后在此预览。</div>
           )}
         </div>
         <ul className="outreach-new__rules">
-          <li>每个号码只发一条开场消息，不跟进。</li>
-          <li>对方拒绝后不再联系，也不会被别的外联任务再次联系。</li>
-          <li>发送受每个号每天的上限和对方当地时间的发送时段限制。</li>
+          <li>每个号码仅发送一条开场消息，不跟进。</li>
+          <li>对方拒绝后不再联系，其他外联任务也不会联系。</li>
+          <li>发送受每个号码每日上限和对方当地时段限制。</li>
         </ul>
       </aside>
     </div>
@@ -615,15 +615,15 @@ export default function CampaignNew() {
         <div className="outreach-new__panel">
           <div className="outreach-new__head">
             <h2>预检结果</h2>
-            <div className="muted">已建好草稿「{created.campaign.name || name}」，还没有发送。</div>
+            <div className="muted">已创建草稿「{created.campaign.name || name}」，尚未发送。</div>
           </div>
           {created.preview ? (
             <PreviewResult preview={created.preview} />
           ) : (
-            <div className="muted">服务端没有返回预检结果，可以到任务详情里查看收件人。</div>
+            <div className="muted">服务端未返回预检结果，可在任务详情中查看收件人。</div>
           )}
           {valid === 0 && created.preview && (
-            <Callout tone="warning">没有可以发送的号码，这个任务开始后不会发出任何消息。</Callout>
+            <Callout tone="warning">无可发送的号码，任务开始后不会发送任何消息。</Callout>
           )}
         </div>
         <div className="outreach-new__foot">

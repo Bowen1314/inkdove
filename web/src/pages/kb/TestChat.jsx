@@ -91,7 +91,7 @@ function BotTurn({ turn }) {
         <div className="kb-test__bubble kb-test__bubble--decision">
           <div className="kb-test__decision">
             {decision === 'offtopic' ? <Ban aria-hidden="true" /> : <BellRing aria-hidden="true" />}
-            <span>{decision === 'offtopic' ? '离题：不回复，也不通知' : '拿不准：不会回复客户，会通知你'}</span>
+            <span>{decision === 'offtopic' ? '离题：不回复、不通知' : '无法确定：不回复客户，转人工并通知'}</span>
           </div>
           <div className="kb-test__reason">
             <span className="muted">原因</span>
@@ -172,7 +172,7 @@ export default function TestChat({ chat, autoFocus = false }) {
             compact
             fill
             title="扮演客户提问"
-            desc="不会发到 WhatsApp，只用于检查知识库是否够用。试试这些问题："
+            desc="消息不会发送给客户，仅用于检验知识库。示例问题："
             action={
               <div className="kb-test__samples">
                 {SAMPLES.map((s) => (
@@ -192,7 +192,7 @@ export default function TestChat({ chat, autoFocus = false }) {
                 <div className="kb-test__bubble">{t.text}</div>
                 {t.failed && (
                   <div className="kb-test__meta">
-                    <span className="text-danger">没有收到回复</span>
+                    <span className="text-danger">未收到回复</span>
                     <button type="button" className="kb-test__link" onClick={() => retry(t)} disabled={busy}>
                       重试
                     </button>
@@ -205,7 +205,7 @@ export default function TestChat({ chat, autoFocus = false }) {
         {busy && (
           <div className="kb-test__turn kb-test__turn--bot">
             <div className="kb-test__bubble kb-test__bubble--typing">
-              <Spinner /> 正在思考…
+              <Spinner /> 生成中…
             </div>
           </div>
         )}
@@ -217,7 +217,7 @@ export default function TestChat({ chat, autoFocus = false }) {
             ref={inputRef}
             className="kb-test__input"
             rows={1}
-            placeholder="输入客户会发的消息"
+            placeholder="输入客户消息"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}

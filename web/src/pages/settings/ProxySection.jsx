@@ -12,18 +12,18 @@ import { fmtClock, fmtFull } from '../../lib/format.js';
 import { FieldError, TestResult, putSlice, sameDraft, useRevealInvalid, useSliceDraft } from './shared.jsx';
 
 /** 和服务端 server/src/proxy/index.js 的 MIHOMO_MISSING 一致 */
-const MIHOMO_MISSING = '这台机器没有 mihomo，Docker 镜像里自带；本地开发可以用 INKDOVE_MIHOMO_PATH 指定';
+const MIHOMO_MISSING = '本机未安装 mihomo（Docker 镜像已内置）；本地开发可通过 INKDOVE_MIHOMO_PATH 指定';
 
 const SOURCES = [
   {
     value: 'subscription',
     label: '订阅地址',
-    desc: '机场给的 Clash 订阅链接。每天自动更新一次，也可以随时点「更新订阅」。',
+    desc: 'Clash 订阅链接，每日自动更新，也可点击「更新订阅」手动更新。',
   },
   {
     value: 'config',
     label: '粘贴 Clash 配置',
-    desc: '把 Clash 配置文件（YAML）的内容贴进来，只用里面的节点（proxies）。节点变了要重新粘贴。',
+    desc: '粘贴 Clash 配置文件（YAML），仅使用其中的节点（proxies）。节点变更后需重新粘贴。',
   },
 ];
 
@@ -42,7 +42,7 @@ const LABELS = {
   subscriptionUrl: '订阅地址',
   config: 'Clash 配置',
   node: '节点',
-  bypass: '不走代理的地址',
+  bypass: '直连地址',
 };
 
 const CONFIG_PLACEHOLDER = `proxies:
@@ -73,15 +73,15 @@ function stateOf(st) {
   if (st.state === 'running') {
     return {
       tone: 'success',
-      text: `运行中 · ${st.nodeCount} 个节点${st.current ? ` · 现在用「${st.current}」` : ''}`,
+      text: `运行中 · ${st.nodeCount} 个节点${st.current ? ` · 当前「${st.current}」` : ''}`,
     };
   }
-  if (st.state === 'starting') return { tone: 'info', pulse: true, text: '正在启动…' };
+  if (st.state === 'starting') return { tone: 'info', pulse: true, text: '启动中…' };
   if (st.state === 'error') {
     const retry = st.restartAt ? `，${fmtClock(st.restartAt)} 自动重试` : '';
-    return { tone: 'danger', text: `没在运行：${st.error || '原因未知'}${retry}。这期间经代理的请求都会失败` };
+    return { tone: 'danger', text: `未运行：${st.error || '原因未知'}${retry}。期间经代理的请求将失败` };
   }
-  return { tone: 'neutral', text: '没有开启' };
+  return { tone: 'neutral', text: '未开启' };
 }
 
 /**
@@ -162,7 +162,7 @@ export default function ProxySection({ settings, onSaved }) {
     e.preventDefault();
     if (saving) return;
     const turningOn = draft.enabled && !base.enabled;
-    if (await save()) toast.success(turningOn ? '已保存，全局代理正在启动' : '已保存');
+    if (await save()) toast.success(turningOn ? '已保存，全局代理启动中' : '已保存');
   };
 
   const discard = () => {
@@ -176,7 +176,7 @@ export default function ProxySection({ settings, onSaved }) {
   const clearSecret = async (key) => {
     const using = base.enabled && base.source === (key === 'subscriptionUrl' ? 'subscription' : 'config');
     if (using) {
-      toast.error(`正在用${LABELS[key]}里的节点，不能清除。先关掉全局代理或换一种节点来源并保存，再清除`);
+      toast.error(`${LABELS[key]}中的节点正在使用，无法清除。请先关闭全局代理或更换节点来源并保存`);
       return;
     }
     setClearing(key);
@@ -202,7 +202,7 @@ export default function ProxySection({ settings, onSaved }) {
       const r = await api.testGlobalProxy({ silent: true });
       setTestResult(
         r?.ok
-          ? { ok: true, text: `经全局代理访问成功：出口 IP ${r.ip}，用时 ${ms(r.latencyMs || 0)}` }
+          ? { ok: true, text: `访问成功：出口 IP ${r.ip}，耗时 ${ms(r.latencyMs || 0)}` }
           : { ok: false, text: r?.error || '测试失败：原因未知' },
       );
     } catch (e) {
@@ -258,8 +258,8 @@ export default function ProxySection({ settings, onSaved }) {
   const nodeOptions = [
     {
       value: '',
-      label: '自动（选最快的）',
-      desc: !px.node && status?.current ? `现在用「${status.current}」` : '每 5 分钟测一次各节点的延迟，用最快的',
+      label: '自动（最低延迟）',
+      desc: !px.node && status?.current ? `当前「${status.current}」` : '每 5 分钟测速，使用延迟最低的节点',
     },
     ...nodes.map((n) => ({ value: n.name, label: n.name, desc: nodeDesc(n) })),
   ];
@@ -270,25 +270,25 @@ export default function ProxySection({ settings, onSaved }) {
   else if (delays?.map) {
     const got = Object.entries(delays.map).filter(([, v]) => v !== null);
     const total = Object.keys(delays.map).length;
-    if (!got.length) delayResult = { ok: false, text: `${total} 个节点都连不上（或超时）` };
+    if (!got.length) delayResult = { ok: false, text: `${total} 个节点均无法连接或超时` };
     else {
       const [best, bestMs] = got.reduce((a, b) => (b[1] < a[1] ? b : a));
-      delayResult = { ok: true, text: `${got.length} / ${total} 个节点能连上，最快的是「${best}」（${ms(bestMs)}）。延迟写在下拉框每个节点下面` };
+      delayResult = { ok: true, text: `${got.length} / ${total} 个节点可连接，最快为「${best}」（${ms(bestMs)}）。各节点延迟见下拉列表` };
     }
   }
 
   const st = stateOf(status);
   const store = draft.source === 'config' ? status?.config : status?.subscription;
   const nodeNotes = [];
-  if (store?.skipped) nodeNotes.push(`${store.skipped} 个节点的类型不支持，没用`);
-  if (store?.invalid?.length) nodeNotes.push(`mihomo 不认、已去掉：${store.invalid.join('、')}`);
+  if (store?.skipped) nodeNotes.push(`${store.skipped} 个节点类型不支持，已忽略`);
+  if (store?.invalid?.length) nodeNotes.push(`mihomo 无法识别，已移除：${store.invalid.join('、')}`);
 
   return (
     <div ref={formRef}>
       <SettingsSection
         as="form"
         title="代理"
-        desc="全局代理：墨鸽自己连外网的请求（AI 模型、向量检索、重排、翻译接口、发信、抓取网页、检查更新、Meta 接口）都经机场节点出去。扫码号默认不走这里，要走的话在号的「IP 代理」里选「用全局代理」。"
+        desc="全局代理：墨鸽的外网请求（AI 模型、向量检索、重排、翻译接口、发信、网页抓取、检查更新、Meta 接口）经代理节点发出。扫码接入的号码默认不使用，可在号码的「IP 代理」中选择「用全局代理」。"
         onSubmit={onSubmit}
       >
         {unavailable && <Callout tone="warning">{MIHOMO_MISSING}</Callout>}
@@ -297,7 +297,7 @@ export default function ProxySection({ settings, onSaved }) {
           inline
           label="使用全局代理"
           htmlFor="px-enabled"
-          hint="开着时代理连不上，这些请求会直接失败，不会改用直连。本机、内网地址、不带点的主机名和 WAHA 总是直连。"
+          hint="开启后代理不可用时请求直接失败，不回退直连。本机、内网地址、不含点的主机名和 WAHA 始终直连。"
         >
           <Switch
             id="px-enabled"
@@ -317,7 +317,7 @@ export default function ProxySection({ settings, onSaved }) {
               </StatusDot>
               {status?.notice && <Callout tone="info">{status.notice}</Callout>}
               {!!status?.usedBy?.length && (
-                <div className="field__hint">在用全局代理的扫码号：{status.usedBy.map((a) => a.name).join('、')}</div>
+                <div className="field__hint">使用全局代理的号码：{status.usedBy.map((a) => a.name).join('、')}</div>
               )}
             </div>
           </SettingsRow>
@@ -349,7 +349,7 @@ export default function ProxySection({ settings, onSaved }) {
           <SettingsRow
             label="订阅地址"
             htmlFor="px-sub"
-            hint="订阅地址里带着机场账号的凭证，按密钥保存，保存后不再显示。下载订阅总是直连，不经代理。不是 Clash 格式的订阅用不了。"
+            hint="订阅地址含帐号凭证，按密钥保存，保存后不再显示。订阅始终直连下载。仅支持 Clash 格式。"
           >
             <div className="vstack" style={{ gap: 'var(--sp-2)', alignItems: 'stretch' }}>
               <div className="settings-page__secret">
@@ -371,17 +371,17 @@ export default function ProxySection({ settings, onSaved }) {
                   <span className="muted text-sm">
                     {status.subscription.updatedAt
                       ? `${status.subscription.nodeCount} 个节点，${fmtFull(status.subscription.updatedAt)} 更新`
-                      : '还没下载过'}
+                      : '尚未下载'}
                   </span>
                   <button type="button" className="btn btn--sm" onClick={refresh} disabled={!!busy || !!subUrl.trim()}>
                     {busy === 'refresh' ? <Spinner /> : <RefreshCw />}
-                    {busy === 'refresh' ? '正在更新…' : '更新订阅'}
+                    {busy === 'refresh' ? '更新中…' : '更新订阅'}
                   </button>
                 </div>
               )}
               {status?.subscription?.error && !refreshResult && (
                 <div className="field__error" role="status">
-                  {status.subscription.lastAttemptAt ? `${fmtFull(status.subscription.lastAttemptAt)} ` : ''}更新失败（还在用之前的节点）：
+                  {status.subscription.lastAttemptAt ? `${fmtFull(status.subscription.lastAttemptAt)} ` : ''}更新失败（沿用原节点）：
                   {status.subscription.error}
                 </div>
               )}
@@ -397,7 +397,7 @@ export default function ProxySection({ settings, onSaved }) {
           <SettingsRow
             label="Clash 配置"
             htmlFor="px-config"
-            hint="只用 proxies 里的节点，规则、分组、DNS 都不用。保存时解析，只存节点，原文不保存；里面有机场的服务器和密码，保存后不再显示。"
+            hint="仅使用 proxies 中的节点，忽略规则、分组和 DNS。保存时解析并仅存储节点，不保存原文；含服务器和密码，保存后不再显示。"
           >
             <div className="vstack" style={{ gap: 'var(--sp-2)', alignItems: 'stretch' }}>
               <textarea
@@ -406,7 +406,7 @@ export default function ProxySection({ settings, onSaved }) {
                 rows={8}
                 spellCheck={false}
                 autoComplete="off"
-                placeholder={status?.config?.set ? '留空表示不修改；贴新的配置会整个替换' : CONFIG_PLACEHOLDER}
+                placeholder={status?.config?.set ? '留空则不修改；粘贴新配置将整体替换' : CONFIG_PLACEHOLDER}
                 value={configText}
                 onChange={(e) => {
                   clearErr('config');
@@ -421,7 +421,7 @@ export default function ProxySection({ settings, onSaved }) {
                   </StatusDot>
                 ) : (
                   <StatusDot tone="neutral" size="sm">
-                    还没粘贴
+                    未配置
                   </StatusDot>
                 )}
                 {status?.config?.set && (
@@ -449,8 +449,8 @@ export default function ProxySection({ settings, onSaved }) {
           htmlFor="px-node"
           hint={
             sourceChanged
-              ? '换了节点来源，保存后才能选这个来源里的节点。'
-              : '自动：用延迟最低的节点。选了某个节点就一直用它，它连不上时请求会失败。测速用已保存的设置，开着全局代理时才能测。'
+              ? '节点来源已变更，保存后可选择该来源的节点。'
+              : '自动：使用延迟最低的节点。指定节点后固定使用，该节点不可用时请求失败。测速使用已保存的设置，需开启全局代理。'
           }
         >
           <div className="settings-page__inline">
@@ -466,7 +466,7 @@ export default function ProxySection({ settings, onSaved }) {
             />
             <button type="button" className="btn" onClick={measure} disabled={!!busy || status?.state !== 'running'}>
               {busy === 'delay' ? <Spinner /> : <Gauge />}
-              {busy === 'delay' ? '正在测速…' : '测速'}
+              {busy === 'delay' ? '测速中…' : '测速'}
             </button>
           </div>
           <FieldError id="px-node">{errOf('node')}</FieldError>
@@ -474,9 +474,9 @@ export default function ProxySection({ settings, onSaved }) {
         </SettingsRow>
 
         <SettingsRow
-          label="不走代理的地址"
+          label="直连地址"
           htmlFor="px-bypass"
-          hint="一行一个：example.com（只它自己）、*.example.com（它和所有子域名）、IP 或网段（如 10.0.0.0/8）。按请求里写的名字判断，不在本机解析域名。"
+          hint="每行一个：example.com（仅该域名）、*.example.com（含所有子域名）、IP 或网段（如 10.0.0.0/8）。按请求中的主机名匹配，不做本地解析。"
         >
           <textarea
             {...fieldProps('px-bypass', errOf('bypass'))}
@@ -495,14 +495,14 @@ export default function ProxySection({ settings, onSaved }) {
           label="测试"
           hint={
             px.enabled
-              ? `经全局代理访问一个查 IP 的地址，显示出口 IP 和用时。测的是已保存的设置${dirty ? '（有未保存的修改）' : ''}。`
-              : '开启全局代理并保存后才能测试。'
+              ? `经全局代理访问 IP 查询地址，显示出口 IP 和耗时。测试使用已保存的设置${dirty ? '（有未保存的修改）' : ''}。`
+              : '开启全局代理并保存后可测试。'
           }
         >
           <div className="vstack" style={{ gap: 'var(--sp-2)', alignItems: 'flex-start' }}>
             <button type="button" className="btn" onClick={test} disabled={!!busy || !px.enabled}>
               {busy === 'test' ? <Spinner /> : <PlugZap />}
-              {busy === 'test' ? '正在测试…' : '测试'}
+              {busy === 'test' ? '测试中…' : '测试'}
             </button>
             <TestResult result={testResult} />
           </div>

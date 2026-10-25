@@ -90,7 +90,7 @@ function PendingCard({ convs, error, onRetry }) {
         <div className="ov-pending__preview ellipsis muted">
           {c.lastMessage ? (
             <>
-              {c.lastMessage.direction === 'out' && '你：'}
+              {c.lastMessage.direction === 'out' && '我方：'}
               {c.lastMessage.text}
             </>
           ) : (
@@ -101,7 +101,7 @@ function PendingCard({ convs, error, onRetry }) {
     },
     {
       key: 'acct',
-      header: '所属号',
+      header: '所属号码',
       hide: 'sm',
       render: (c) => <span className="muted nowrap">{c.accountName || '—'}</span>,
     },
@@ -125,7 +125,7 @@ function PendingCard({ convs, error, onRetry }) {
     <section className="card card--flush span-8 ov-pending" aria-labelledby="ov-pending-title">
       <div className="card__head">
         <h2 className="card__title" id="ov-pending-title">
-          待你处理
+          待处理
         </h2>
         <Link to="/whatsapp/chats" className="btn btn--link">
           查看全部
@@ -135,11 +135,11 @@ function PendingCard({ convs, error, onRetry }) {
         <ErrorState compact title="会话加载失败" error={error} onRetry={onRetry} />
       ) : (
         <DataTable
-          label="待你处理"
+          label="待处理"
           columns={columns}
           rows={convs}
           onRowClick={(c) => navigate(chatLink(c.id))}
-          empty={<EmptyState compact title="没有待你处理的会话" />}
+          empty={<EmptyState compact title="暂无待处理会话" />}
         />
       )}
     </section>
@@ -164,15 +164,15 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
     body = isAdmin ? (
       <EmptyState
         compact
-        title="还没有添加号码"
+        title="暂未添加号码"
         action={
           <Link to="/whatsapp/numbers" className="btn btn--sm">
-            去添加
+            添加号码
           </Link>
         }
       />
     ) : (
-      <EmptyState compact title="还没有分配给你的号码" desc="请联系管理员。" />
+      <EmptyState compact title="暂无分配的号码" desc="请联系管理员。" />
     );
   } else {
     body = (
@@ -204,7 +204,7 @@ function NumbersCard({ accounts, healthAccounts, isAdmin, loading, className }) 
     <section className={`card ov-numbers ${className}`} aria-labelledby="ov-numbers-title">
       <div className="card__head">
         <h2 className="card__title" id="ov-numbers-title">
-          {isAdmin ? '号码' : '我负责的号'}
+          {isAdmin ? '号码' : '我负责的号码'}
         </h2>
         <Link to="/whatsapp/chats" className="btn btn--link">
           查看会话
@@ -224,7 +224,7 @@ function TypesCard({ stats, loading }) {
   if (!stats && loading) body = <SkeletonRows rows={4} />;
   else if (!stats) body = <EmptyState compact title="暂时无法获取统计数据" />;
   else if (typeTotal === 0) {
-    body = <EmptyState compact title="知识库还是空的" desc="上传资料并整理后，这里会显示各类条目的数量。" />;
+    body = <EmptyState compact title="知识库为空" desc="上传并整理资料后，显示各类条目数量。" />;
   } else {
     body = (
       <ul className="ov-types__list">
@@ -264,7 +264,7 @@ function TypesCard({ stats, loading }) {
           <span>
             上次整理：
             <Link to="/kb/distill" className="link">
-              {stats.lastDistilledAt ? fmtTime(stats.lastDistilledAt) : '还没有整理过'}
+              {stats.lastDistilledAt ? fmtTime(stats.lastDistilledAt) : '未整理'}
             </Link>
           </span>
         </div>
@@ -324,7 +324,7 @@ export default function Overview() {
   const accountList = accounts || health?.accounts?.map((a) => ({ ...a, status: { state: a.state } })) || [];
   const waReady = accountList.some(isConnected);
   const steps = [
-    { key: 'llm', title: '配置 AI 模型', done: llmReady, to: '/settings', action: '去设置' },
+    { key: 'llm', title: '配置 AI 模型', done: llmReady, to: '/settings', action: '前往设置' },
     { key: 'kb', title: '上传资料并整理知识库', done: kbReady, to: '/files/sources', action: '上传资料' },
     { key: 'wa', title: '添加一个号码', done: waReady, to: '/whatsapp/numbers', action: '添加号码' },
   ];
@@ -343,7 +343,7 @@ export default function Overview() {
       <div className="page-body">
         {allFailed && (
           <div className="ov-callout">
-            <Callout tone="danger">无法连接到服务器，数据暂时无法显示。请稍后点"刷新"重试。</Callout>
+            <Callout tone="danger">无法连接服务器，请稍后点击「刷新」重试。</Callout>
           </div>
         )}
 
@@ -367,12 +367,12 @@ export default function Overview() {
                 value={
                   stats ? <span className={stats.openGaps > 0 ? 'text-danger' : undefined}>{fmtNum(stats.openGaps)}</span> : '—'
                 }
-                foot={stats ? (stats.openGaps > 0 ? '客户问过、但资料里没有答案' : '暂无需要补充的问题') : null}
+                foot={stats ? (stats.openGaps > 0 ? '客户提问但资料中无答案' : '暂无待补充问题') : null}
                 to="/kb/gaps"
               />
               <MetricCell
                 loading={first}
-                label="待你处理"
+                label="待处理"
                 value={pending ? <span className={pending.length > 0 ? 'text-danger' : undefined}>{fmtNum(pending.length)}</span> : '—'}
                 to="/whatsapp/chats"
               />

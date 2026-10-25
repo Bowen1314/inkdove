@@ -28,7 +28,7 @@ import { usePolling } from '../../hooks/usePolling.js';
 import { useWindowFileDrop } from '../../hooks/useWindowFileDrop.js';
 
 // 规格（F15 前端）点名要求的页头说明，原文保留
-const INTRO = '客户要相关资料时，机器人会从这里挑文件直接发给客户。描述写得越清楚，挑得越准。';
+const INTRO = '客户索取资料时，机器人从此处选择文件发送。描述越准确，选择越准确。';
 const POLL_MS = 3000;
 
 const STATUS = {
@@ -154,7 +154,7 @@ function FileDrawer({ file, readOnly, onClose, onSaved, onDelete, onRegenerate, 
       <dt>发送次数</dt>
       <dd className="num">{fmtNum(file.sendCount ?? 0)}</dd>
       <dt>最近发送</dt>
-      <dd className="num">{file.lastSentAt ? fmtFull(file.lastSentAt) : '还没发过'}</dd>
+      <dd className="num">{file.lastSentAt ? fmtFull(file.lastSentAt) : '未发送'}</dd>
       <dt>知识库</dt>
       <dd>
         {file.kbSourceId ? (
@@ -201,7 +201,7 @@ function FileDrawer({ file, readOnly, onClose, onSaved, onDelete, onRegenerate, 
             ) : file.description ? (
               <div className="pre-wrap">{file.description}</div>
             ) : (
-              <div className="muted">还没有描述</div>
+              <div className="muted">暂无描述</div>
             )}
           </div>
           {file.tags?.length > 0 && (
@@ -273,7 +273,7 @@ function FileDrawer({ file, readOnly, onClose, onSaved, onDelete, onRegenerate, 
         <Field
           label="描述"
           htmlFor="sf-desc"
-          hint="写清这是什么文件、客户问什么时该发，例如：2026 全系列产品目录，含 A/B/C 三个系列的型号、规格和图片。"
+          hint="说明文件内容及适用场景，例如：2026 全系列产品目录，含 A/B/C 系列型号、规格和图片。"
           aside={
             pending ? (
               <span className="files-page__desc-pending">
@@ -299,18 +299,18 @@ function FileDrawer({ file, readOnly, onClose, onSaved, onDelete, onRegenerate, 
             rows={6}
             maxLength={2000}
             value={form.description}
-            placeholder={pending ? '正在自动生成，生成完会自动填进来；也可以直接手写' : '还没有描述'}
+            placeholder={pending ? '自动生成中，完成后自动填入；也可手动填写' : '暂无描述'}
             onChange={(e) => set('description', e.target.value)}
           />
         </Field>
-        <Field label="标签" htmlFor="sf-tags" hint="用逗号分隔，方便搜索，例如：目录，价格，A 系列">
+        <Field label="标签" htmlFor="sf-tags" hint="以逗号分隔，用于搜索，例如：目录，价格，A 系列">
           <input id="sf-tags" className="input" value={form.tags} onChange={(e) => set('tags', e.target.value)} />
         </Field>
         <div className="files-page__switch">
           <div className="files-page__switch-text">
             <div className="field__label">状态</div>
             <div className="field__hint">
-              {form.status === 'active' ? '启用：机器人可以把它发给客户' : '停用：机器人不会发送，会话里也不能手动发'}
+              {form.status === 'active' ? '启用：机器人可发送给客户' : '停用：机器人不发送，会话中也无法手动发送'}
             </div>
           </div>
           <Switch
@@ -383,7 +383,7 @@ export default function SendableTab({ header, onChanged }) {
     const big = all.filter((f) => isSendableFile(f) && f.size > MAX_SENDABLE_BYTES);
     const ok = all.filter((f) => isSendableFile(f) && f.size <= MAX_SENDABLE_BYTES);
     // 后端遇到一个不支持的格式会整批拒收，所以先在前端挑出来
-    if (bad.length) toast.error(`${names(bad)} 的格式不支持。${SENDABLE_FORMATS_TEXT}`);
+    if (bad.length) toast.error(`${names(bad)} 格式不支持。${SENDABLE_FORMATS_TEXT}`);
     if (big.length) toast.error(`${names(big)} 超过 50MB，无法上传`);
     if (!ok.length) {
       if (fileRef.current) fileRef.current.value = '';
@@ -399,7 +399,7 @@ export default function SendableTab({ header, onChanged }) {
         added.push(...(res || []));
       }
     } catch (e) {
-      toast.error(added.length ? `已上传 ${added.length} 个，其余失败：${fileErrorText(e)}` : fileErrorText(e));
+      toast.error(added.length ? `已上传 ${added.length} 个，其余上传失败：${fileErrorText(e)}` : fileErrorText(e));
     } finally {
       setUploading(null);
       if (fileRef.current) fileRef.current.value = '';
@@ -410,7 +410,7 @@ export default function SendableTab({ header, onChanged }) {
     clearFileCache();
     const toKb = added.filter((f) => f.kbSourceId).length;
     if (added.length === ok.length) {
-      toast.success(`已上传 ${added.length} 个文件${toKb ? `，其中 ${toKb} 个已同时加入知识库资料` : ''}`);
+      toast.success(`已上传 ${added.length} 个文件${toKb ? `，其中 ${toKb} 个已加入知识库资料` : ''}`);
     }
     if (toKb) onChanged?.();
   };
@@ -422,7 +422,7 @@ export default function SendableTab({ header, onChanged }) {
     if (f.descriptionStatus === 'manual' && f.description) {
       const ok = await confirm({
         title: '重新生成描述？',
-        message: '会用 AI 根据文件内容重新写一段，替换掉现在手写的描述。',
+        message: '将根据文件内容重新生成，并替换当前手动填写的描述。',
         confirmText: '重新生成',
       });
       if (!ok) return;
@@ -442,7 +442,7 @@ export default function SendableTab({ header, onChanged }) {
     setBusy({ id: f.id, action: 'status' });
     try {
       replaceFile(await api.updateFile(f.id, { status: next }));
-      toast.success(next === 'active' ? '已启用' : '已停用，机器人不会再发送它');
+      toast.success(next === 'active' ? '已启用' : '已停用');
     } catch {
       // 已提示
     } finally {
@@ -452,9 +452,9 @@ export default function SendableTab({ header, onChanged }) {
 
   const remove = async (f) => {
     const ok = await confirm({
-      title: '删除这个文件？',
-      message: `「${f.name}」删除后，机器人不会再发送它，会话里已发出的文件也无法再下载。${
-        f.kbSourceId ? '已加入知识库的资料会保留。' : ''
+      title: `删除文件「${f.name}」？`,
+      message: `删除后机器人不再发送该文件，会话中已发送的文件也无法下载。${
+        f.kbSourceId ? '已加入知识库的资料保留。' : ''
       }`,
       confirmText: '删除',
       danger: true,
@@ -618,7 +618,7 @@ export default function SendableTab({ header, onChanged }) {
                 <span>同时加入知识库</span>
               </label>
               <HintIcon label="同时加入知识库的说明">
-                上传时把文件内容也存一份到「知识库资料」，机器人能用它回答问题。图片不会加入。
+                上传时同时将文件内容存入「知识库资料」，供机器人回答问题。图片除外。
               </HintIcon>
             </div>
           )}
@@ -656,16 +656,16 @@ export default function SendableTab({ header, onChanged }) {
                 total === 0 ? (
                   <EmptyState
                     icon={FolderOpen}
-                    title="还没有可发送的文件"
+                    title="暂无可发送的文件"
                     desc={
                       isAdmin
-                        ? `产品目录、价目表、规格书、产品图片都可以。${SENDABLE_FORMATS_TEXT}，也可以直接把文件拖进来。`
-                        : '管理员上传后会显示在这里。'
+                        ? `适用于产品目录、价目表、规格书、产品图片等。${SENDABLE_FORMATS_TEXT}，支持拖拽上传。`
+                        : '管理员上传后显示于此。'
                     }
                     action={isAdmin && uploadButton}
                   />
                 ) : (
-                  <EmptyState compact title="没有匹配的文件" />
+                  <EmptyState compact title="无匹配的文件" />
                 )
               }
             />

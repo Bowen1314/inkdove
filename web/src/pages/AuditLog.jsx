@@ -60,7 +60,7 @@ const actorName = (a) => a?.name || a?.email || '（未知）';
 /** 一项改动的文字：前 → 后；密钥和长文本只有说明（已修改、已填写 N 字） */
 function changeText(c) {
   if (c.from !== undefined || c.to !== undefined) return `${c.from ?? ''} → ${c.to ?? ''}${c.note ? `（${c.note}）` : ''}`;
-  return c.secret ? `${c.note || '已修改'}（不记内容）` : c.note || '已修改';
+  return c.secret ? `${c.note || '已修改'}（不记录内容）` : c.note || '已修改';
 }
 
 function Result({ log }) {
@@ -343,7 +343,7 @@ export default function AuditLogPage() {
 
   let body;
   if (emptyAll) {
-    body = <EmptyState fill icon={ScrollText} title="还没有操作记录" desc="成员改设置、改知识库、分配会话、登录等操作都会记在这里。" />;
+    body = <EmptyState fill icon={ScrollText} title="暂无操作记录" desc="记录成员修改设置、编辑知识库、分配会话、登录等操作。" />;
   } else {
     body = (
       <>
@@ -373,7 +373,7 @@ export default function AuditLogPage() {
               empty={
                 <EmptyState
                   compact
-                  title="没有符合条件的记录"
+                  title="无符合条件的记录"
                   action={
                     <button type="button" className="btn btn--sm" onClick={clearFilters}>
                       清除筛选
@@ -395,11 +395,11 @@ export default function AuditLogPage() {
                   ) : (
                     <button type="button" className="btn btn--sm" onClick={loadMore} disabled={loadingMore}>
                       {loadingMore && <Spinner />}
-                      {loadingMore ? '正在加载…' : '加载更多'}
+                      {loadingMore ? '加载中…' : '加载更多'}
                     </button>
                   )
                 ) : (
-                  <span className="muted text-sm">没有更早的记录了</span>
+                  <span className="muted text-sm">无更早记录</span>
                 )}
               </div>
             )}

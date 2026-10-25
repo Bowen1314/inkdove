@@ -16,19 +16,19 @@ export const LLM_FORMATS = {
     label: 'OpenAI 兼容',
     baseUrl: 'https://api.openai.com/v1',
     model: '例如 gpt-4o-mini',
-    hint: '按服务商文档原样填写，通常以 /v1 结尾。系统会在后面加上 /chat/completions。',
+    hint: '按服务商文档填写，通常以 /v1 结尾，系统自动追加 /chat/completions。',
   },
   anthropic: {
     label: 'Anthropic',
     baseUrl: 'https://api.anthropic.com',
     model: '例如 claude-sonnet-4-5',
-    hint: '填 https://api.anthropic.com 即可。系统会在后面加上 /v1/messages（地址已以 /v1 结尾时只加 /messages）。',
+    hint: '填写 https://api.anthropic.com，系统自动追加 /v1/messages（已以 /v1 结尾时追加 /messages）。',
   },
   gemini: {
     label: 'Gemini 原生',
     baseUrl: 'https://generativelanguage.googleapis.com',
     model: '例如 gemini-2.5-flash',
-    hint: '填 https://generativelanguage.googleapis.com 即可。系统会在后面加上 /v1beta/models/模型名:generateContent。',
+    hint: '填写 https://generativelanguage.googleapis.com，系统自动追加 /v1beta/models/模型名:generateContent。',
   },
 };
 const fmtOf = (f) => LLM_FORMATS[f] || LLM_FORMATS.openai;
@@ -50,7 +50,7 @@ const LABELS = {
   format: '接口格式',
   baseUrl: '接口地址',
   model: '回复模型',
-  distillModel: '整理知识库用的模型',
+  distillModel: '知识库整理模型',
   apiKey: 'API 密钥',
 };
 
@@ -175,7 +175,7 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
         r?.ok
           ? {
               ok: true,
-              text: `连接成功：模型 ${r.model || draft.model} 响应正常，用时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
+              text: `连接成功：模型 ${r.model || draft.model} 响应正常，耗时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
             }
           : { ok: false, text: `连接失败：${r?.error || '原因未知'}` },
       );
@@ -202,7 +202,7 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
         setModels(list);
         setModelsResult({
           ok: true,
-          text: list.length ? `已获取 ${list.length} 个模型，点输入框选择` : '服务商没有返回模型，请手动填写',
+          text: list.length ? `已获取 ${list.length} 个模型，点击输入框选择` : '服务商未返回模型，请手动填写',
         });
       } else {
         setModels([]);
@@ -232,7 +232,7 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
             )}
             <button type="button" className="btn btn--sm" onClick={test} disabled={testing || saving}>
               {testing ? <Spinner /> : <PlugZap />}
-              {testing ? '正在测试…' : '测试连接'}
+              {testing ? '测试中…' : '测试连接'}
             </button>
           </div>
           <TestResult result={testResult} />
@@ -314,9 +314,9 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
 
         <Advanced>
           <SettingsRow
-            label="整理知识库用的模型"
+            label="知识库整理模型"
             htmlFor="llm-distill"
-            hint="留空则和回复模型相同。可选更强的模型，整理质量更好。"
+            hint="留空则与回复模型相同。选用更强的模型可提升整理质量。"
           >
             <Combobox
               id="llm-distill"
@@ -336,7 +336,7 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
           dirty={dirty}
           saving={saving}
           onDiscard={discard}
-          text={'有未保存的更改，点"测试连接"会先保存'}
+          text={'有未保存的更改，点击「测试连接」前将自动保存'}
         />
       </SettingsSection>
     </div>

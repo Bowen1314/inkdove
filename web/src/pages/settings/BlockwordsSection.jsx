@@ -55,23 +55,23 @@ const wordsOf = (text) =>
 function validate(text) {
   const lines = text.split('\n');
   for (let i = 0; i < lines.length; i += 1) {
-    if ([...lines[i].trim()].length > MAX_WORD_CHARS) return `第 ${i + 1} 行太长了，每个词最多 ${MAX_WORD_CHARS} 个字`;
+    if ([...lines[i].trim()].length > MAX_WORD_CHARS) return `第 ${i + 1} 行超长，每个词最多 ${MAX_WORD_CHARS} 个字`;
   }
   const n = wordsOf(text).length;
-  if (n > MAX_WORDS) return `最多 ${MAX_WORDS} 个词，现在有 ${n} 个`;
+  if (n > MAX_WORDS) return `最多 ${MAX_WORDS} 个词，当前 ${n} 个`;
   return '';
 }
 
 const AI_CHECK_HELP =
-  '查哪些：后台发的消息和文件说明、通知号码上转发的话、外联开场消息、机器人的自动回复、机主在手机上发的。' +
-  '一键翻译（AI 翻译）和自动回复在翻译、审核的那一次模型调用里顺带查，不多调模型；其余的发出后再查：同一个会话停下来 30 秒后，把这一阵发的一起查，' +
-  '每个会话这一阵多一次模型调用（不算进会话每天的模型次数）。24 小时内查过一模一样的话不再查。撤回的、没发出去的、没有文字的不查，打开之前发的也不查。' +
-  '要查的消息和它前面的几条（包括客户的话）会发给「AI 模型」里设置的回复模型，所以要先配好回复模型才能打开。';
+  '检查范围：后台发送的消息和文件说明、通知号码转发内容、外联开场消息、自动回复、机主手机发送的消息。' +
+  '一键翻译（AI 翻译）和自动回复在同一次模型调用中完成检查，不额外调用；其余消息在会话静默 30 秒后批量检查，' +
+  '每批增加一次模型调用（不计入会话每日模型次数）。24 小时内相同内容不重复检查；已撤回、未发出、无文字及开启前发送的消息不检查。' +
+  '待查消息及其前几条上下文（含客户消息）将发送至「AI 模型」中的回复模型，需先配置回复模型。';
 
 const RULES_HELP =
-  '不分大小写和全角半角。中文、日文、韩文、泰文按字面匹配，夹在别的字中间也算（「坏词」会命中「这个坏词啊」），所以单个字容易误拦；' +
-  '英文等用空格分词的文字按整词匹配（cat 不会命中 category），夹着符号接数字的型号（SB-200）也不算。' +
-  '故意拆开的写法照样拦：中间夹符号（b.a.d、坏*词）、零宽字符，或者一个字母一个字母用空格隔开（b a d）；夹着逗号、句号这类断句标点或换行的不算。';
+  '不区分大小写和全角半角。中文、日文、韩文、泰文按字面匹配，包含即命中（「坏词」命中「这个坏词啊」），单字易误拦；' +
+  '英文等以空格分词的语言按整词匹配（cat 不命中 category），带符号和数字的型号（SB-200）不命中。' +
+  '可识别拆分写法：夹符号（b.a.d、坏*词）、零宽字符、逐字母空格（b a d）；以逗号、句号等标点或换行分隔的不算。';
 
 export default function BlockwordsSection({ settings, onSaved }) {
   const [draft, setDraft, base] = useSliceDraft(settings.blockwords, toDraft);
@@ -134,8 +134,8 @@ export default function BlockwordsSection({ settings, onSaved }) {
     const room = Math.max(0, MAX_WORDS - have.size);
     const take = fresh.slice(0, room);
     if (take.length) setText(draft.text.replace(/\s+$/, '') + (draft.text.trim() ? '\n' : '') + take.join('\n'));
-    if (take.length < fresh.length) toast.error(`词表最多 ${MAX_WORDS} 个词，有 ${fresh.length - take.length} 个没加进去`);
-    else if (take.length) toast.success(`加了 ${take.length} 个词，检查后点保存才生效`);
+    if (take.length < fresh.length) toast.error(`词表最多 ${MAX_WORDS} 个词，${fresh.length - take.length} 个未添加`);
+    else if (take.length) toast.success(`已添加 ${take.length} 个词，确认后点击保存生效`);
   };
 
   return (
@@ -143,7 +143,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="屏蔽词"
-        desc="防止骂人之类的话发给客户。只查我方发出去的文字，客户发来的不查。开着屏蔽词或 AI 发言检查时，业务员的输入框下面会提示「发出的消息会做合规检查」。"
+        desc="拦截发送给客户的不当用语。仅检查我方发出的文字，不检查客户消息。开启任一检查后，业务员输入框下方显示合规检查提示。"
         onSubmit={onSubmit}
         actions={<ResetButton onClick={() => setDraft({ ...DEFAULTS })} disabled={sameDraft(draft, DEFAULTS)} />}
       >
@@ -152,7 +152,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
             inline
             label="发出前检查屏蔽词"
             htmlFor="bw-enabled"
-            hint="业务员和管理员在后台发的消息、文件说明、一键翻译的原文，机器人的自动回复，通知号码上转发的话，外联的开场消息，发出前都查一遍：有屏蔽词就不发，管理员马上收到弹窗提醒。机主在手机上发的拦不住，只提醒。"
+            hint="后台发送的消息、文件说明、一键翻译原文、自动回复、通知号码转发内容、外联开场消息在发送前检查；命中则不发送，并立即弹窗提醒管理员。机主手机发送的消息无法拦截，仅提醒。"
           >
             <Switch
               id="bw-enabled"
@@ -172,7 +172,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
               {...fieldProps('bw-words', wordsErr)}
               className="textarea"
               rows={10}
-              placeholder="每行一个"
+              placeholder="每行一个词"
               value={draft.text}
               onChange={(e) => setText(e.target.value)}
             />
@@ -192,7 +192,7 @@ export default function BlockwordsSection({ settings, onSaved }) {
             inline
             label="AI 发言检查"
             htmlFor="bw-ai-check"
-            hint="用 AI 看发给客户的话里有没有辱骂、威胁、歧视、骚扰、粗鲁这类说法。只提醒管理员，从不拦、不改任何消息：严重的弹窗，轻微的只记在下面的命中记录里。和上面的屏蔽词互不相干，可以只开一个。"
+            hint="由 AI 识别发给客户的消息中的辱骂、威胁、歧视、骚扰、粗鲁等内容。仅提醒管理员，不拦截、不修改消息：严重的弹窗提醒，轻微的记入命中记录。与屏蔽词相互独立，可单独开启。"
             help={AI_CHECK_HELP}
           >
             <Switch
@@ -337,8 +337,8 @@ function ExpandModal({ open, onClose, words, onAdd }) {
     >
       <div className="blockwords-expand">
         <p className="muted text-sm">
-          用回复模型按种子词生成更多的词：同义的说法，谐音、拼音缩写、拆字、错拼、夹符号这些变体，以及选中语言里的说法。会产生一次模型调用费用。
-          挑好的词只加到输入框里，检查后点保存才生效。
+          使用回复模型按种子词生成同义词、谐音、拼音缩写、拆字、错拼、夹符号等变体，以及所选语言的对应说法。产生一次模型调用费用。
+          选中的词添加至输入框，确认后点击保存生效。
         </p>
 
         <div className="field">
@@ -361,12 +361,12 @@ function ExpandModal({ open, onClose, words, onAdd }) {
 
         <div className="field">
           <div className="field__label-row">
-            <span className="field__label">要生成的语言</span>
+            <span className="field__label">生成语言</span>
             <span className="muted num text-sm">
               {languages.length} / {MAX_LANGUAGES}
             </span>
           </div>
-          <div className="choice-list blockwords-expand__langs" role="group" aria-label="要生成的语言">
+          <div className="choice-list blockwords-expand__langs" role="group" aria-label="生成语言">
             {BLOCKWORD_LANGUAGES.map((l) => {
               const on = languages.includes(l.value);
               return (
@@ -389,7 +389,7 @@ function ExpandModal({ open, onClose, words, onAdd }) {
 
         {busy && !candidates && (
           <div className="muted hstack">
-            <Spinner /> 正在生成，可能要几十秒…
+            <Spinner /> 生成中，约需数十秒…
           </div>
         )}
 
@@ -404,7 +404,7 @@ function ExpandModal({ open, onClose, words, onAdd }) {
               selected={picked}
               onSelectedChange={setPicked}
               pageSize={100}
-              empty={<EmptyState compact title="没有新的词" desc="生成的词都已经在列表里了，可以换几个种子词或语言再试。" />}
+              empty={<EmptyState compact title="无新词" desc="生成的词均已在列表中，请更换种子词或语言。" />}
             />
           </div>
         )}
@@ -545,10 +545,10 @@ function HitHistory() {
     { key: 'ts', header: '时间', shrink: true, render: (h) => <TimeText iso={h.ts} /> },
     {
       key: 'who',
-      header: '谁',
+      header: '发送方',
       render: (h) => <CellText primary={blockwordWho(h)} secondary={blockwordSourceLabel(h.source)} />,
     },
-    { key: 'where', header: '号和会话', hide: 'md', render: (h) => <span className="ellipsis">{blockwordWhere(h)}</span> },
+    { key: 'where', header: '号码和会话', hide: 'md', render: (h) => <span className="ellipsis">{blockwordWhere(h)}</span> },
     {
       key: 'words',
       header: '屏蔽词 / 问题',
@@ -598,7 +598,7 @@ function HitHistory() {
           <span className="hstack nowrap">
             <button type="button" className="btn btn--sm" onClick={() => ack(h)} disabled={!!acking}>
               {acking === `${h.id}:ack` && <Spinner />}
-              知道了
+              标记已处理
             </button>
             {isAi && fpButton(h)}
           </span>
@@ -607,12 +607,12 @@ function HitHistory() {
     },
   ];
 
-  const emptyTitle = status || detector || who || range ? '没有符合条件的记录' : '还没有命中记录';
+  const emptyTitle = status || detector || who || range ? '无符合条件的记录' : '暂无命中记录';
 
   return (
     <SettingsSection
       title="命中记录"
-      desc="谁在什么时候发了带屏蔽词的话，以及 AI 发言检查发现的问题（AI 看错了可以标「误报」）。原文只有管理员能看到；点一行看原文。"
+      desc="屏蔽词命中及 AI 发言检查发现的问题，AI 误判可标记为「误报」。原文仅管理员可见，点击行查看。"
     >
       <div className="blockword-table">
         <TableToolbar count={data && !error ? total : undefined} end={loading && data ? <Spinner /> : null}>
@@ -635,7 +635,7 @@ function HitHistory() {
               aria-label="按严重程度筛选"
             />
           )}
-          <Select size="sm" className="select--auto" value={who} onChange={filter(setWho)} options={whoOptions} aria-label="按人筛选" />
+          <Select size="sm" className="select--auto" value={who} onChange={filter(setWho)} options={whoOptions} aria-label="按发送方筛选" />
           <Select size="sm" className="select--auto" value={range} onChange={filter(setRange)} options={RANGE_FILTERS} aria-label="按时间筛选" />
         </TableToolbar>
         {error ? (

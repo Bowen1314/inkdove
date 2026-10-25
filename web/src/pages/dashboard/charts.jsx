@@ -217,7 +217,7 @@ export function Heatmap({ grid }) {
     }),
   );
   const summary = busiest
-    ? `时段热力图，最忙的是${WEEKDAYS[busiest.d]} ${pad2(busiest.h)}:00，${busiest.v} 条客户消息`
+    ? `时段热力图，消息最多的时段为${WEEKDAYS[busiest.d]} ${pad2(busiest.h)}:00，${busiest.v} 条客户消息`
     : '时段热力图';
 
   return (

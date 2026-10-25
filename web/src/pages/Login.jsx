@@ -56,9 +56,9 @@ export default function Login() {
       const from = location.state?.from;
       navigate(from && from !== '/login' ? from : '/', { replace: true });
     } catch (err) {
-      if (err.code === 'bad_credentials') setError('邮箱或密码不正确，请重新输入');
-      else if (err.code === 'account_disabled') setError('这个账号已被停用，请联系管理员');
-      else if (err.status === 429) setError('尝试次数太多，请一分钟后再试');
+      if (err.code === 'bad_credentials') setError('邮箱或密码错误');
+      else if (err.code === 'account_disabled') setError('该帐号已停用，请联系管理员');
+      else if (err.status === 429) setError('尝试次数过多，请 1 分钟后重试');
       else setError(err.message || '登录失败，请稍后重试');
       setBusy(false);
     }
@@ -69,7 +69,7 @@ export default function Login() {
   const describedBy = error ? 'login-error' : undefined;
 
   return (
-    <AuthShell title={`登录 ${displayTitle}`} foot="忘记密码请联系管理员，在「成员」里给你生成重置密码链接。">
+    <AuthShell title={`登录 ${displayTitle}`} foot="忘记密码请联系管理员，由管理员在「成员」中生成重置链接。">
       <form className="vstack auth__form" onSubmit={submit} noValidate>
         <Field label="邮箱" htmlFor="login-email">
           <input
@@ -112,7 +112,7 @@ export default function Login() {
 
         <button className="btn btn--primary btn--lg btn--block" type="submit" disabled={!email.trim() || !password || busy}>
           {busy ? <Spinner /> : <LogIn />}
-          {busy ? '正在登录…' : '登录'}
+          {busy ? '登录中…' : '登录'}
         </button>
       </form>
     </AuthShell>

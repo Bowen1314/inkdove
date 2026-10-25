@@ -40,7 +40,7 @@ function remembered() {
 
 /** 提问、重试失败时显示的话 */
 function askErrorText(err, isAdmin) {
-  if (err?.code === 'llm_not_configured') return isAdmin ? '还没有配置 AI 模型，助手用不了' : '管理员还没有配置 AI 模型，助手暂时用不了';
+  if (err?.code === 'llm_not_configured') return isAdmin ? '未配置 AI 模型，助手不可用' : '管理员未配置 AI 模型，助手暂不可用';
   return err?.message || '提问失败，请重试';
 }
 
@@ -51,7 +51,7 @@ function RefChip({ r, onPeek }) {
       return (
         <span className="ref-chip is-muted">
           <MessagesSquare aria-hidden="true" />
-          <span className="ref-chip__name">看不到的会话</span>
+          <span className="ref-chip__name">无权限查看的会话</span>
         </span>
       );
     }
@@ -78,14 +78,14 @@ function Steps({ steps, running }) {
           {s.status === 'running' ? <Spinner /> : s.status === 'error' ? <X aria-hidden="true" /> : <Check aria-hidden="true" />}
           <span>
             {s.label}
-            {s.status === 'error' && <span className="sr-only">（没查到）</span>}
+            {s.status === 'error' && <span className="sr-only">（未查到）</span>}
           </span>
         </li>
       ))}
       {pending && (
         <li className="ov-assistant__step is-running">
           <Spinner />
-          <span>{steps.length ? '正在整理回答…' : '正在思考…'}</span>
+          <span>{steps.length ? '整理回答中…' : '思考中…'}</span>
         </li>
       )}
     </ul>
@@ -121,7 +121,7 @@ function Turn({ m, canRetry, retrying, onRetry, onPeek, isAdmin }) {
                   <div className="ov-assistant__error-actions">
                     {showSettings && (
                       <Link to="/settings" className="btn btn--link">
-                        去设置
+                        前往设置
                       </Link>
                     )}
                     {canRetry && (
@@ -134,7 +134,7 @@ function Turn({ m, canRetry, retrying, onRetry, onPeek, isAdmin }) {
                 )
               }
             >
-              {m.error || '没有答出来，请重试'}
+              {m.error || '回答失败，请重试'}
             </Callout>
           </>
         )}
@@ -162,7 +162,7 @@ function HistoryButton({ chats, currentId, onOpen, onDelete }) {
             <Spinner /> 加载中…
           </div>
         ) : chats.length === 0 ? (
-          <div className="muted text-sm">还没有对话</div>
+          <div className="muted text-sm">暂无对话</div>
         ) : (
           <ul className="ov-assistant__history">
             {chats.map((c) => (
@@ -359,7 +359,7 @@ export default function Assistant() {
   };
 
   const removeChat = async (c) => {
-    const ok = await confirm({ title: '删除这个对话？', message: `「${c.title}」会被删掉，找不回来。`, danger: true, confirmText: '删除' });
+    const ok = await confirm({ title: '删除该对话？', message: `「${c.title}」删除后无法恢复。`, danger: true, confirmText: '删除' });
     if (!ok) return;
     try {
       await api.assistantDeleteChat(c.id);
@@ -400,8 +400,8 @@ export default function Assistant() {
     body = (
       <EmptyState
         compact
-        title="问问系统里的数据"
-        desc="会话、客户、线索、知识库和产品资料都能问；只查不改，也不会替你发消息。"
+        title="查询系统数据"
+        desc="支持查询会话、客户、线索、知识库和产品资料；只读，不修改数据、不发送消息。"
         action={
           <div className="ov-assistant__samples">
             {SAMPLES.map((s) => (
@@ -468,7 +468,7 @@ export default function Assistant() {
               isAdmin &&
               askError.code === 'llm_not_configured' && (
                 <Link to="/settings" className="btn btn--link">
-                  去设置
+                  前往设置
                 </Link>
               )
             }
@@ -482,11 +482,11 @@ export default function Assistant() {
             className="ov-assistant__input"
             rows={1}
             maxLength={2000}
-            placeholder="问点什么，比如：这周哪些客户问了报价？"
+            placeholder="输入问题，例如：本周哪些客户询问了报价？"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            aria-label="问 AI 助手"
+            aria-label="向 AI 助手提问"
           />
           <div className="ov-assistant__bar">
             <span className="ov-assistant__hint">
@@ -494,7 +494,7 @@ export default function Assistant() {
               {left !== null && (
                 <>
                   {' · '}
-                  <span className={left === 0 ? 'text-danger' : undefined}>今天还能问 {left} 次</span>
+                  <span className={left === 0 ? 'text-danger' : undefined}>今日剩余 {left} 次</span>
                 </>
               )}
             </span>

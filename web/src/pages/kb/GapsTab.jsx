@@ -61,7 +61,7 @@ function GapAnswer({ gap, value, onChange, busy, onSubmit, onDismiss }) {
           className="textarea"
           rows={3}
           autoFocus
-          placeholder="在这里写下答案。保存后会生成一条常见问答，客户再问时机器人就能回答。"
+          placeholder="填写答案，保存后生成一条常见问答供机器人使用。"
           value={value}
           disabled={!!busy}
           onChange={(e) => onChange(e.target.value)}
@@ -74,7 +74,7 @@ function GapAnswer({ gap, value, onChange, busy, onSubmit, onDismiss }) {
         />
       </Field>
       <div className="kb-gap__actions">
-        <Tooltip content="这个问题不需要回答">
+        <Tooltip content="该问题无需回答">
           <button type="button" className="btn btn--ghost btn--sm" onClick={onDismiss} disabled={!!busy}>
             {busy === 'dismiss' ? <Spinner /> : <EyeOff />}
             忽略
@@ -124,7 +124,7 @@ export default function GapsTab({ onChanged }) {
     setBusy({ id: gap.id, kind: 'answer' });
     try {
       await api.answerGap(gap.id, answer);
-      toast.success('已加入知识库，机器人之后能回答这个问题了');
+      toast.success('已加入知识库');
       clearEntryCache();
       remove(gap.id);
     } catch {
@@ -139,7 +139,7 @@ export default function GapsTab({ onChanged }) {
     setBusy({ id: gap.id, kind: 'dismiss' });
     try {
       await api.dismissGap(gap.id);
-      toast.info('已忽略这个问题');
+      toast.info('已忽略');
       remove(gap.id);
     } catch {
       // 已提示
@@ -233,12 +233,12 @@ export default function GapsTab({ onChanged }) {
         )}
         empty={
           filtering ? (
-            <EmptyState title="没有匹配的问题" />
+            <EmptyState title="无匹配的问题" />
           ) : (
             <EmptyState
               icon={CheckCircle2}
-              title="没有待补充的问题"
-              desc="整理知识库时发现的缺口，以及客户问到但资料里没有答案的问题，会列在这里。"
+              title="暂无待补充的问题"
+              desc="此处列出整理时发现的缺口，以及客户提问但资料中无答案的问题。"
             />
           )
         }

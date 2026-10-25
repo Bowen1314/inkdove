@@ -152,7 +152,7 @@ export default function Dashboard() {
               value={accountId}
               onChange={setAccountId}
               options={accountOptions}
-              aria-label="按号筛选"
+              aria-label="按号码筛选"
             />
           )}
         </div>
@@ -167,8 +167,8 @@ export default function Dashboard() {
         <EmptyState
           fill
           icon={ShieldOff}
-          title="没有权限"
-          desc="看板只有管理员能看。需要的话请联系管理员。"
+          title="无权限"
+          desc="看板仅管理员可查看。"
           action={
             <Link className="btn btn--primary" to="/">
               返回概览
@@ -178,7 +178,7 @@ export default function Dashboard() {
       );
     } else {
       const err =
-        error.status === 404 ? { message: '服务器还没有提供看板数据，请确认后台已经更新到最新版本。' } : error;
+        error.status === 404 ? { message: '服务器未提供看板数据，请确认服务端已更新至最新版本。' } : error;
       body = <ErrorState title="看板数据加载失败" error={err} onRetry={() => setReloadKey((k) => k + 1)} />;
     }
   } else if (!data) {

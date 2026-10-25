@@ -62,13 +62,13 @@ export function fileIcon(f) {
  */
 const ERROR_TEXT = {
   unsupported_file_type: `文件格式不支持。${SENDABLE_FORMATS_TEXT}`,
-  file_too_large: '单个文件不能超过 50MB',
-  http_413: '单个文件不能超过 50MB',
+  file_too_large: '单个文件不得超过 50MB',
+  http_413: '单个文件不得超过 50MB',
   upload_error: '上传失败，请重试',
-  llm_not_configured: '还没有配置模型，请先到设置页填写',
-  image_disabled: '图片要先在设置里开启图片识别才能自动生成描述',
-  file_disabled: '这个文件已停用，启用后才能发送',
-  account_deleted: '这个会话所属的号已删除，不能再发送',
+  llm_not_configured: '未配置模型，请前往设置页配置',
+  image_disabled: '需在设置中开启图片识别后才能自动生成描述',
+  file_disabled: '该文件已停用，启用后方可发送',
+  account_deleted: '该会话所属号码已删除，无法发送',
 };
 
 export function fileErrorText(err) {

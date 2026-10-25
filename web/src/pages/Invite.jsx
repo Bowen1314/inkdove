@@ -45,9 +45,9 @@ export default function InvitePage() {
 
   const isReset = info?.kind === 'reset';
   const errs = {
-    name: !isReset && !name.trim() ? '请填写你的名字' : '',
+    name: !isReset && !name.trim() ? '请填写姓名' : '',
     password: password.length < MIN_PASSWORD ? `密码至少 ${MIN_PASSWORD} 个字符` : '',
-    again: again !== password ? '两次输入的密码不一样' : '',
+    again: again !== password ? '两次输入的密码不一致' : '',
   };
   const invalid = Object.values(errs).some(Boolean);
   const show = (k) => (touched ? errs[k] : '');
@@ -70,8 +70,8 @@ export default function InvitePage() {
 
   if (loadError) {
     return (
-      <AuthShell title="暂时打不开这个链接">
-        <p className="muted">{loadError.message || '请稍后刷新重试'}</p>
+      <AuthShell title="链接无法打开">
+        <p className="muted">{loadError.message || '请刷新后重试'}</p>
       </AuthShell>
     );
   }
@@ -80,7 +80,7 @@ export default function InvitePage() {
     return (
       <AuthShell>
         <div className="hstack muted" aria-busy="true">
-          <Spinner /> 正在验证链接…
+          <Spinner /> 验证链接中…
         </div>
       </AuthShell>
     );
@@ -90,9 +90,9 @@ export default function InvitePage() {
     return (
       <AuthShell title="链接已失效，请联系管理员重新发送">
         <div className="vstack auth__form">
-          <p className="muted">邀请和重置链接 7 天内有效，并且只能用一次。</p>
+          <p className="muted">链接有效期 7 天，仅可使用一次。</p>
           <Link to="/login" className="btn btn--block">
-            去登录
+            返回登录
           </Link>
         </div>
       </AuthShell>
@@ -109,7 +109,7 @@ export default function InvitePage() {
           <dd>{roleLabel(info.role)}</dd>
         </dl>
         {!isReset && (
-          <Field label="你的名字" htmlFor="inv-name" hint="会显示在你发出的人工回复上。" error={show('name')}>
+          <Field label="姓名" htmlFor="inv-name" hint="显示在人工回复中。" error={show('name')}>
             <input
               {...fieldProps('inv-name', show('name'))}
               className="input"
@@ -130,7 +130,7 @@ export default function InvitePage() {
             onChange={(e) => setPassword(e.target.value)}
           />
         </Field>
-        <Field label="再输一次密码" htmlFor="inv-again" error={show('again')}>
+        <Field label="确认密码" htmlFor="inv-again" error={show('again')}>
           <input
             {...fieldProps('inv-again', show('again'))}
             className="input"
@@ -143,7 +143,7 @@ export default function InvitePage() {
         {error && <Callout tone="danger">{error}</Callout>}
         <button className="btn btn--primary btn--lg btn--block" type="submit" disabled={busy}>
           {busy ? <Spinner /> : <Check />}
-          {busy ? '正在提交…' : isReset ? '保存并登录' : '完成并进入后台'}
+          {busy ? '提交中…' : isReset ? '保存并登录' : '完成并进入后台'}
         </button>
       </form>
     </AuthShell>

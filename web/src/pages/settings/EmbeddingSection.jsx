@@ -18,12 +18,12 @@ const FORMATS = {
   openai: {
     label: 'OpenAI 兼容',
     baseUrl: 'https://api.openai.com/v1',
-    hint: '按服务商文档原样填写，通常以 /v1 结尾，系统会在后面加上 /embeddings。OpenAI、Voyage、Jina、硅基流动都是这个格式；本机 Ollama 填 http://127.0.0.1:11434/v1（Docker 里换成 Ollama 所在主机的地址），不用密钥。',
+    hint: '按服务商文档填写，通常以 /v1 结尾，系统自动追加 /embeddings。适用于 OpenAI、Voyage、Jina、硅基流动；本机 Ollama 填写 http://127.0.0.1:11434/v1（Docker 中改为 Ollama 所在主机地址），无需密钥。',
   },
   gemini: {
     label: 'Gemini 原生',
     baseUrl: 'https://generativelanguage.googleapis.com',
-    hint: '填 https://generativelanguage.googleapis.com 即可，系统会在后面加上 /v1beta/models/模型名:batchEmbedContents。',
+    hint: '填写 https://generativelanguage.googleapis.com，系统自动追加 /v1beta/models/模型名:batchEmbedContents。',
   },
 };
 const FORMAT_OPTIONS = Object.entries(FORMATS).map(([value, f]) => ({ value, label: f.label }));
@@ -40,7 +40,7 @@ const FIELDS = {
   'embedding.apiKey': 'apiKey',
 };
 const LABELS = {
-  enabled: '按意思搜知识库',
+  enabled: '语义检索',
   source: '向量服务',
   format: '接口格式',
   baseUrl: '接口地址',
@@ -48,9 +48,9 @@ const LABELS = {
   apiKey: 'API 密钥',
 };
 const CODES = {
-  embedding_unsupported_for_format: { field: 'source', text: 'Anthropic 没有向量接口，请选「单独配置」' },
-  embedding_base_url_required: { field: 'baseUrl', text: '开启时必须填写接口地址' },
-  embedding_model_required: { field: 'model', text: '开启时必须填写向量模型' },
+  embedding_unsupported_for_format: { field: 'source', text: 'Anthropic 不提供向量接口，请选择「单独配置」' },
+  embedding_base_url_required: { field: 'baseUrl', text: '开启时需填写接口地址' },
+  embedding_model_required: { field: 'model', text: '开启时需填写向量模型' },
 };
 
 /** 回复模型是 Anthropic 时不能用「和回复模型同一个」，草稿直接放在「单独配置」 */
@@ -80,18 +80,18 @@ function stateOf(s) {
   const done = s.activeEntries > 0 && s.embeddedEntries + (s.skippedEntries || 0) >= s.activeEntries;
   switch (s.state) {
     case 'misconfigured':
-      return { tone: 'danger', text: `没配好：${s.configError || '请检查下面的设置'}` };
+      return { tone: 'danger', text: `配置有误：${s.configError || '请检查下方设置'}` };
     case 'loading':
-      return { tone: 'info', pulse: true, text: '正在读取已算好的向量' };
+      return { tone: 'info', pulse: true, text: '正在加载已有向量' };
     case 'running':
-      return { tone: 'info', pulse: true, text: '正在计算' };
+      return { tone: 'info', pulse: true, text: '计算中' };
     case 'waiting':
       return { tone: 'warning', text: `向量接口暂时不可用，${s.retryAt ? `${fmtHm(s.retryAt)} ` : ''}自动重试` };
     case 'stopped':
-      return { tone: 'danger', text: '已停下：改好设置后点「重试」' };
+      return { tone: 'danger', text: '已停止：修正设置后点击「重试」' };
     default:
-      if (!s.activeEntries) return { tone: 'neutral', text: '知识库还没有条目' };
-      return done ? { tone: 'success', text: '已算完' } : { tone: 'neutral', text: '等待计算' };
+      if (!s.activeEntries) return { tone: 'neutral', text: '知识库暂无条目' };
+      return done ? { tone: 'success', text: '已完成' } : { tone: 'neutral', text: '等待计算' };
   }
 }
 
@@ -135,8 +135,8 @@ export default function EmbeddingSection({ settings, onSaved }) {
     !needsTest || shownResult?.ok
       ? ''
       : shownResult
-        ? '测试没通过，改好后再测试，成功了才能保存'
-        : `${base.enabled ? '改了向量服务' : '开启前'}要先点「测试」，测试成功才能保存`;
+        ? '测试未通过，请修正后重新测试，测试成功后可保存'
+        : `${base.enabled ? '向量服务已变更' : '开启前'}需点击「测试」，测试成功后可保存`;
   const fmt = FORMATS[draft.format] || FORMATS.openai;
   const errOf = (k) => (fieldErr?.field === k ? fieldErr.text : '');
   const set = (k, v) => {
@@ -234,7 +234,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
         r?.ok
           ? {
               ok: true,
-              text: `测试成功：模型 ${r.model || draft.model} 返回 ${fmtNum(r.dims)} 维向量，用时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
+              text: `测试成功：模型 ${r.model || draft.model} 返回 ${fmtNum(r.dims)} 维向量，耗时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
               conn: testedConn,
             }
           : { ok: false, text: `测试失败：${r?.error || '原因未知'}`, conn: testedConn },
@@ -250,7 +250,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
     const ok = await confirm({
       title: '重新计算全部向量？',
       message:
-        '会清掉已经算好的向量，用当前的向量模型把全部条目重新算一遍，会重新调用向量接口（按服务商的价格计费）。算完之前按意思搜暂时用不上，回复照常用关键词检索。',
+        '将清除现有向量并用当前模型重新计算全部条目，按服务商价格计费。完成前语义检索不可用，回复仍使用关键词检索。',
       confirmText: '重新计算',
       danger: true,
     });
@@ -287,22 +287,22 @@ export default function EmbeddingSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="向量检索（可选）"
-        desc="知识库很大时，按意思找相关条目：客户用别的语言或换个说法问，也能找到。知识库不超过约 4 万字时每次都全部带进回复，用不上这个。"
+        desc="按语义检索知识库条目，支持跨语言和不同表述。知识库少于约 4 万字时全部内容随回复提交，无需开启。"
         onSubmit={onSubmit}
         actions={<ResetButton onClick={restoreDefaults} />}
       >
         <SettingsRow
           inline
-          label="按意思搜知识库"
+          label="语义检索"
           htmlFor="em-enabled"
-          hint="开启后后台把每个条目算成向量，回复时和关键词检索一起用；向量已覆盖九成以上条目时，不再调回复模型改写检索词。"
+          hint="开启后为每个条目计算向量，回复时与关键词检索结合使用；向量覆盖九成以上条目后，不再调用回复模型改写检索词。"
         >
-          <Switch id="em-enabled" checked={draft.enabled} onChange={(v) => set('enabled', v)} label="按意思搜知识库" />
+          <Switch id="em-enabled" checked={draft.enabled} onChange={(v) => set('enabled', v)} label="语义检索" />
         </SettingsRow>
 
         <SettingsRow
           label="向量服务"
-          hint="开启后，知识库条目的内容和客户消息会发给这个服务计算向量；用本机的 Ollama 时数据不出本机。"
+          hint="知识库条目和客户消息将发送至该服务计算向量；使用本机 Ollama 时数据不离开本机。"
         >
           <div className="choice-list" role="radiogroup" aria-label="向量服务">
             <label className="choice">
@@ -316,11 +316,11 @@ export default function EmbeddingSection({ settings, onSaved }) {
                 onChange={() => set('source', 'llm')}
               />
               <span className="choice__text">
-                <span>和回复模型同一个</span>
+                <span>与回复模型相同</span>
                 <span className="choice__desc">
                   {anthropic
-                    ? '回复模型是 Anthropic，Anthropic 没有向量接口，请选「单独配置」。'
-                    : `用「AI 模型」里填的接口地址和 API 密钥（${llmFormatLabel(llmFormat)}），只需要再填向量模型。`}
+                    ? '回复模型为 Anthropic，不提供向量接口，请选择「单独配置」。'
+                    : `使用「AI 模型」中的接口地址和 API 密钥（${llmFormatLabel(llmFormat)}），仅需填写向量模型。`}
                 </span>
               </span>
             </label>
@@ -335,7 +335,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
               />
               <span className="choice__text">
                 <span>单独配置</span>
-                <span className="choice__desc">另填一个服务：OpenAI、本机 Ollama、Voyage、Jina、硅基流动（OpenAI 兼容）或 Gemini。</span>
+                <span className="choice__desc">支持 OpenAI、本机 Ollama、Voyage、Jina、硅基流动（OpenAI 兼容）或 Gemini。</span>
               </span>
             </label>
           </div>
@@ -369,7 +369,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
               <FieldError id="em-base">{errOf('baseUrl')}</FieldError>
             </SettingsRow>
 
-            <SettingsRow label="API 密钥" htmlFor="em-key" hint="本机 Ollama 不用填。">
+            <SettingsRow label="API 密钥" htmlFor="em-key" hint="本机 Ollama 无需填写。">
               <div className="settings-page__secret">
                 <SecretField
                   id="em-key"
@@ -392,20 +392,20 @@ export default function EmbeddingSection({ settings, onSaved }) {
         <SettingsRow
           label="向量模型"
           htmlFor="em-model"
-          hint="例如 OpenAI 的 text-embedding-3-small、Gemini 的 gemini-embedding-001、Ollama 的 bge-m3 或 nomic-embed-text。换模型或服务后会全部重新计算。"
+          hint="示例：text-embedding-3-small。更换模型或服务后将全部重新计算。"
         >
           <div className="settings-page__inline">
             <input
               {...fieldProps('em-model', errOf('model'))}
               className="input input--mono"
-              placeholder="向量模型的名字"
+              placeholder="模型名称"
               value={draft.model}
               onChange={(e) => set('model', e.target.value)}
               spellCheck={false}
             />
             <button type="button" className="btn" onClick={test} disabled={testing || !draft.model.trim()}>
               {testing ? <Spinner /> : <PlugZap />}
-              {testing ? '正在测试…' : '测试'}
+              {testing ? '测试中…' : '测试'}
             </button>
           </div>
           <FieldError id="em-model">{errOf('model')}</FieldError>
@@ -413,7 +413,7 @@ export default function EmbeddingSection({ settings, onSaved }) {
         </SettingsRow>
 
         {em.enabled && (
-          <SettingsRow label="计算进度" hint="条目增删改后几秒内自动补算。按意思搜只用算好的条目，没算好的照常靠关键词检索。">
+          <SettingsRow label="计算进度" hint="条目变更后数秒内自动更新向量；未完成计算的条目仍使用关键词检索。">
             <div className="vstack embedding-status">
               <div className="settings-page__test">
                 {st ? (
@@ -454,8 +454,8 @@ export default function EmbeddingSection({ settings, onSaved }) {
                     <div className={`progress__bar${status.state === 'stopped' ? ' progress__bar--danger' : ''}`} style={{ width: `${pct}%` }} />
                   </div>
                   <span className="muted text-sm num">
-                    已算 {fmtNum(embedded)} / {fmtNum(total)} 条
-                    {status.skippedEntries ? `，${fmtNum(status.skippedEntries)} 条算不了已跳过` : ''}
+                    已计算 {fmtNum(embedded)} / {fmtNum(total)} 条
+                    {status.skippedEntries ? `，${fmtNum(status.skippedEntries)} 条无法计算已跳过` : ''}
                   </span>
                 </div>
               )}

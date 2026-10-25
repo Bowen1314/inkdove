@@ -76,7 +76,7 @@ export function SaveToKbModal({ conv, convId, message, question, onClose }) {
         sourceRefs: [{ sourceId: null, sourceName: `会话：${who}`, quote: String(message.text || '').slice(0, 200) }],
       });
       clearEntryCache();
-      toast.success('已存进知识库，机器人之后能回答类似问题了');
+      toast.success('已存入知识库');
       onClose();
     } catch {
       // 已提示
@@ -89,7 +89,7 @@ export function SaveToKbModal({ conv, convId, message, question, onClose }) {
     <Modal
       open={!!message}
       onClose={onClose}
-      title="存进知识库"
+      title="存入知识库"
       width={560}
       footer={
         <>
@@ -107,18 +107,18 @@ export function SaveToKbModal({ conv, convId, message, question, onClose }) {
         <dl className="kv kb-save__src">
           {question && (
             <>
-              <dt>客户问</dt>
+              <dt>客户提问</dt>
               <dd className="pre-wrap">{question}</dd>
             </>
           )}
-          <dt>人工答</dt>
+          <dt>人工回复</dt>
           <dd className="pre-wrap">{message.text}</dd>
         </dl>
       )}
 
       {state === 'loading' && (
         <div className="hstack muted kb-save__wait" aria-live="polite">
-          <Spinner /> 正在改写成通用的知识条目，并去掉客户个人信息…
+          <Spinner /> 正在改写为通用条目并移除客户个人信息…
         </div>
       )}
       {state === 'error' && <ErrorState compact title="改写失败" error={error} onRetry={load} />}
@@ -131,7 +131,7 @@ export function SaveToKbModal({ conv, convId, message, question, onClose }) {
             save();
           }}
         >
-          <p className="field__hint field--full">已改写成通用说法并去掉了客户个人信息，保存前请再检查一遍。</p>
+          <p className="field__hint field--full">已改写为通用表述并移除客户个人信息，保存前请核对。</p>
           <Field label="类型" htmlFor="kbs-type">
             <Select id="kbs-type" value={form.type} onChange={(v) => set('type', v)} options={ENTRY_TYPES} />
           </Field>

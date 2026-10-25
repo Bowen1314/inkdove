@@ -29,8 +29,8 @@ export function mergeAccount(account, res) {
   return account;
 }
 
-const PRIVATE_OK = '私人号和 WhatsApp Business 号都可以扫码连接。';
-const PRIVATE_TIP = '如果用的是私人号，建议在「回复」里设置白名单或黑名单，避免机器人回复亲友。';
+const PRIVATE_OK = '支持个人号与 WhatsApp Business 号。';
+const PRIVATE_TIP = '个人号建议在「回复」中设置白名单或黑名单，避免机器人回复亲友。';
 
 /** 连接状态行：状态圆点，下面一行最近收到消息的时间 */
 function StatusRow({ label, account, pollFailed }) {
@@ -40,7 +40,7 @@ function StatusRow({ label, account, pollFailed }) {
     <SettingsRow inline label={label} hint={status.lastWebhookAt ? `最近收到消息：${fmtTime(status.lastWebhookAt)}` : null}>
       {pollFailed && (
         <StatusDot tone="warning" size="sm">
-          暂时连不上服务器，正在自动重试…
+          无法连接服务器，正在自动重试…
         </StatusDot>
       )}
       <StatusDot tone={st.tone} pulse={st.pulse}>
@@ -78,12 +78,12 @@ function validateProxy(d) {
   const errors = {};
   const host = d.host.trim();
   const port = d.port.trim();
-  if (host.includes('://')) errors.host = '只填地址或域名，不要带 http:// 之类的前缀';
-  else if (/\s/.test(host)) errors.host = '地址里不能有空格';
-  else if (d.enabled && !d.useGlobal && !host) errors.host = '开启代理时必须填写地址';
+  if (host.includes('://')) errors.host = '仅填写 IP 或域名，不含 http:// 等前缀';
+  else if (/\s/.test(host)) errors.host = '地址不能包含空格';
+  else if (d.enabled && !d.useGlobal && !host) errors.host = '开启代理时须填写地址';
   if (port) {
     const n = Number(port);
-    if (!Number.isInteger(n) || n < 1 || n > 65535) errors.port = '端口是 1–65535 之间的整数';
+    if (!Number.isInteger(n) || n < 1 || n > 65535) errors.port = '端口须为 1–65535 的整数';
   } else if (d.enabled && !d.useGlobal) {
     errors.port = '请填写端口';
   }
@@ -139,7 +139,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
       // 出错的字段在折叠区里：展开让用户看到
       const details = wrapRef.current?.querySelector('details');
       if (details) details.open = true;
-      toast.error('代理设置有误，请检查标红的项目');
+      toast.error('代理设置有误，请检查标红项');
       return false;
     }
     const patch = {
@@ -176,7 +176,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
 
   const onSave = async () => {
     setTestResult(null);
-    if (await save()) toast.success(connected ? '代理设置已保存，WhatsApp 连接正在重启' : '已保存');
+    if (await save()) toast.success(connected ? '已保存，WhatsApp 连接正在重启' : '已保存');
   };
 
   const clearPassword = async () => {
@@ -211,7 +211,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
   const summary = !proxy.enabled
     ? '未开启'
     : proxy.useGlobal
-      ? '用全局代理'
+      ? '使用全局代理'
       : `${protoLabel(proxy.protocol)} · ${proxy.host || '未填地址'}${proxy.port ? `:${proxy.port}` : ''}`;
   const own = !draft.useGlobal;
 
@@ -223,13 +223,13 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
             inline
             label="使用代理"
             htmlFor={`px-enabled-${id}`}
-            hint="WhatsApp 会看到这个代理的 IP；不填就用服务器本身的网络。"
+            hint="WhatsApp 将看到代理 IP；关闭时使用服务器自身网络。"
           >
             <Switch id={`px-enabled-${id}`} checked={draft.enabled} onChange={(v) => set('enabled', v)} label="使用代理" />
           </SettingsRow>
 
-          <SettingsRow label="用哪个代理">
-            <div className="choice-list" role="radiogroup" aria-label="用哪个代理">
+          <SettingsRow label="代理来源">
+            <div className="choice-list" role="radiogroup" aria-label="代理来源">
               <label className="choice">
                 <input
                   type="radio"
@@ -239,8 +239,8 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
                   onChange={() => set('useGlobal', false)}
                 />
                 <span className="choice__text">
-                  <span>单独填一个代理</span>
-                  <span className="choice__desc">这个号自己的 HTTP 或 SOCKS 代理，填在下面。</span>
+                  <span>独立代理</span>
+                  <span className="choice__desc">该号码专用的 HTTP 或 SOCKS 代理。</span>
                 </span>
               </label>
               <label className="choice">
@@ -253,11 +253,11 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
                   onChange={() => set('useGlobal', true)}
                 />
                 <span className="choice__text">
-                  <span>用全局代理</span>
+                  <span>全局代理</span>
                   <span className="choice__desc">
                     {globalOn === false && !draft.useGlobal
-                      ? '全局代理没有开启：请先在「设置 → 代理」里开启。'
-                      : '经「设置 → 代理」里的机场节点连 WhatsApp，和墨鸽自己的请求用同一个出口。'}
+                      ? '全局代理未开启，请先在「设置 → 代理」中开启。'
+                      : '经「设置 → 代理」中的节点连接 WhatsApp，与墨鸽自身请求共用出口。'}
                   </span>
                 </span>
               </label>
@@ -278,12 +278,12 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
               <SettingsRow
                 label="地址"
                 htmlFor={`px-host-${id}`}
-                hint="填 127.0.0.1 指的是容器自己，要用服务器本机上的代理请填 host.docker.internal"
+                hint="127.0.0.1 指容器本身；使用服务器本机代理请填写 host.docker.internal"
               >
                 <input
                   id={`px-host-${id}`}
                   className="input input--mono"
-                  placeholder="例如 1.2.3.4 或 proxy.example.com"
+                  placeholder="proxy.example.com"
                   value={draft.host}
                   onChange={(e) => set('host', e.target.value)}
                   spellCheck={false}
@@ -306,7 +306,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
                   inputMode="numeric"
                   min={1}
                   max={65535}
-                  placeholder={`例如 ${PROXY_DEFAULT_PORT[draft.protocol]}`}
+                  placeholder={`${PROXY_DEFAULT_PORT[draft.protocol]}`}
                   value={draft.port}
                   onChange={(e) => set('port', e.target.value)}
                   aria-invalid={errOf('port') ? true : undefined}
@@ -319,7 +319,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
                 )}
               </SettingsRow>
 
-              <SettingsRow label="用户名（可选）" htmlFor={`px-user-${id}`} hint="代理不需要登录就留空。">
+              <SettingsRow label="用户名（可选）" htmlFor={`px-user-${id}`} hint="代理无需认证时留空。">
                 <input
                   id={`px-user-${id}`}
                   className="input"
@@ -350,16 +350,16 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
             label="连通测试"
             hint={
               !draft.enabled
-                ? '打开"使用代理"后才能测试。'
+                ? '开启「使用代理」后可测试。'
                 : dirty
-                  ? '有未保存的修改；点"测试代理"会先保存。'
-                  : '用已保存的代理连一次外网，显示出口 IP 和延迟。'
+                  ? '有未保存的修改，测试前将自动保存。'
+                  : '使用已保存的代理访问外网，显示出口 IP 与延迟。'
             }
           >
             <div className="numbers-test">
               <button type="button" className="btn" onClick={test} disabled={testing || saving || !draft.enabled}>
                 {testing ? <Spinner /> : <PlugZap />}
-                {testing ? '正在测试…' : '测试代理'}
+                {testing ? '测试中…' : '测试代理'}
               </button>
               {testResult && (
                 <div className="test-result" role="status">
@@ -380,7 +380,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
 
       {saveError && (
         <div className="numbers-block">
-          <Callout tone="danger">代理设置没有保存：{saveError}</Callout>
+          <Callout tone="danger">代理设置保存失败：{saveError}</Callout>
         </div>
       )}
 
@@ -389,7 +389,7 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
         saving={saving}
         onDiscard={discard}
         onSave={onSave}
-        text={connected ? '有未保存的更改，保存后会重启 WhatsApp 连接' : '有未保存的更改'}
+        text={connected ? '有未保存的更改，保存后将重启 WhatsApp 连接' : '有未保存的更改'}
       />
     </>
   );
@@ -503,7 +503,7 @@ function WahaPanel({ account, setAccount }) {
   const logout = async () => {
     const ok = await confirm({
       title: '退出 WhatsApp 登录？',
-      message: `退出后「${account.name}」将无法收发消息，需要重新扫码才能恢复。手机上的聊天记录不受影响。`,
+      message: `退出后「${account.name}」将无法收发消息，需重新扫码恢复。手机上的聊天记录不受影响。`,
       confirmText: '退出登录',
       danger: true,
     });
@@ -521,7 +521,7 @@ function WahaPanel({ account, setAccount }) {
     }
   };
 
-  const meName = status.me?.pushName || '已登录账号';
+  const meName = status.me?.pushName || '已登录帐号';
 
   return (
     <SettingsSection title="连接">
@@ -540,7 +540,7 @@ function WahaPanel({ account, setAccount }) {
       )}
 
       {state === 'working' ? (
-        <SettingsRow label="已登录账号">
+        <SettingsRow label="已登录帐号">
           <div className="numbers-me">
             <Avatar name={status.me?.pushName || status.me?.id} />
             <div className="numbers-me__text">
@@ -579,27 +579,27 @@ function WahaPanel({ account, setAccount }) {
                 </button>
               </div>
               <button type="button" className="btn btn--link btn--sm" onClick={() => setPair(null)}>
-                换号码
+                更换号码
               </button>
             </div>
             <div className="numbers-qr__steps">
-              <h3>用手机号码关联</h3>
+              <h3>使用手机号码关联</h3>
               <ol className="numbers-qr__list">
                 <li>打开手机上的 WhatsApp</li>
                 <li>
                   进入 <strong>设置</strong>（iPhone）或右上角 <strong>⋮ 菜单</strong>（安卓）→ <strong>已关联设备</strong>
                 </li>
                 <li>
-                  点 <strong>关联新设备</strong>，再点 <strong>改用手机号码关联</strong>
+                  点击 <strong>关联新设备</strong>，再点击 <strong>改用手机号码关联</strong>
                 </li>
-                <li>输入这里显示的配对码</li>
+                <li>输入此处显示的配对码</li>
               </ol>
-              <div className="field__hint">配对码约 2 分钟内有效，过期请重新获取。关联成功后这里会自动变为"已连接"。</div>
+              <div className="field__hint">配对码有效期约 2 分钟，过期请重新获取。关联成功后状态自动变为「已连接」。</div>
             </div>
           </div>
         </div>
       ) : mode === 'code' ? (
-        <SettingsRow label="手机号码" htmlFor={`pair-phone-${account.id}`} hint="带国家码，例如 +86 138 0000 0000">
+        <SettingsRow label="手机号码" htmlFor={`pair-phone-${account.id}`} hint="含国家区号，如 +86 138 0000 0000">
           <form
             className="numbers-phone"
             onSubmit={(e) => {
@@ -624,7 +624,7 @@ function WahaPanel({ account, setAccount }) {
             />
             <button type="submit" className="btn btn--primary" disabled={busy === 'code'}>
               {busy === 'code' ? <Spinner /> : <KeyRound />}
-              {busy === 'code' ? '正在获取…' : '获取配对码'}
+              {busy === 'code' ? '获取中…' : '获取配对码'}
             </button>
           </form>
           {phoneError && (
@@ -651,23 +651,23 @@ function WahaPanel({ account, setAccount }) {
                 <div className="numbers-qr__placeholder" role="status">
                   <Spinner size={20} />
                   <span>
-                    {state === 'starting' ? '正在启动，马上就会显示二维码…' : qrState === 'error' ? '二维码生成中…' : '加载中…'}
+                    {state === 'starting' ? '正在启动，即将显示二维码…' : qrState === 'error' ? '二维码生成中…' : '加载中…'}
                   </span>
                 </div>
               )}
             </div>
             <div className="numbers-qr__steps">
-              <h3>用手机扫码登录</h3>
+              <h3>使用手机扫码登录</h3>
               <ol className="numbers-qr__list">
                 <li>打开手机上的 WhatsApp</li>
                 <li>
                   进入 <strong>设置</strong>（iPhone）或右上角 <strong>⋮ 菜单</strong>（安卓）→ <strong>已关联设备</strong>
                 </li>
                 <li>
-                  点 <strong>关联新设备</strong>，扫描二维码
+                  点击 <strong>关联新设备</strong>，扫描二维码
                 </li>
               </ol>
-              <div className="field__hint">二维码每隔几秒自动刷新，扫码成功后这里会自动变为"已连接"。</div>
+              <div className="field__hint">二维码每隔数秒自动刷新，扫码成功后状态自动变为「已连接」。</div>
               <div className="field__hint">
                 {PRIVATE_OK}
                 {PRIVATE_TIP}
@@ -686,8 +686,8 @@ function WahaPanel({ account, setAccount }) {
           }
           hint={
             state === 'failed'
-              ? '连接出了问题，可以尝试重新连接；还连不上才会退出登录重来，那时需要重新扫码。'
-              : '点击按钮生成二维码，然后用手机 WhatsApp 扫码关联。'
+              ? '连接异常，可尝试重新连接；仍失败时将退出登录，需重新扫码。'
+              : '点击按钮生成二维码，使用手机 WhatsApp 扫码关联。'
           }
         >
           <button type="button" className="btn btn--primary" onClick={start} disabled={busy === 'start'}>
@@ -713,11 +713,11 @@ function WahaReadOnly({ account }) {
     <SettingsSection title="连接">
       <StatusRow label="连接状态" account={account} />
       {state === 'working' ? (
-        <SettingsRow label="已登录账号">
+        <SettingsRow label="已登录帐号">
           <div className="numbers-me">
             <Avatar name={status.me?.pushName || status.me?.id} />
             <div className="numbers-me__text">
-              <span className="text-strong ellipsis">{status.me?.pushName || '已登录账号'}</span>
+              <span className="text-strong ellipsis">{status.me?.pushName || '已登录帐号'}</span>
               <span className="muted text-sm mono ellipsis">{status.me?.id || ''}</span>
             </div>
           </div>
@@ -729,7 +729,7 @@ function WahaReadOnly({ account }) {
               <Callout tone="danger">{status.error}</Callout>
             </div>
           )}
-          <div className="numbers-block muted">这个号还没连上。扫码连接由管理员操作，有问题请联系管理员。</div>
+          <div className="numbers-block muted">该号码未连接。扫码连接由管理员操作，如有问题请联系管理员。</div>
         </>
       )}
     </SettingsSection>
@@ -827,7 +827,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
       <SettingsSection title="连接">
         <StatusRow label="接口状态" account={account} />
         {errorBlock}
-        <div className="numbers-block muted">这个号通过 Meta 官方接口接入，接口凭证由管理员配置。</div>
+        <div className="numbers-block muted">该号码通过 Meta 官方接口接入，凭证由管理员配置。</div>
       </SettingsSection>
     );
   }
@@ -840,7 +840,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
       <SettingsRow
         label="Webhook 回调地址"
         htmlFor={`meta-hook-${account.id}`}
-        hint="每个号各有一个地址。在 Meta 开发者后台 → WhatsApp → 配置 → Webhook 中填写这个地址，并订阅 messages 字段。"
+        hint="每个号码地址独立。在 Meta 开发者后台 → WhatsApp → 配置 → Webhook 中填写该地址，并订阅 messages 字段。"
       >
         <div className="numbers-inline">
           <input
@@ -859,7 +859,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
           id="meta-pnid"
           className="input input--mono"
           value={form.phoneNumberId}
-          placeholder="在 WhatsApp → API 设置 页面可以找到"
+          placeholder="见 WhatsApp → API 设置页面"
           onChange={(e) => set('phoneNumberId', e.target.value)}
           autoComplete="off"
         />
@@ -880,7 +880,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
       <SettingsRow label="应用密钥（App secret）" htmlFor="meta-secret">
         <SecretField
           id="meta-secret"
-          hint="用于校验消息确实来自 Meta，未设置时不会接收任何消息。"
+          hint="用于校验消息来源；未设置时不接收任何消息。"
           isSet={!!meta.appSecretSet}
           value={appSecret}
           onChange={setAppSecret}
@@ -889,7 +889,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
         />
       </SettingsRow>
 
-      <SettingsRow label="验证令牌（Verify token）" htmlFor="meta-verify" hint="自己设定的一串字符，在 Meta 后台填写相同的值。">
+      <SettingsRow label="验证令牌（Verify token）" htmlFor="meta-verify" hint="自定义字符串，需与 Meta 后台填写的值一致。">
         <div className="numbers-inline">
           <input
             id="meta-verify"
@@ -905,7 +905,7 @@ function MetaPanel({ account, setAccount, isAdmin }) {
         </div>
       </SettingsRow>
 
-      <SettingsRow label="接口版本" htmlFor="meta-ver" hint="一般保持默认即可。">
+      <SettingsRow label="接口版本" htmlFor="meta-ver" hint="通常保持默认。">
         <input
           id="meta-ver"
           className="input input--mono"
@@ -937,7 +937,7 @@ function LinePanel({ account, setAccount, isAdmin }) {
   const webhookUrl = line.webhookUrl || '';
   // LINE 只接受 https 的回调地址，发图片、文件给的也是这个域名下的地址
   const httpsOk = /^https:\/\//i.test(webhookUrl);
-  const idError = channelId.trim() && !/^\d+$/.test(channelId.trim()) ? 'Channel ID 只能是数字' : null;
+  const idError = channelId.trim() && !/^\d+$/.test(channelId.trim()) ? 'Channel ID 须为数字' : null;
   const dirty = channelId !== (line.channelId || '') || channelSecret.trim() !== '' || accessToken.trim() !== '';
 
   const discard = () => {
@@ -992,8 +992,8 @@ function LinePanel({ account, setAccount, isAdmin }) {
   );
   const limits = (
     <div className="numbers-block muted text-sm">
-      LINE 和 WhatsApp 不一样的地方：只能给加了好友的人发消息，客户没有手机号；客户来消息 1 分钟内的回复不算每月额度，
-      更晚的回复、人工发的消息按推送算进每月额度；发不了文件，图片以外的文件会发成下载链接；已发出的消息不能撤回；不能外联群发。
+      与 WhatsApp 的差异：仅可向好友发送消息，客户无手机号；客户消息 1 分钟内的回复不计入每月额度，超时回复和人工消息按推送计入；
+      不支持发送文件，图片以外的文件以下载链接发送；已发消息不可撤回；不支持外联。
     </div>
   );
 
@@ -1003,7 +1003,7 @@ function LinePanel({ account, setAccount, isAdmin }) {
       <SettingsSection title="连接">
         <StatusRow label="接口状态" account={account} />
         {errorBlock}
-        <div className="numbers-block muted">这个号是 LINE 官方帐号，接口凭证由管理员配置。</div>
+        <div className="numbers-block muted">该号码为 LINE 官方帐号，凭证由管理员配置。</div>
         {limits}
       </SettingsSection>
     );
@@ -1016,8 +1016,8 @@ function LinePanel({ account, setAccount, isAdmin }) {
       {!httpsOk && (
         <div className="numbers-block">
           <Callout tone="warning">
-            LINE 只接受 https:// 开头的回调地址，现在的地址收不到消息，也发不了图片和文件。请按部署文档（docs/deploy.md）给墨鸽配好域名和
-            HTTPS 反向代理，并把 INKDOVE_PUBLIC_BASE_URL 设成 https:// 开头的公网地址。
+            LINE 仅接受 https:// 回调地址，当前地址无法接收消息或发送图片和文件。请按部署文档（docs/deploy.md）配置域名和
+            HTTPS 反向代理，并将 INKDOVE_PUBLIC_BASE_URL 设为 https:// 公网地址。
           </Callout>
         </div>
       )}
@@ -1025,7 +1025,7 @@ function LinePanel({ account, setAccount, isAdmin }) {
       <SettingsRow
         label="Webhook URL"
         htmlFor={`line-hook-${account.id}`}
-        hint="每个号各有一个地址。在 LINE Developers Console → 这个 channel 的 Messaging API 页面填到 Webhook URL，并打开「Use webhook」。"
+        hint="每个号码地址独立。在 LINE Developers Console → 该 channel 的 Messaging API 页面填入 Webhook URL，并开启「Use webhook」。"
       >
         <div className="numbers-inline">
           <input
@@ -1039,13 +1039,13 @@ function LinePanel({ account, setAccount, isAdmin }) {
         </div>
       </SettingsRow>
 
-      <SettingsRow label="Channel ID" htmlFor="line-channel-id" hint="在 Basic settings 页面。">
+      <SettingsRow label="Channel ID" htmlFor="line-channel-id" hint="见 Basic settings 页面。">
         <input
           id="line-channel-id"
           className="input input--mono"
           value={channelId}
           inputMode="numeric"
-          placeholder="一串数字"
+          placeholder="纯数字"
           onChange={(e) => setChannelId(e.target.value)}
           autoComplete="off"
           aria-invalid={idError ? true : undefined}
@@ -1061,7 +1061,7 @@ function LinePanel({ account, setAccount, isAdmin }) {
       <SettingsRow label="Channel secret" htmlFor="line-secret">
         <SecretField
           id="line-secret"
-          hint="在 Basic settings 页面。用于校验消息确实来自 LINE，未设置时不会接收任何消息。"
+          hint="见 Basic settings 页面。用于校验消息来源；未设置时不接收任何消息。"
           isSet={!!line.channelSecretSet}
           value={channelSecret}
           onChange={setChannelSecret}
@@ -1073,7 +1073,7 @@ function LinePanel({ account, setAccount, isAdmin }) {
       <SettingsRow label="Channel access token" htmlFor="line-token">
         <SecretField
           id="line-token"
-          hint="在 Messaging API 页面最下面签发长期的（long-lived）token。"
+          hint="在 Messaging API 页面底部签发长期（long-lived）token。"
           isSet={!!line.accessTokenSet}
           value={accessToken}
           onChange={setAccessToken}
@@ -1097,7 +1097,7 @@ function TgRight({ on, children }) {
   return (
     <StatusDot tone={on ? 'success' : 'neutral'} size="sm">
       {children}
-      {on ? '：已打开' : '：没打开'}
+      {on ? '：已开启' : '：未开启'}
     </StatusDot>
   );
 }
@@ -1118,7 +1118,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
   const [rebinding, setRebinding] = useState(false);
   const [pollFailed, setPollFailed] = useState(false);
 
-  const tokenError = token.trim() && !TG_TOKEN_RE.test(token.trim()) ? '格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段' : null;
+  const tokenError = token.trim() && !TG_TOKEN_RE.test(token.trim()) ? '格式错误：应为 @BotFather 提供的完整 token（数字:字母串）' : null;
   const dirty = token.trim() !== '';
 
   usePolling(
@@ -1154,7 +1154,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
   const clearToken = async () => {
     const ok = await confirm({
       title: '清除机器人 token？',
-      message: `清除后「${account.name}」不再收发 Telegram 消息，已有的聊天记录不受影响。填回同一个机器人的 token 后接着用。`,
+      message: `清除后「${account.name}」停止收发 Telegram 消息，已有聊天记录不受影响。重新填写同一机器人的 token 即可恢复。`,
       confirmText: '清除',
       danger: true,
     });
@@ -1173,9 +1173,9 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
 
   const rebind = async () => {
     const ok = await confirm({
-      title: '换号主？',
-      message: '会清掉现在绑定的号主，生成新的绑定链接。重新绑定之前，这个号收不到也发不出 Telegram 消息。',
-      confirmText: '换号主',
+      title: '更换号主？',
+      message: '将解除当前号主并生成新的绑定链接。重新绑定前，该号码无法收发 Telegram 消息。',
+      confirmText: '更换号主',
       danger: true,
     });
     if (!ok) return;
@@ -1183,7 +1183,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
     try {
       const res = await api.telegramRebind(account.id);
       if (res && res.id) setAccount(res);
-      toast.success('已清掉号主，请用新的绑定链接重新绑定');
+      toast.success('已解除号主，请使用新的绑定链接重新绑定');
     } catch {
       // 已提示
     } finally {
@@ -1202,7 +1202,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
   const botRow = botLink && (
     <SettingsRow
       label="机器人"
-      hint={isBiz ? '这个机器人只给这个号用，不要再给别的程序。' : '客户打开这个链接、或者在 Telegram 里搜索机器人的用户名就能来聊。'}
+      hint={isBiz ? '该机器人仅供该号码使用，勿用于其他程序。' : '客户打开链接或在 Telegram 中搜索机器人用户名即可发起会话。'}
     >
       <div className="numbers-inline">
         <a className="mono" href={botLink} target="_blank" rel="noreferrer">
@@ -1220,9 +1220,9 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
         label="号主"
         hint={
           tg.owner
-            ? '只收号主本人在「聊天自动化」里连上的消息。'
+            ? '仅接收号主本人在「聊天自动化」中关联的消息。'
             : isAdmin
-              ? '用这个私人号本人的 Telegram 打开链接，点「开始」（Start），机器人会回一句「已绑定到墨鸽」。链接只能用一次，不要发给别人。'
+              ? '使用该私人号本人的 Telegram 打开链接，点击「开始」（Start），机器人回复「已绑定到墨鸽」即完成。链接仅限使用一次，请勿转发。'
               : null
         }
       >
@@ -1232,7 +1232,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
             {isAdmin && (
               <button type="button" className="btn btn--sm" onClick={rebind} disabled={rebinding}>
                 {rebinding ? <Spinner /> : <RefreshCw />}
-                换号主
+                更换号主
               </button>
             )}
           </div>
@@ -1242,24 +1242,24 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
             <CopyButton text={tg.bindLink} size="md" />
           </div>
         ) : (
-          <span className="muted">{isAdmin ? '连上 Telegram 后显示绑定链接…' : '还没有绑定，由管理员绑定'}</span>
+          <span className="muted">{isAdmin ? '连接 Telegram 后显示绑定链接…' : '未绑定，由管理员绑定'}</span>
         )}
       </SettingsRow>
       <SettingsRow
         label="聊天自动化"
-        hint="在 Telegram 的「设置 → 聊天自动化」（英文界面是 Settings → Chat Automation）里添加这个机器人。要撤回消息，再打开删除消息的权限；要标已读，再打开读消息的权限。"
+        hint="在 Telegram「设置 → 聊天自动化」（英文界面：Settings → Chat Automation）中添加该机器人。撤回消息需开启删除消息权限，标记已读需开启读取消息权限。"
       >
         {!c ? (
-          <span className="muted">还没有连上</span>
+          <span className="muted">未连接</span>
         ) : !c.enabled ? (
           <StatusDot tone="neutral">已断开{c.at ? `（${fmtTime(c.at)}）` : ''}</StatusDot>
         ) : !c.byOwner ? (
-          <StatusDot tone="warning">连上的是「{c.name || '另一个帐号'}」，不是号主</StatusDot>
+          <StatusDot tone="warning">已连接帐号「{c.name || '其他帐号'}」，非号主</StatusDot>
         ) : (
           <div className="vstack" style={{ gap: 'var(--sp-1)' }}>
-            <StatusDot tone="success">已连上</StatusDot>
+            <StatusDot tone="success">已连接</StatusDot>
             <TgRight on={c.canReply}>回复消息</TgRight>
-            <TgRight on={c.canRead}>标已读</TgRight>
+            <TgRight on={c.canRead}>标记已读</TgRight>
             <TgRight on={c.canDelete}>删除消息（撤回）</TgRight>
           </div>
         )}
@@ -1270,9 +1270,9 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
   const limits = (
     <div className="numbers-block muted text-sm">
       {isBiz
-        ? '和 WhatsApp 不一样的地方：客户看到的是你本人在回复；机器人只能回复 24 小时内给你发过消息的私聊，不能外联群发；客户没有手机号，白名单和黑名单用不上；你在手机上发的消息也会同步进墨鸽，记为手机回复；客户发来的文件超过 20MB 时下载不了。'
-        : '和 WhatsApp 不一样的地方：客户要先在 Telegram 里给机器人发消息，机器人不能主动找人，不能外联群发；客户没有手机号，白名单和黑名单用不上；机器人不能把消息标成已读；发出的消息 48 小时内能撤回；客户发来的文件超过 20MB 时下载不了。'}
-      服务器访问不了 Telegram 时，请在「设置 → 代理」里开启全局代理。
+        ? '与 WhatsApp 的差异：客户看到的回复来自本人帐号；机器人仅可回复 24 小时内发来消息的私聊，不支持外联；客户无手机号，白名单和黑名单不适用；手机上发送的消息同步至墨鸽，记为手机回复；客户发来的文件超过 20MB 时无法下载。'
+        : '与 WhatsApp 的差异：客户需先向机器人发送消息，机器人无法主动发起会话，不支持外联；客户无手机号，白名单和黑名单不适用；不支持标记已读；已发消息 48 小时内可撤回；客户发来的文件超过 20MB 时无法下载。'}
+      服务器无法访问 Telegram 时，请在「设置 → 代理」中开启全局代理。
     </div>
   );
 
@@ -1282,7 +1282,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
       <SettingsSection title="连接">
         <StatusRow label="连接状态" account={account} pollFailed={pollFailed} />
         {errorBlock}
-        {!tokenSet && <div className="numbers-block muted">这个号还没有填机器人 token，由管理员配置。</div>}
+        {!tokenSet && <div className="numbers-block muted">该号码未填写机器人 token，由管理员配置。</div>}
         {botRow}
         {bizRows}
         {limits}
@@ -1297,8 +1297,8 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
       {isBiz && (
         <div className="numbers-block">
           <Callout tone="warning">
-            {'墨鸽会收到这个 Telegram 号的私聊消息（「聊天自动化」里排除的聊天除外），亲友发来的也会进来；开着自动回复时，机器人以你本人的身份回复。' +
-              '建议在「聊天自动化」里排除联系人、只管新聊天，或者这个号用人工回复。'}
+            {'墨鸽将接收该 Telegram 帐号的全部私聊消息（「聊天自动化」中排除的聊天除外），包括亲友消息；开启自动回复时，机器人以本人身份回复。' +
+              '建议在「聊天自动化」中排除联系人、仅处理新聊天，或对该号码使用人工回复。'}
           </Callout>
         </div>
       )}
@@ -1306,8 +1306,8 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
         <div className="numbers-block">
           <Callout tone="info">
             {isBiz
-              ? '第 1 步：在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，再在 Bot Settings → Business Mode 里打开 Business Mode，把 token 填到下面。第 2 步：保存后这里出现绑定链接，用这个私人号本人的 Telegram 打开。第 3 步：在 Telegram 的「设置 → 聊天自动化」里添加这个机器人，打开回复消息的权限。'
-              : '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，把它给的 token 填到下面。墨鸽主动去 Telegram 取消息，不需要公网地址。'}
+              ? '1. 在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，在 Bot Settings → Business Mode 中开启 Business Mode，将 token 填入下方。2. 保存后显示绑定链接，使用该私人号本人的 Telegram 打开。3. 在 Telegram「设置 → 聊天自动化」中添加该机器人，并开启回复消息权限。'
+              : '在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，将返回的 token 填入下方。墨鸽主动拉取消息，无需公网地址。'}
           </Callout>
         </div>
       )}
@@ -1317,8 +1317,8 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
           id={`tg-token-${account.id}`}
           hint={
             isBiz
-              ? '在 @BotFather 里选这个机器人 → API Token。换成别的机器人时，要重新绑定号主、重新在「聊天自动化」里添加。'
-              : '在 @BotFather 里选这个机器人 → API Token。'
+              ? '在 @BotFather 中选择该机器人 → API Token。更换机器人后需重新绑定号主，并在「聊天自动化」中重新添加。'
+              : '在 @BotFather 中选择该机器人 → API Token。'
           }
           error={tokenError}
           isSet={tokenSet}
@@ -1345,7 +1345,7 @@ function TgUserMe({ me, children }) {
     <div className="numbers-me">
       <Avatar name={me?.name || me?.username} />
       <div className="numbers-me__text">
-        <span className="text-strong ellipsis">{me?.name || '已登录的帐号'}</span>
+        <span className="text-strong ellipsis">{me?.name || '已登录帐号'}</span>
         {me?.username && <span className="muted text-sm mono ellipsis">@{me.username}</span>}
       </div>
       {children}
@@ -1354,8 +1354,8 @@ function TgUserMe({ me, children }) {
 }
 
 const TGUSER_LIMITS =
-  '和 WhatsApp 不一样的地方：客户没有手机号，白名单和黑名单用不上；只收私聊，群、频道、机器人发来的不收；第一次登录不导入以前的聊天，登录以后的新消息才进墨鸽；' +
-  '你在手机上发的消息也会同步进墨鸽，记为手机回复；发出的消息随时可以撤回；不能外联群发；客户发来的文件超过存储上限时不下载。服务器访问不了 Telegram 时，请在「设置 → 代理」里开启全局代理。';
+  '与 WhatsApp 的差异：客户无手机号，白名单和黑名单不适用；仅接收私聊，不接收群组、频道和机器人消息；首次登录不导入历史聊天，仅接收登录后的新消息；' +
+  '手机上发送的消息同步至墨鸽，记为手机回复；已发消息可随时撤回；不支持外联；客户发来的文件超过存储上限时不下载。服务器无法访问 Telegram 时，请在「设置 → 代理」中开启全局代理。';
 
 /**
  * 从 my.telegram.org 自动取 api_id、api_hash：填手机号 → my.telegram.org 往这个帐号的 Telegram 里发验证码 → 填验证码 → 服务端登录、
@@ -1583,7 +1583,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   const clearHash = async () => {
     const ok = await confirm({
       title: '清除 api_hash？',
-      message: `清除后「${account.name}」断开 Telegram，不再收发消息；登录态还留着，填回 api_hash 后自动连上。`,
+      message: `清除后「${account.name}」断开 Telegram，停止收发消息；登录状态保留，重新填写 api_hash 后自动连接。`,
       confirmText: '清除',
       danger: true,
     });
@@ -1629,7 +1629,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   const logout = async () => {
     const ok = await confirm({
       title: '退出 Telegram 登录？',
-      message: `退出后「${account.name}」不再收发 Telegram 消息，帐号的设备列表里也不再有墨鸽，要重新扫码才能恢复。手机上的聊天记录不受影响。`,
+      message: `退出后「${account.name}」停止收发 Telegram 消息，墨鸽将从帐号设备列表中移除，需重新扫码恢复。手机上的聊天记录不受影响。`,
       confirmText: '退出登录',
       danger: true,
     });
@@ -1691,7 +1691,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
             <TgUserMe me={tg.me} />
           </SettingsRow>
         ) : (
-          <div className="numbers-block muted">这个号还没登录 Telegram。扫码登录由管理员操作，有问题请联系管理员。</div>
+          <div className="numbers-block muted">该号码未登录 Telegram。扫码登录由管理员操作，如有问题请联系管理员。</div>
         )}
         {limits}
       </SettingsSection>
@@ -1701,7 +1701,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   let loginBlock = null;
   if (state === 'working') {
     loginBlock = (
-      <SettingsRow label="登录的帐号" hint="在手机 Telegram 的「设置 → 设备」里能看到墨鸽（Inkdove），在那里结束它和在这里退出登录一样。">
+      <SettingsRow label="登录的帐号" hint="墨鸽（Inkdove）显示在手机 Telegram「设置 → 设备」中，在该处结束会话等同于退出登录。">
         <TgUserMe me={tg.me}>
           <span className="spacer" />
           <button type="button" className="btn btn--danger" onClick={logout} disabled={busy === 'logout'}>
@@ -1735,17 +1735,17 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
             )}
           </div>
           <div className="numbers-qr__steps">
-            <h3>用手机 Telegram 扫码登录</h3>
+            <h3>使用手机 Telegram 扫码登录</h3>
             <ol className="numbers-qr__list">
-              <li>打开手机上的 Telegram，用要接入的这个帐号</li>
+              <li>在手机上打开 Telegram，登录待接入的帐号</li>
               <li>
                 进入 <strong>设置 → 设备</strong>
               </li>
               <li>
-                点 <strong>连接桌面设备</strong>（英文界面是 Link Desktop Device），扫描二维码
+                点击 <strong>连接桌面设备</strong>（英文界面：Link Desktop Device），扫描二维码
               </li>
             </ol>
-            <div className="field__hint">二维码约 30 秒换一次，这里会自动刷新；扫码后开了两步验证的帐号要在这里输密码。5 分钟内没有完成会自动停下。</div>
+            <div className="field__hint">二维码约 30 秒自动刷新；已开启两步验证的帐号扫码后需在此输入密码。5 分钟内未完成将自动停止。</div>
             <div>
               <button type="button" className="btn btn--sm" onClick={cancel} disabled={busy === 'cancel'}>
                 {busy === 'cancel' ? <Spinner /> : null}
@@ -1761,7 +1761,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
       <SettingsRow
         label="两步验证密码"
         htmlFor={`tgu-pw-${account.id}`}
-        hint="这个帐号开了两步验证（Telegram 的「设置 → 隐私与安全 → 两步验证」）。密码只用来这一次登录，墨鸽不保存。"
+        hint="该帐号已开启两步验证（Telegram「设置 → 隐私与安全 → 两步验证」）。密码仅用于本次登录，不保存。"
       >
         <div className="numbers-phone">
           <input
@@ -1800,7 +1800,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
       <SettingsRow
         inline
         label="扫码登录"
-        hint={state === 'failed' ? '连接出了问题，墨鸽会自动重试；也可以重新扫码登录。' : '点按钮生成二维码，用手机 Telegram 扫码登录这个帐号。'}
+        hint={state === 'failed' ? '连接异常，正在自动重试；也可重新扫码登录。' : '点击按钮生成二维码，使用手机 Telegram 扫码登录该帐号。'}
       >
         <button type="button" className="btn btn--primary" onClick={login} disabled={busy === 'login'}>
           {busy === 'login' ? <Spinner /> : <PlayCircle />}
@@ -1835,13 +1835,13 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
       )}
       {loginBlock}
 
-      <SettingsRow label="api_id" htmlFor={`tgu-api-id-${account.id}`} hint="my.telegram.org → API development tools 里的 App api_id。">
+      <SettingsRow label="api_id" htmlFor={`tgu-api-id-${account.id}`} hint="my.telegram.org → API development tools 中的 App api_id。">
         <input
           id={`tgu-api-id-${account.id}`}
           className="input input--mono"
           value={apiId}
           inputMode="numeric"
-          placeholder="一串数字"
+          placeholder="纯数字"
           onChange={(e) => setApiId(e.target.value)}
           autoComplete="off"
           aria-invalid={apiIdErr ? true : undefined}
@@ -1856,7 +1856,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
       <SettingsRow label="api_hash" htmlFor={`tgu-api-hash-${account.id}`}>
         <SecretField
           id={`tgu-api-hash-${account.id}`}
-          hint="同一页的 App api_hash。"
+          hint="同一页面的 App api_hash。"
           error={apiHashErr}
           isSet={!!cfg.apiHashSet}
           value={apiHash}
@@ -1882,7 +1882,7 @@ export default function ConnectSection({ account, setAccount, isAdmin }) {
     return (
       <SettingsSection title="连接">
         <div className="numbers-block">
-          <Callout tone="warning">不认识这个号的接入方式（{String(account.channel || '空')}），请升级墨鸽后再看。</Callout>
+          <Callout tone="warning">不支持该号码的接入方式（{String(account.channel || '空')}），请升级墨鸽后重试。</Callout>
         </div>
       </SettingsSection>
     );

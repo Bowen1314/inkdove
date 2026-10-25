@@ -121,7 +121,7 @@ function SidebarContent({ isAdmin, user, company, mock, onLogout, onChangePasswo
           )
         )}
         {mock && (
-          <Tooltip content="不会调用真实的 AI 模型，整理结果和回复内容都是模拟的。正式使用前请联系部署人员关闭演示模式。">
+          <Tooltip content="不调用真实 AI 模型，整理结果和回复均为模拟。正式使用前请联系部署人员关闭演示模式。">
             <button type="button" className="sidebar__note">
               <StatusDot tone="warning" />
               演示模式

@@ -135,7 +135,7 @@ export function CountrySelect({ id, value, onChange, invalid, 'aria-describedby'
               />
             </div>
             <div id={listId} role="listbox" className="listbox outreach-country__list" aria-label="国家">
-              {shown.length === 0 && <div className="combobox__empty">没有匹配的国家</div>}
+              {shown.length === 0 && <div className="combobox__empty">无匹配的国家</div>}
               {shown.map((c, i) => (
                 <div
                   key={c.code}

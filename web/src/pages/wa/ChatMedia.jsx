@@ -95,10 +95,10 @@ export function MessageMedia({ convId, msg, onLoad }) {
   const label = kindLabel(media);
   const name = media.filename || label;
 
-  if (media.stored === 'pending') return <MediaNote icon={Icon} name={name} note="正在保存文件…" />;
+  if (media.stored === 'pending') return <MediaNote icon={Icon} name={name} note="文件保存中…" />;
   if (media.stored === 'too_large') {
     const size = fmtSize(media.size);
-    return <MediaNote icon={Icon} name={size ? `${name}（${size}）` : name} note="文件太大，没有保存，请在手机上查看" tone="warning" />;
+    return <MediaNote icon={Icon} name={size ? `${name}（${size}）` : name} note="文件过大未保存，请在手机端查看" tone="warning" />;
   }
   if (media.stored === 'failed') {
     return <MediaNote icon={Icon} name={name} note={`下载失败${media.error ? `：${media.error}` : ''}`} tone="danger" />;
@@ -116,7 +116,7 @@ export function MessageMedia({ convId, msg, onLoad }) {
         media={media}
         icon={isImage ? ImageOff : Icon}
         name={name}
-        meta={isImage ? `${label}加载不出来，点击下载` : `浏览器播放不了，下载后再${media.type === 'voice' ? '听' : '看'}`}
+        meta={isImage ? `${label}加载失败，点击下载` : `浏览器无法播放，请下载后${media.type === 'voice' ? '收听' : '查看'}`}
       />
     );
   }

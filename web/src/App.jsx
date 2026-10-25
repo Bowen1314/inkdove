@@ -60,7 +60,7 @@ function RequireAuth({ children }) {
   if (state === 'error') {
     return (
       <div className="boot">
-        <ErrorState title="暂时无法打开后台" error={error} onRetry={check} />
+        <ErrorState title="后台无法打开" error={error} onRetry={check} />
       </div>
     );
   }
@@ -76,8 +76,8 @@ function AdminOnly({ children }) {
       <EmptyState
         fill
         icon={ShieldOff}
-        title="没有权限"
-        desc="这个页面只有管理员能使用。需要的话请联系管理员。"
+        title="无权限"
+        desc="该页面仅限管理员访问。"
         action={
           <Link className="btn btn--primary" to="/">
             返回概览
@@ -95,7 +95,7 @@ function NotFound() {
         fill
         icon={Compass}
         title="页面不存在"
-        desc="链接可能已失效，回到概览页继续操作。"
+        desc="链接可能已失效。"
         action={
           <Link className="btn btn--primary" to="/">
             返回概览

@@ -19,7 +19,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const STYLE_PLACEHOLDER = `例如：
 - 开头直接称呼客户名字，结尾署名
-- 句子短一点，少用感叹号
+- 句子简短，少用感叹号
 - 西班牙语客户用 usted 称呼`;
 
 const profileOf = (user) => ({ ...EMPTY_PROFILE, ...(user?.profile || {}) });
@@ -62,7 +62,7 @@ export function ProfileModal({ open, onClose }) {
   const next = normalizeProfile(form);
   const profileDirty = !sameProfile(next, normalizeProfile(profileOf(user)));
   const styleDirty = style.trim() !== (user?.stylePrompt || '').trim();
-  const emailErr = next.contactEmail && !EMAIL_RE.test(next.contactEmail) ? '邮箱格式不对' : '';
+  const emailErr = next.contactEmail && !EMAIL_RE.test(next.contactEmail) ? '邮箱格式错误' : '';
   const shownEmailErr = touched ? emailErr : '';
 
   /**
@@ -108,7 +108,7 @@ export function ProfileModal({ open, onClose }) {
     }
     const why = failed.map((f) => (failed.length > 1 ? `${f.part}：${f.msg}` : f.msg)).join('；');
     const lost = failed.map((f) => f.part).join('和');
-    setError(saved.length ? `${saved.join('和')}已保存，${lost}没保存：${why}` : `保存失败：${why}`);
+    setError(saved.length ? `${saved.join('和')}已保存，${lost}未保存：${why}` : `保存失败：${why}`);
   };
 
   const counter = (n, max) => (
@@ -143,7 +143,7 @@ export function ProfileModal({ open, onClose }) {
           <div className="profile-modal__head">
             <h3 id="profile-info-title">资料</h3>
             <p className="field__hint">
-              AI 起草推荐回复和转人工草稿时会用这些信息：自称和署名用「对客户的称呼」，客户问你是谁、要联系方式时照这里回答，没填的不会编。自动回复不会用，机器人以公司身份回复。
+              用于 AI 起草推荐回复和转人工草稿：自称和署名使用「对客户的称呼」，客户询问身份或联系方式时据此回答，未填写的不会编造。自动回复不使用，机器人以公司身份回复。
             </p>
           </div>
           <div className="form-grid">
@@ -215,7 +215,7 @@ export function ProfileModal({ open, onClose }) {
             label="我的说话习惯"
             htmlFor="style-prompt"
             aside={counter(style.length, MAX_STYLE_PROMPT)}
-            hint="你在会话页点「推荐回复」「换一条」时，AI 照这里的习惯起草。优先级：起草规则 > 公司话术 > 我的话术，冲突时以前者为准。话术只管怎么说，不能让 AI 编价格、交期和承诺，要你拍板的地方仍会写成【待你确认：…】。"
+            hint="点击「推荐回复」「换一条」时，AI 按此习惯起草。优先级：起草规则 > 公司话术 > 我的话术。话术仅影响表述，不能让 AI 编造价格、交期和承诺，需本人确认处仍标注为【待你确认：…】。"
           >
             <textarea
               id="style-prompt"

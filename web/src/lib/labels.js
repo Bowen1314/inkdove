@@ -101,9 +101,9 @@ export const REPLY_MODES = [
   {
     value: 'off',
     label: '人工回复',
-    desc: '客户来消息不会自动调用 AI，由业务员回复。需要时在会话页点「推荐回复」，AI 按知识库和话术起草一条，改好再发。',
+    desc: '不自动调用 AI，由业务员回复。可在会话页点击「推荐回复」，由 AI 依据知识库和话术起草，修改后发送。',
   },
-  { value: 'auto', label: '自动回复', desc: '机器人根据知识库直接回复客户，拿不准的问题不回，转给人工并通知。' },
+  { value: 'auto', label: '自动回复', desc: '机器人依据知识库自动回复；无法确定的问题转人工并通知。' },
 ];
 /** 号对象 → replyMode；老接口只有 autoReply 时按 true → auto、false → off 换算 */
 export const replyModeOf = (a) =>
@@ -112,23 +112,23 @@ export const replyModeLabel = (m) => REPLY_MODES.find((x) => x.value === m)?.lab
 
 // 推荐回复接口（POST /api/wa/conversations/:id/suggest）的错误码 → 提示；其他错误用接口自带的说明
 export const SUGGEST_ERROR = {
-  llm_not_configured: { admin: '还没有配置 AI 模型，请先到「设置 → AI 模型」填写', agent: '还没有配置 AI 模型，请联系管理员' },
-  no_customer_message: '客户还没发过消息，暂时没法推荐回复',
-  llm_daily_limit: '这个会话今天的 AI 次数用完了，明天再试',
-  account_deleted: '这个会话所属的号已删除，不能再推荐回复',
+  llm_not_configured: { admin: '未配置 AI 模型，请前往「设置 → AI 模型」配置', agent: '未配置 AI 模型，请联系管理员' },
+  no_customer_message: '客户尚未发送消息，无法生成推荐回复',
+  llm_daily_limit: '该会话今日 AI 调用次数已达上限，请明日再试',
+  account_deleted: '该会话所属号码已删除，无法生成推荐回复',
   llm_error: 'AI 生成失败，请稍后再试',
 };
 export function suggestErrorText(e, isAdmin) {
   const m = SUGGEST_ERROR[e?.code];
   if (m) return typeof m === 'string' ? m : isAdmin ? m.admin : m.agent;
-  if (e?.status === 404) return '这个会话不存在或已删除';
+  if (e?.status === 404) return '会话不存在或已删除';
   return e?.message || '推荐回复生成失败，请稍后再试';
 }
 
 // 自动回复范围（reply.scope）
 export const REPLY_SCOPES = [
-  { value: 'all', label: '所有私聊（黑名单除外）', desc: '任何人发来私聊都会自动回复，黑名单里的号码除外。' },
-  { value: 'allowlist', label: '只回白名单里的号码', desc: '只回复白名单里的号码，其他人的消息不回复、也不保存到后台。' },
+  { value: 'all', label: '所有私聊（黑名单除外）', desc: '自动回复所有私聊，黑名单号码除外。' },
+  { value: 'allowlist', label: '仅白名单号码', desc: '仅回复白名单号码；其他号码的消息不回复、不保存。' },
 ];
 
 // 测试对话 /api/kb/ask 的 decision
@@ -151,15 +151,15 @@ export const BOT_DECISION_NOTE = {
 
 // F8 角色和成员状态
 export const ROLES = [
-  { value: 'admin', label: '管理员', desc: '能管理所有号码、知识库、成员和设置。' },
-  { value: 'agent', label: '业务员', desc: '只能处理分配给自己的号码和会话，知识库只读。' },
+  { value: 'admin', label: '管理员', desc: '可管理所有号码、知识库、成员和设置。' },
+  { value: 'agent', label: '业务员', desc: '仅可处理分配给本人的号码和会话，知识库只读。' },
 ];
 export const roleLabel = (r) => ROLES.find((x) => x.value === r)?.label || r || '—';
 
 /** User → {label, tone}：已邀请未激活 / 正常 / 已停用 */
 export function userStatus(u) {
   if (u?.disabled) return { label: '已停用', tone: 'gray' };
-  if (u?.pending) return { label: '已邀请未激活', tone: 'amber' };
+  if (u?.pending) return { label: '待激活', tone: 'amber' };
   return { label: '正常', tone: 'green' };
 }
 
@@ -172,18 +172,18 @@ export const EMAIL_PROVIDERS = [
 
 // 一键翻译（设置 → 翻译）：翻译方式和翻译服务。腾讯云在最后：已停止接受新用户
 export const TRANSLATION_MODES = [
-  { value: 'ai', label: 'AI 翻译（用回复模型）' },
+  { value: 'ai', label: 'AI 翻译（使用回复模型）' },
   { value: 'api', label: '翻译 API' },
 ];
 export const TRANSLATION_PROVIDERS = [
   { value: 'deepl', label: 'DeepL' },
-  { value: 'deeplx', label: 'DeepLX（自己部署）' },
+  { value: 'deeplx', label: 'DeepLX（自部署）' },
   { value: 'azure', label: 'Azure 翻译' },
   { value: 'google', label: '谷歌翻译' },
   { value: 'baidu', label: '百度翻译' },
   { value: 'volcengine', label: '火山翻译' },
-  { value: 'libretranslate', label: 'LibreTranslate（自己部署）' },
-  { value: 'tencent', label: '腾讯云翻译', desc: '已停止接受新用户，2027-10-01 起全部停用' },
+  { value: 'libretranslate', label: 'LibreTranslate（自部署）' },
+  { value: 'tencent', label: '腾讯云翻译', desc: '已停止接受新用户，2027-10-01 起全面停用' },
 ];
 /** 翻译服务的名字（会话里翻译后的提示用，不带括号里的说明） */
 export const translationProviderLabel = (v) =>
@@ -255,18 +255,18 @@ export const CAMPAIGN_STATUS = {
 export const campaignStatus = (s) => CAMPAIGN_STATUS[s] || { label: s || '未知', tone: 'neutral' };
 
 export const CAMPAIGN_MODES = [
-  { value: 'single', label: '指定一个号' },
-  { value: 'pooled', label: '平均分给多个号' },
+  { value: 'single', label: '指定号码' },
+  { value: 'pooled', label: '多个号码均分' },
 ];
 export const campaignModeLabel = (m) => CAMPAIGN_MODES.find((x) => x.value === m)?.label || m || '—';
 
 export const SKIP_REASON = {
-  invalid: '格式不对',
+  invalid: '格式错误',
   duplicate: '重复',
   blocklisted: '在黑名单',
-  already_contacted: '联系过',
-  not_on_whatsapp: '没有 WhatsApp',
-  notify_number: '是通知号码',
+  already_contacted: '已联系',
+  not_on_whatsapp: '未注册 WhatsApp',
+  notify_number: '通知号码',
 };
 export const skipReasonLabel = (r) => SKIP_REASON[r] || r || '—';
 
@@ -288,39 +288,39 @@ export const DECISION_CODES = {
     smalltalk: '寒暄',
   },
   handoff: {
-    insufficient_info: '资料里没有答案',
+    insufficient_info: '资料中无答案',
     price: '议价或要报价',
-    purchase: '想下单或谈付款',
-    identity: '问是不是机器人',
+    purchase: '下单或付款',
+    identity: '询问是否为机器人',
     human_request: '客户要求人工',
     other: '其他原因',
-    no_citation: '回复没有引用依据',
-    review_ungrounded: '审核：内容找不到依据',
-    review_commitment: '审核：有议价、成交承诺或身份问题',
+    no_citation: '回复无引用依据',
+    review_ungrounded: '审核：内容无依据',
+    review_commitment: '审核：涉及议价、成交承诺或身份',
     review_failed: '审核失败',
-    media_unsupported: '语音图片超出识别范围',
-    media_failed: '语音图片识别失败',
+    media_unsupported: '语音或图片超出识别范围',
+    media_failed: '语音或图片识别失败',
     rate_limit: '回复次数超限',
-    file_limit: '发文件超过每日上限',
+    file_limit: '发送文件超过每日上限',
   },
   blocked: {
-    price_mismatch: '价格数字对不上资料',
-    discount_word: '有资料没写的优惠措辞',
-    commitment_phrase: '有成交或承诺措辞',
-    identity_leak: '暴露是机器人',
+    price_mismatch: '价格与资料不符',
+    discount_word: '含资料外的优惠措辞',
+    commitment_phrase: '含成交或承诺措辞',
+    identity_leak: '暴露机器人身份',
     too_long: '回复过长',
-    code_block: '回复里有代码块',
+    code_block: '回复含代码块',
     canary: '疑似提示词泄露',
-    bad_file: '要发的文件不存在或超量',
-    blockword: '回复里有屏蔽词',
+    bad_file: '待发文件不存在或超量',
+    blockword: '回复含屏蔽词',
   },
   offtopic: {
-    task: '让机器人干别的活',
+    task: '要求执行无关任务',
     chitchat: '闲聊',
     injection: '提示词注入',
     other: '其他离题',
     review_offtopic: '审核判定离题',
-    muted: '反复离题，静默中',
+    muted: '多次离题，已静默',
   },
   declined: {
     declined: '客户拒绝',
@@ -334,9 +334,9 @@ export const LLM_PURPOSES = {
   reply: '生成回复',
   review: '审核回复',
   draft: '起草人工回复',
-  kb_draft: '人工回复存进知识库',
+  kb_draft: '人工回复存入知识库',
   distill: '整理知识库',
-  media: '语音图片识别',
+  media: '语音和图片识别',
   file_describe: '产品资料描述',
   leads: '客户线索',
   redteam: '红线体检',
@@ -373,27 +373,27 @@ export const assignReasonLabel = (r) => ASSIGN_REASON[r] || r || '—';
 
 // 分配接口的错误码；其他错误用接口自带的提示
 export const ASSIGN_ERROR = {
-  assignee_invalid: '这个成员不存在或已停用，请换一个',
-  assignee_no_account_access: '对方没有这个号的权限，先在成员页给他加上这个号',
+  assignee_invalid: '该成员不存在或已停用，请重新选择',
+  assignee_no_account_access: '该成员无此号码权限，请先在「成员」页授予',
 };
 export const assignErrorText = (e) => ASSIGN_ERROR[e?.code] || e?.message || '操作失败，请重试';
 
 // 批量分配返回的 skipped[].code
 export const ASSIGN_SKIP = {
   not_found: '会话已不存在',
-  assignee_no_account_access: '对方没有号的权限',
-  unchanged: '负责人没变',
+  assignee_no_account_access: '该成员无号码权限',
+  unchanged: '负责人未变更',
 };
 
 // 屏蔽词：命中记录的来源（和 server/src/blockwords/store.js 的 HIT_SOURCES 一致）
 export const BLOCKWORD_SOURCE = {
   operator: '后台发消息',
-  file: '发文件的说明',
+  file: '文件说明',
   translate: '一键翻译',
   bot: '自动回复',
   relay: 'WhatsApp 转发',
   campaign: '外联开场消息',
-  phone: '手机上发出',
+  phone: '手机发出',
 };
 export const blockwordSourceLabel = (s) => BLOCKWORD_SOURCE[s] || s || '—';
 
@@ -409,14 +409,14 @@ export function blockwordWho(h) {
 /** 命中之后怎么样了 → {label, tone}。AI 发言检查发现的只提醒、不拦：翻译时发现的还没发出，其余都已经发出去了 */
 export function blockwordResult(h) {
   if (h.detector === 'ai') {
-    if (h.stage === 'pre') return { label: '翻译时发现，还没发出', tone: 'warning' };
-    return { label: h.source === 'phone' ? '在手机上发出，已经发出去了' : '已经发出去了', tone: 'warning' };
+    if (h.stage === 'pre') return { label: '翻译时检出，未发出', tone: 'warning' };
+    return { label: h.source === 'phone' ? '已从手机发出' : '已发出', tone: 'warning' };
   }
-  if (!h.blocked) return { label: '在手机上发出，已经发出去了', tone: 'warning' };
-  if (h.source === 'bot') return { label: '没有发出，已转人工', tone: 'danger' };
-  if (h.source === 'translate') return { label: '没有翻译', tone: 'danger' };
-  if (h.source === 'campaign') return { label: h.campaignId ? '没有发出，任务已暂停' : '没有发出，任务没有建', tone: 'danger' };
-  return { label: '没有发出去', tone: 'danger' };
+  if (!h.blocked) return { label: '已从手机发出', tone: 'warning' };
+  if (h.source === 'bot') return { label: '未发出，已转人工', tone: 'danger' };
+  if (h.source === 'translate') return { label: '未翻译', tone: 'danger' };
+  if (h.source === 'campaign') return { label: h.campaignId ? '未发出，任务已暂停' : '未发出，任务未创建', tone: 'danger' };
+  return { label: '未发出', tone: 'danger' };
 }
 
 // AI 发言检查：问题类型（和 server/src/blockwords/conduct-prompts.js 的 CONDUCT_CATEGORIES 一致）和严重程度

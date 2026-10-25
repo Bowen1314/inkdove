@@ -10,7 +10,7 @@ import { getFileMap } from '../../lib/files.js';
  * 推荐回复、草稿卡片正文下面的「依据」：起草所依据的知识条目（draft.entryIds）和建议发送的文件（draft.fileIds），
  * 都是小标签，鼠标停上去（手机上点一下）浮出预览，业务员不用跳到知识库就能核对。条目只按 id 取这几条；
  * 「查看全文」打开条目弹窗，文件在预览里下载。
- * 给了 onSend 且有文件时，后面加"发送这些文件"，点了把其中能发的（没删、没停用）按顺序交给 onSend。
+ * 给了 onSend 且有文件时，后面加"发送文件"，点了把其中能发的（没删、没停用）按顺序交给 onSend。
  * showLabel=false：只剩文件建议时（草稿已经关掉）不写「依据」。
  */
 export function DraftBasis({ entryIds = [], fileIds = [], onSend, sending = false, showLabel = true }) {
@@ -78,7 +78,7 @@ export function DraftBasis({ entryIds = [], fileIds = [], onSend, sending = fals
       {onSend && fileIds.length > 0 && (
         <button type="button" className="btn btn--sm" onClick={() => onSend(sendable)} disabled={sending || !sendable.length}>
           {sending ? <Spinner /> : <SendHorizontal />}
-          发送这些文件
+          发送文件
         </button>
       )}
       <EntryPeek entryId={peek} onClose={() => setPeek(null)} />

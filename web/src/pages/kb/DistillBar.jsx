@@ -16,10 +16,10 @@ export function distillSummary(sources) {
     sources == null
       ? '整理知识库'
       : pending > 0
-        ? `有 ${pending} 份新资料还没整理进知识库`
+        ? `${pending} 份资料待整理`
         : readyCount > 0
-          ? '所有资料都已整理'
-          : '还没有可整理的资料';
+          ? '资料已全部整理'
+          : '暂无可整理的资料';
   return { pending, readyCount, text };
 }
 
@@ -53,7 +53,7 @@ export function useDistillActions(sourcesProp) {
       const ok = await confirm({
         title: '全部重建知识库？',
         message:
-          '自动整理出的条目和未处理的缺口会先清空再重新生成；手动添加、补充回答和来自会话的条目会保留。资料多时可能需要几分钟，期间机器人仍按现有条目回复。',
+          '将清空自动整理的条目和未处理缺口并重新生成；手动添加、补充回答和来自会话的条目保留。资料较多时耗时数分钟，期间机器人仍按现有条目回复。',
         confirmText: '确定重建',
         danger: true,
       });
@@ -81,7 +81,7 @@ export function DistillStatus({ pending, text }) {
   return (
     <span className="kb-distillbar__status">
       <StatusDot tone={pending > 0 ? 'warning' : 'neutral'}>{text}</StatusDot>
-      <HintIcon label="什么是整理">整理会把资料提炼成一条条知识，并找出客户可能会问、但资料里没有答案的问题。</HintIcon>
+      <HintIcon label="什么是整理">将资料提炼为条目，并找出客户可能提问但资料中无答案的问题。</HintIcon>
     </span>
   );
 }

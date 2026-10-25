@@ -53,7 +53,7 @@ export function EntryPeek({ entryId, onClose }) {
                 navigate(`/kb/entries?edit=${encodeURIComponent(entry.id)}`);
               }}
             >
-              <Pencil /> 去编辑
+              <Pencil /> 编辑
             </button>
           </>
         ) : (
@@ -70,7 +70,7 @@ export function EntryPeek({ entryId, onClose }) {
           <Spinner /> 加载中…
         </div>
       ) : entry === null ? (
-        <div className="muted">这个条目已被删除，或暂时找不到。</div>
+        <div className="muted">条目已删除或不存在。</div>
       ) : (
         <div className="peek">
           <div className="peek__meta">
@@ -132,7 +132,7 @@ export function EntryRefs({ ids, onOpen }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  if (!ids?.length) return <span className="muted">没有引用知识条目</span>;
+  if (!ids?.length) return <span className="muted">无引用知识条目</span>;
 
   const open = (id) => (onOpen ? onOpen(id) : setPeek(id));
   return (

@@ -18,7 +18,7 @@ const FIELDS = {
   'outreach.windowEnd': 'windowEnd',
 };
 const LABELS = {
-  dailyCapPerAccount: '每个号每天最多发',
+  dailyCapPerAccount: '每号码每日上限',
   minIntervalSeconds: '最短间隔（秒）',
   maxIntervalSeconds: '最长间隔（秒）',
   windowStart: '发送时段开始',
@@ -45,14 +45,14 @@ const isInt = (s) => /^\d+$/.test(String(s).trim());
 function validate(d) {
   const e = {};
   const cap = Number(d.dailyCapPerAccount);
-  if (!isInt(d.dailyCapPerAccount) || cap < 1 || cap > 10000) e.dailyCapPerAccount = '请填 1–10000 之间的整数';
+  if (!isInt(d.dailyCapPerAccount) || cap < 1 || cap > 10000) e.dailyCapPerAccount = '请输入 1–10000 的整数';
   const min = Number(d.minIntervalSeconds);
   const max = Number(d.maxIntervalSeconds);
-  if (!isInt(d.minIntervalSeconds) || min < 1 || min > 86400) e.minIntervalSeconds = '请填 1–86400 之间的整数';
-  if (!isInt(d.maxIntervalSeconds) || max < 1 || max > 86400) e.maxIntervalSeconds = '请填 1–86400 之间的整数';
+  if (!isInt(d.minIntervalSeconds) || min < 1 || min > 86400) e.minIntervalSeconds = '请输入 1–86400 的整数';
+  if (!isInt(d.maxIntervalSeconds) || max < 1 || max > 86400) e.maxIntervalSeconds = '请输入 1–86400 的整数';
   else if (!e.minIntervalSeconds && min > max) e.maxIntervalSeconds = '不能小于最短间隔';
-  if (!HHMM.test(d.windowStart.trim())) e.windowStart = '格式是 HH:MM，例如 09:00';
-  if (!HHMM.test(d.windowEnd.trim())) e.windowEnd = '格式是 HH:MM，例如 20:00';
+  if (!HHMM.test(d.windowStart.trim())) e.windowStart = '格式为 HH:MM，如 09:00';
+  if (!HHMM.test(d.windowEnd.trim())) e.windowEnd = '格式为 HH:MM，如 20:00';
   return e;
 }
 
@@ -150,9 +150,9 @@ export default function OutreachSection({ settings, onSaved }) {
     <div ref={formRef}>
       <SettingsSection as="form" title="主动外联" onSubmit={onSubmit} actions={<ResetButton onClick={restoreDefaults} />}>
         <SettingsRow
-          label="每个号每天最多发"
+          label="每号码每日上限"
           htmlFor="or-cap"
-          hint="所有外联任务合计。到了上限当天就不再发，第二天接着发。"
+          hint="所有外联任务合计。达到上限后当日停止发送，次日继续。"
         >
           <div className="settings-outreach__inline">
             {numInput('dailyCapPerAccount', 'or-cap')}
@@ -162,7 +162,7 @@ export default function OutreachSection({ settings, onSaved }) {
         </SettingsRow>
 
         <Advanced>
-          <SettingsRow label="发送间隔（秒）" htmlFor="or-min" hint="同一个号每发一条，在这个范围里随机等一会儿再发下一条。">
+          <SettingsRow label="发送间隔（秒）" htmlFor="or-min" hint="同一号码每条消息之间在此范围内随机间隔。">
             <div className="settings-outreach__inline">
               {numInput('minIntervalSeconds', 'or-min', '最短间隔（秒）')}
               <span className="muted">至</span>
@@ -174,7 +174,7 @@ export default function OutreachSection({ settings, onSaved }) {
               <FieldError id="or-max">{errOf('maxIntervalSeconds')}</FieldError>
             )}
           </SettingsRow>
-          <SettingsRow label="发送时段" htmlFor="or-start" hint="按收件人当地时间，用号码的国家码判断时区。">
+          <SettingsRow label="发送时段" htmlFor="or-start" hint="按收件人当地时间，根据号码国家码判断时区。">
             <div className="settings-outreach__inline">
               {timeInput('windowStart', 'or-start', '发送时段开始')}
               <span className="muted">至</span>

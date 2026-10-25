@@ -21,7 +21,7 @@ import { toast } from '../../ui/toastBus.js';
 function resultOf(s) {
   if (s.error) return { tone: 'danger', text: `检查失败：${s.error}` };
   if (s.available) return { tone: 'info', text: `有新版本 v${s.latest.version}` };
-  return { tone: 'success', text: '已经是最新版本' };
+  return { tone: 'success', text: '已是最新版本' };
 }
 
 /**
@@ -93,14 +93,14 @@ export default function VersionSection() {
         <SettingsRow label="上次检查">
           <div className="settings-page__test">
             {s.checkEnabled ? (
-              <span>{s.checkedAt ? fmtFull(s.checkedAt) : '还没检查过'}</span>
+              <span>{s.checkedAt ? fmtFull(s.checkedAt) : '尚未检查'}</span>
             ) : (
               <span className="muted">已关闭检查（INKDOVE_UPDATE_CHECK=0）</span>
             )}
             {s.checkEnabled && (
               <button type="button" className="btn btn--sm" onClick={check} disabled={checking}>
                 {checking ? <Spinner /> : <RefreshCw />}
-                {checking ? '正在检查…' : '检查更新'}
+                {checking ? '检查中…' : '检查更新'}
               </button>
             )}
           </div>
@@ -121,7 +121,7 @@ export default function VersionSection() {
                 {!schedule.startedAt && (
                   <div className="update-actions">
                     <button type="button" className="btn btn--sm" onClick={() => openUpdateModal('schedule')}>
-                      改时间
+                      修改时间
                     </button>
                     <button type="button" className="btn btn--sm" onClick={cancelSchedule} disabled={cancelling}>
                       {cancelling && <Spinner />}

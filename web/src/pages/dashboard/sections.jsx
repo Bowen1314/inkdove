@@ -78,7 +78,7 @@ export function Stat({ label, value, unit, foot, tone }) {
 export const Empty = ({ title, desc, action }) => <EmptyState compact title={title} desc={desc} action={action} />;
 
 /** 选了某个号或业务员时，给不按它筛选的块标一句 */
-export function NotFiltered({ text = '不按号筛选', help }) {
+export function NotFiltered({ text = '未按号码筛选', help }) {
   return (
     <span className="dash-card__note">
       {text}
@@ -102,9 +102,9 @@ function MetricCell(props) {
  * @param {{account: boolean, assignee: string}} filter
  */
 function notFilteredText(filter) {
-  if (filter?.account && filter?.assignee) return '不按号和业务员筛选';
-  if (filter?.assignee) return '不按业务员筛选';
-  if (filter?.account) return '不按号筛选';
+  if (filter?.account && filter?.assignee) return '未按号码和业务员筛选';
+  if (filter?.assignee) return '未按业务员筛选';
+  if (filter?.account) return '未按号码筛选';
   return null;
 }
 
@@ -113,8 +113,8 @@ function AssigneeNote({ assignee }) {
   if (!assignee) return null;
   return (
     <NotFiltered
-      text={assignee === '未分配' ? '只算未分配的客户' : `只算${assignee}的客户`}
-      help="按业务员筛选按的是会话现在的负责人：改派过的客户，以前的消息和回复也跟着算到新负责人名下。"
+      text={assignee === '未分配' ? '仅统计未分配的客户' : `仅统计${assignee}的客户`}
+      help="按会话当前负责人筛选：改派的客户，历史消息和回复均计入新负责人。"
     />
   );
 }
@@ -131,8 +131,8 @@ function minutesMetric(m) {
 /** 平均回复时间的算法（成员表的说明） */
 const REPLY_RULES = (
   <>
-    客户发来消息、到我们有人回复，算一次。客户连着发几条从第一条算；机器人先回了的不算；发送失败的不算回复，撤回的照算；
-    后台发的算发送人，手机上回的、WhatsApp 转发的各算一行。导入的历史聊天和外联群发不算。客户开始等的时间在所选时间段内才算。
+    客户发来消息至人工回复计为一次。客户连续发送多条时从第一条起算；机器人已先回复的不计；发送失败不计为回复，已撤回的仍计入；
+    后台发送的计入发送人，手机端回复和 WhatsApp 转发各计一行。不含导入的历史聊天和外联群发。仅统计客户开始等待时间在所选时间段内的记录。
   </>
 );
 
@@ -165,20 +165,20 @@ export function KpiRow({ kpi = {}, accountId, assigneeId }) {
       <MetricCell
         label="转人工次数"
         value={kpi.handoffs == null ? '—' : fmtNum(kpi.handoffs)}
-        foot={kpi.medianResponseMinutes == null ? undefined : `转人工后首次回复 中位 ${handoffMedian}`}
+        foot={kpi.medianResponseMinutes == null ? undefined : `转人工后首次回复中位数 ${handoffMedian}`}
       />
       <MetricCell
         label="待处理"
         value={open == null ? '—' : fmtNum(open)}
         tone={num(open) > 0 ? 'danger' : undefined}
-        foot="实时，点开去处理"
+        foot="实时数据，点击处理"
         to={chatsLink(accountId, assigneeId)}
       />
       <MetricCell
         label="平均回复时间"
         value={avg.value}
         unit={avg.unit}
-        foot={replyTurns > 0 ? `中位 ${fmtMinutes(kpi.medianReplyMinutes)} · ${fmtNum(replyTurns)} 次` : '客户发消息到有人回复'}
+        foot={replyTurns > 0 ? `中位数 ${fmtMinutes(kpi.medianReplyMinutes)} · ${fmtNum(replyTurns)} 次` : '客户发消息至人工回复'}
       />
     </>
   );
@@ -196,7 +196,7 @@ export function TrendCard({ trend }) {
       span="span-12"
       aside={all > 0 && <Legend items={DECISION_SERIES.map((s) => ({ ...s, value: fmtNum(totals[s.key]) }))} />}
     >
-      {all > 0 ? <TrendChart data={data} /> : <Empty title="这段时间还没有处理记录" desc="机器人处理过客户消息后，这里按天显示结果。" />}
+      {all > 0 ? <TrendChart data={data} /> : <Empty title="所选时间段内无处理记录" desc="机器人处理客户消息后按天显示结果。" />}
     </Card>
   );
 }
@@ -237,7 +237,7 @@ export function HandoffReasonsCard({ reasons }) {
       {items.length > 0 ? (
         <RankList items={items} label="转人工原因" />
       ) : (
-        <Empty title="这段时间没有转人工" />
+        <Empty title="所选时间段内无转人工" />
       )}
     </Card>
   );
@@ -262,10 +262,10 @@ export function KbCard({ kb = {}, filter }) {
     <Card title="知识库健康度" span="span-6" aside={note && <NotFiltered text={note} />}>
       <div className="dash-stats">
         <Stat
-          label="没被用过的条目"
+          label="未被引用的条目"
           value={kb.unusedEntries == null ? '—' : fmtNum(kb.unusedEntries)}
-          unit={kb.activeEntries == null ? undefined : `/ ${fmtNum(kb.activeEntries)} 条启用中`}
-          foot="最近 30 天一次都没被引用"
+          unit={kb.activeEntries == null ? undefined : `/ ${fmtNum(kb.activeEntries)} 条已启用`}
+          foot="最近 30 天未被引用"
         />
         {lr ? (
           <div className="dash-stat">
@@ -287,10 +287,10 @@ export function KbCard({ kb = {}, filter }) {
         ) : (
           <div className="dash-stat">
             <div className="dash-stat__label">最近一次体检</div>
-            <div className="dash-stat__value muted">还没做过</div>
+            <div className="dash-stat__value muted">未进行</div>
             <div className="dash-stat__foot">
               <Link className="link" to="/kb/redteam">
-                去体检
+                前往体检
               </Link>
             </div>
           </div>
@@ -299,17 +299,17 @@ export function KbCard({ kb = {}, filter }) {
 
       <div className="dash-split">
         <Sub
-          title="答不了的问题 Top 10"
+          title="未能回答的问题 Top 10"
           aside={
             <Link className="btn btn--link btn--sm" to="/kb/gaps">
-              去补充
+              前往补充
             </Link>
           }
         >
-          {gaps.length ? <RankList items={gaps} label="答不了的问题" unit="次" /> : <Empty title="没有答不了的问题" />}
+          {gaps.length ? <RankList items={gaps} label="未能回答的问题" unit="次" /> : <Empty title="无未能回答的问题" />}
         </Sub>
         <Sub title="最常用条目 Top 10">
-          {entries.length ? <RankList items={entries} label="最常用条目" unit="次" /> : <Empty title="还没有条目被引用" />}
+          {entries.length ? <RankList items={entries} label="最常用条目" unit="次" /> : <Empty title="暂无被引用的条目" />}
         </Sub>
       </div>
 
@@ -322,7 +322,7 @@ export function KbCard({ kb = {}, filter }) {
           </Link>
         }
       >
-        {files.length ? <RankList items={files} label="发送最多的文件" unit="次" /> : <Empty title="这段时间没有发过文件" />}
+        {files.length ? <RankList items={files} label="发送最多的文件" unit="次" /> : <Empty title="所选时间段内未发送文件" />}
       </Sub>
     </Card>
   );
@@ -355,7 +355,7 @@ export function LeadStagesCard({ leads = {} }) {
   return (
     <Card title="客户阶段" span="span-6" aside={total > 0 && <span className="dash-card__note num">共 {fmtNum(total)} 人</span>}>
       {total === 0 && funnelEmpty ? (
-        <Empty title="还没有客户线索" desc="客户聊过几轮后，系统会自动整理出线索和阶段。" />
+        <Empty title="暂无客户线索" desc="客户经过数轮对话后，系统自动整理线索和阶段。" />
       ) : (
         <>
           <Sub title="当前阶段分布">
@@ -366,7 +366,7 @@ export function LeadStagesCard({ leads = {} }) {
             className="dash-sub--rule"
             aside={<span className="dash-sub__hint">到达过该阶段的人数 · 较上一阶段</span>}
           >
-            {funnelEmpty ? <Empty title="还没有进入漏斗的客户" /> : <Funnel steps={funnel} />}
+            {funnelEmpty ? <Empty title="暂无进入漏斗的客户" /> : <Funnel steps={funnel} />}
           </Sub>
         </>
       )}
@@ -387,9 +387,9 @@ export function LeadDistributionCard({ leads = {} }) {
     to: entryLink(p.entryId),
   }));
   return (
-    <Card title="客户来源和意向" span="span-6">
+    <Card title="客户来源与意向" span="span-6">
       {countries.length === 0 && products.length === 0 ? (
-        <Empty title="还没有客户数据" />
+        <Empty title="暂无客户数据" />
       ) : (
         <div className="dash-split">
           <Sub title="国家 Top 10">
@@ -469,7 +469,7 @@ export function AccountsCard({ accounts, assignee }) {
         rows={rows}
         rowKey={(a) => a.id}
         defaultSort={{ key: 'inbound', dir: 'desc' }}
-        empty={<Empty title="还没有号码" />}
+        empty={<Empty title="暂无号码" />}
       />
     </Card>
   );
@@ -502,7 +502,7 @@ export function MembersCard({ members, assignee }) {
         m.avgReplyMinutes == null ? (
           <span className="muted">—</span>
         ) : (
-          <span title={`中位 ${fmtMinutes(m.medianReplyMinutes)} · 回复了 ${fmtNum(m.replyTurns)} 次`}>
+          <span title={`中位数 ${fmtMinutes(m.medianReplyMinutes)} · 共回复 ${fmtNum(m.replyTurns)} 次`}>
             {fmtMinutes(m.avgReplyMinutes)}
             <span className="dash-table__sub num">{fmtNum(m.replyTurns)} 次</span>
           </span>
@@ -547,8 +547,8 @@ export function MembersCard({ members, assignee }) {
           <AssigneeNote assignee={assignee} />
         ) : (
           <span className="dash-card__note">
-            回复时间怎么算
-            <HintIcon label="平均回复时间怎么算">{REPLY_RULES}</HintIcon>
+            回复时间计算规则
+            <HintIcon label="平均回复时间计算规则">{REPLY_RULES}</HintIcon>
           </span>
         )
       }
@@ -559,7 +559,7 @@ export function MembersCard({ members, assignee }) {
         rows={rows}
         rowKey={(m) => m.userId ?? m.kind ?? m.name}
         defaultSort={{ key: 'handled', dir: 'desc' }}
-        empty={<Empty title="还没有成员数据" />}
+        empty={<Empty title="暂无成员数据" />}
       />
     </Card>
   );
@@ -580,16 +580,16 @@ export function CostCard({ cost = {}, filter }) {
       aside={
         filter?.account ? (
           <NotFiltered
-            text={filter.assignee ? '部分按号、不按业务员筛选' : '部分按号筛选'}
-            help="和会话有关的调用（回复、审核、草稿等）按号筛选；整理知识库、红线体检这类不属于某个号的调用不筛选。成本不按业务员筛选。"
+            text={filter.assignee ? '部分按号码筛选，未按业务员筛选' : '部分按号码筛选'}
+            help="会话相关调用（回复、审核、草稿等）按号码筛选；整理知识库、红线体检等不属于特定号码的调用不筛选。成本不按业务员筛选。"
           />
         ) : (
-          filter?.assignee && <NotFiltered text="不按业务员筛选" />
+          filter?.assignee && <NotFiltered text="未按业务员筛选" />
         )
       }
     >
       {empty ? (
-        <Empty title="这段时间没有调用模型" />
+        <Empty title="所选时间段内无模型调用" />
       ) : (
         <>
           <div className="dash-stats dash-stats--3">
@@ -603,10 +603,10 @@ export function CostCard({ cost = {}, filter }) {
           </div>
           {!hasCost && (
             <p className="dash-card__hint">
-              还没配模型单价，只统计 token 数。<Link className="link" to="/settings/pricing">去填模型单价</Link>
+              未配置模型单价，仅统计 token 数。<Link className="link" to="/settings/pricing">设置模型单价</Link>
             </p>
           )}
-          {partial && <p className="dash-card__hint">部分模型没配单价，费用里没算它们。</p>}
+          {partial && <p className="dash-card__hint">部分模型未配置单价，费用未包含这些模型。</p>}
           {rows.length > 0 && (
             <table className="table dash-mini">
               <thead>
@@ -660,9 +660,9 @@ export function AbuseCard({ abuse = {} }) {
   const muted = abuse.mutedConversations;
   const empty = offtopic.length === 0 && blocked.length === 0 && num(muted) === 0;
   return (
-    <Card title="挡掉的白嫖" span="span-4">
+    <Card title="离题与拦截" span="span-4">
       {empty ? (
-        <Empty title="这段时间没有挡掉的消息" />
+        <Empty title="所选时间段内无离题或拦截" />
       ) : (
         <>
           <div className="dash-stats dash-stats--3">
@@ -671,10 +671,10 @@ export function AbuseCard({ abuse = {} }) {
             <Stat label="静默会话" value={muted == null ? '—' : fmtNum(muted)} unit="个" />
           </div>
           <Sub title="离题按类型">
-            {offtopic.length ? <RankList items={offtopic} label="离题按类型" /> : <Empty title="没有离题消息" />}
+            {offtopic.length ? <RankList items={offtopic} label="离题按类型" /> : <Empty title="无离题消息" />}
           </Sub>
           <Sub title="拦截按原因" className="dash-sub--rule">
-            {blocked.length ? <RankList items={blocked} label="拦截按原因" /> : <Empty title="没有被拦截的回复" />}
+            {blocked.length ? <RankList items={blocked} label="拦截按原因" /> : <Empty title="无被拦截的回复" />}
           </Sub>
         </>
       )}
@@ -691,10 +691,10 @@ export function OutreachCard({ outreach = {} }) {
     return (
       <Card title="外联" span="span-4">
         <Empty
-          title="这段时间没有外联发送"
+          title="所选时间段内无外联发送"
           action={
             <Link className="btn btn--sm" to="/outreach">
-              去外联
+              前往外联
             </Link>
           }
         />
@@ -746,8 +746,8 @@ export function HeatmapCard({ heatmap, tz }) {
   const grid = normalizeHeatmap(heatmap);
   const any = grid.some((row) => row.some((v) => v > 0));
   return (
-    <Card title="时段热力图" span="span-12" aside={tz && <span className="dash-card__note">按 {tz} 时间</span>}>
-      {any ? <Heatmap grid={grid} /> : <Empty title="这段时间没有客户消息" desc="有客户消息后，这里按星期和小时显示忙闲。" />}
+    <Card title="时段热力图" span="span-12" aside={tz && <span className="dash-card__note">时区：{tz}</span>}>
+      {any ? <Heatmap grid={grid} /> : <Empty title="所选时间段内无客户消息" desc="按星期和小时显示客户消息分布。" />}
     </Card>
   );
 }

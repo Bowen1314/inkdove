@@ -29,7 +29,7 @@ const PROVIDERS = {
         type: 'secret',
         label: 'API Key',
         required: true,
-        hint: '以 :fx 结尾的是免费版（DeepL API Free）的密钥，会自动用免费版的地址。',
+        hint: '以 :fx 结尾的为免费版（DeepL API Free）密钥，自动使用免费版地址。',
       },
     ],
     note: (
@@ -45,26 +45,26 @@ const PROVIDERS = {
         type: 'secretUrl',
         label: '服务地址',
         required: true,
-        hint: '例如 http://127.0.0.1:1188/translate（不带 /translate 会自动补上）。地址里可能带着令牌，按密钥保存，保存后只显示协议和主机。',
+        hint: '示例：http://127.0.0.1:1188/translate（缺少 /translate 时自动补全）。地址可能含令牌，按密钥保存，保存后仅显示协议和主机。',
       },
-      { key: 'token', type: 'secret', label: '访问令牌', required: false, hint: '部署时设了 TOKEN 才填。' },
+      { key: 'token', type: 'secret', label: '访问令牌', required: false, hint: '仅在部署时设置了 TOKEN 时填写。' },
     ],
     note: (
       <>
-        {ext('https://github.com/OwO-Network/DeepLX', 'DeepLX')} 是开源的非官方 DeepL 接口，不用 DeepL 的密钥，但不稳定、容易被限流。建议自己部署；网上公开的地址能看到你发过去的每一句话。
+        {ext('https://github.com/OwO-Network/DeepLX', 'DeepLX')} 为开源的非官方 DeepL 接口，无需 DeepL 密钥，但稳定性差、易被限流。建议自行部署；公开地址可获取所有发送内容。
       </>
     ),
   },
   azure: {
     fields: [
-      { key: 'apiKey', type: 'secret', label: 'API Key', required: true, hint: '翻译器资源「密钥和终结点」里的密钥 1 或密钥 2。' },
+      { key: 'apiKey', type: 'secret', label: 'API Key', required: true, hint: '翻译器资源「密钥和终结点」中的密钥 1 或密钥 2。' },
       {
         key: 'region',
         type: 'text',
         label: '区域',
         required: false,
-        placeholder: '例如 eastasia',
-        hint: '同一页的「位置/区域」，例如 eastasia、southeastasia；全局（Global）资源不填。',
+        placeholder: 'eastasia',
+        hint: '同页的「位置/区域」，如 eastasia；全局（Global）资源无需填写。',
       },
       {
         key: 'endpoint',
@@ -72,7 +72,7 @@ const PROVIDERS = {
         label: '自定义终结点',
         required: false,
         placeholder: 'https://api.cognitive.microsofttranslator.com',
-        hint: '一般不填。只有资源用了自定义域名（https://名字.cognitiveservices.azure.com）时才填。',
+        hint: '仅资源使用自定义域名（https://名称.cognitiveservices.azure.com）时填写。',
       },
     ],
     note: (
@@ -88,12 +88,12 @@ const PROVIDERS = {
         type: 'secret',
         label: 'API Key',
         required: true,
-        hint: '建议在控制台把这个密钥限制为只能调用 Cloud Translation API。',
+        hint: '建议在控制台将该密钥限制为仅可调用 Cloud Translation API。',
       },
     ],
     note: (
       <>
-        Cloud Translation 基础版（v2）。在 {ext('https://console.cloud.google.com/apis/credentials', 'Google Cloud 控制台的「凭据」')}里创建 API 密钥，并给项目启用 Cloud Translation API、绑定结算账号。每月有约 50 万字符的免费额度，超出按量计费（以官网为准）。
+        Cloud Translation 基础版（v2）。在 {ext('https://console.cloud.google.com/apis/credentials', 'Google Cloud 控制台的「凭据」')}中创建 API 密钥，为项目启用 Cloud Translation API 并绑定结算帐号。每月免费额度约 50 万字符，超出按量计费（以官网为准）。
       </>
     ),
   },
@@ -104,11 +104,11 @@ const PROVIDERS = {
     ],
     note: (
       <>
-        在百度翻译开放平台的{ext('https://fanyi-api.baidu.com/manage/developer', '「开发者信息」')}里查看 APP ID 和密钥，并开通「通用文本翻译」。标准版每月 5 万字符、每秒 1 次；个人认证后的高级版每月 100 万字符（以官网为准）。
+        在百度翻译开放平台的{ext('https://fanyi-api.baidu.com/manage/developer', '「开发者信息」')}中查看 APP ID 和密钥，并开通「通用文本翻译」。标准版每月 5 万字符、每秒 1 次；个人认证高级版每月 100 万字符（以官网为准）。
       </>
     ),
     warning:
-      '超出免费额度后按字符计费、次日结算，余额不够会欠费，请留意用量。个人版只能译 28 个常见语种，印尼语、土耳其语、印地语、马来语等用不了。',
+      '超出免费额度后按字符计费、次日结算，余额不足将欠费。个人版仅支持 28 个常见语种，不支持印尼语、土耳其语、印地语、马来语等。',
   },
   volcengine: {
     fields: [
@@ -117,10 +117,10 @@ const PROVIDERS = {
     ],
     note: (
       <>
-        在火山引擎控制台的{ext('https://console.volcengine.com/iam/keymanage/', '「访问控制 → 密钥管理」')}创建，建议用只给了机器翻译权限的子账号。每月前 200 万字符免费（以官网为准）。
+        在火山引擎控制台的{ext('https://console.volcengine.com/iam/keymanage/', '「访问控制 → 密钥管理」')}创建，建议使用仅有机器翻译权限的子帐号。每月前 200 万字符免费（以官网为准）。
       </>
     ),
-    warning: '超出免费额度后按量后付费、每天结算，没有「用完就停」的开关，请留意用量。开通机器翻译可能要先提交申请。',
+    warning: '超出免费额度后按量后付费、每日结算，无法设置用量上限。开通机器翻译可能需提交申请。',
   },
   libretranslate: {
     fields: [
@@ -130,13 +130,13 @@ const PROVIDERS = {
         label: '服务地址',
         required: true,
         placeholder: 'http://127.0.0.1:5000',
-        hint: '自己部署的 LibreTranslate 地址。',
+        hint: '自部署的 LibreTranslate 地址。',
       },
-      { key: 'apiKey', type: 'secret', label: 'API Key', required: false, hint: '自己部署且没开 API Key 时不填；用 libretranslate.com 的服务要填。' },
+      { key: 'apiKey', type: 'secret', label: 'API Key', required: false, hint: '自部署且未启用 API Key 时无需填写；使用 libretranslate.com 时必填。' },
     ],
     note: (
       <>
-        {ext('https://github.com/LibreTranslate/LibreTranslate', 'LibreTranslate')} 开源、可以自己部署：数据不出自己的服务器，不按字数收费。能译哪些语言看部署时装了哪些语言模型。
+        {ext('https://github.com/LibreTranslate/LibreTranslate', 'LibreTranslate')} 开源、可自部署，数据不离开自有服务器，不按字数计费。支持的语言取决于部署时安装的语言模型。
       </>
     ),
   },
@@ -144,20 +144,20 @@ const PROVIDERS = {
     fields: [
       { key: 'secretId', type: 'secret', label: 'SecretId', required: true },
       { key: 'secretKey', type: 'secret', label: 'SecretKey', required: true },
-      { key: 'region', type: 'text', label: '区域', required: true, placeholder: 'ap-guangzhou', hint: '例如 ap-guangzhou、ap-shanghai、ap-hongkong。' },
+      { key: 'region', type: 'text', label: '区域', required: true, placeholder: 'ap-guangzhou', hint: '如 ap-guangzhou。' },
     ],
     note: (
       <>
-        在腾讯云{ext('https://console.cloud.tencent.com/cam/capi', '「访问密钥」')}页面创建。后付费默认关闭；关闭后付费时，资源包用完会自动停服。
+        在腾讯云{ext('https://console.cloud.tencent.com/cam/capi', '「访问密钥」')}页面创建。后付费默认关闭，关闭时资源包用尽后自动停服。
       </>
     ),
-    warning: '腾讯云机器翻译已停止接受新用户，免费资源包从 2026-10-01 起不再发放，2027-10-01 起全部停用。已经在用的可以用到那时，新接入请选别家。',
+    warning: '腾讯云机器翻译已停止接受新用户，免费资源包自 2026-10-01 起停发，2027-10-01 起全部停用。新接入请选择其他服务。',
   },
 };
 /** 两种方式下面的说明 */
 const MODE_DESC = {
-  ai: '回复模型看客户最近的消息判断语言并翻译。要先在「AI 模型」里配好回复模型，每次翻译按模型的价格计费。',
-  api: '用 DeepL、谷歌、百度等专门的翻译服务，不需要回复模型。业务员要翻译的话，和客户最近几条消息里的几百字（用来判断客户的语言）会发给所选的服务。',
+  ai: '由回复模型根据客户近期消息判断语言并翻译。需先在「AI 模型」中配置回复模型，按模型价格计费。',
+  api: '使用 DeepL、谷歌、百度等翻译服务，无需回复模型。待译内容及客户近期消息中的数百字（用于判断语言）将发送至所选服务。',
 };
 const PROVIDER_IDS = Object.keys(PROVIDERS);
 const PROVIDER_OPTIONS = TRANSLATION_PROVIDERS.filter((p) => PROVIDERS[p.value]);
@@ -289,7 +289,7 @@ export default function TranslationSection({ settings, onSaved }) {
     if (draft.mode === 'api') {
       const miss = missingField();
       if (miss) {
-        const text = `选「翻译 API」时要填 ${miss.label}`;
+        const text = `选择「翻译 API」时需填写 ${miss.label}`;
         setFieldErr({ field: `${id}.${miss.key}`, text });
         toast.error(`${providerLabel(id)}：${text}`);
         reveal();
@@ -307,7 +307,7 @@ export default function TranslationSection({ settings, onSaved }) {
 
   const clearSecret = async (f) => {
     if (f.required && base.mode === 'api' && base.provider === id) {
-      toast.error(`正在用${providerLabel(id)}翻译，不能清除${f.label}。先换成别的方式或服务并保存，再清除`);
+      toast.error(`${providerLabel(id)}正在使用，无法清除${f.label}。请先更换翻译方式或服务并保存`);
       return;
     }
     setClearing(`${id}.${f.key}`);
@@ -330,7 +330,7 @@ export default function TranslationSection({ settings, onSaved }) {
     try {
       const r = await api.testTranslation({ provider: id, config: testConfig() });
       if (r?.ok) {
-        setTestResult({ ok: true, text: `测试成功（用时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒）：${r.text}`, conn: testedConn });
+        setTestResult({ ok: true, text: `测试成功（耗时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒）：${r.text}`, conn: testedConn });
       } else {
         setTestResult({ ok: false, text: `测试失败：${r?.error || '原因未知'}`, conn: testedConn });
         if (r?.field && PROVIDERS[id].fields.some((f) => f.key === r.field)) setFieldErr({ field: `${id}.${r.field}`, text: r.error });
@@ -391,7 +391,7 @@ export default function TranslationSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="翻译"
-        desc="会话输入框里的「翻译成客户的语言」：把业务员写的话译成客户用的语言，只替换输入框里的内容，不会直接发出。"
+        desc="会话输入框的「翻译为客户语言」功能：将输入内容译为客户语言并替换原文，不自动发送。"
         onSubmit={onSubmit}
       >
         <SettingsRow label="翻译方式">
@@ -440,11 +440,11 @@ export default function TranslationSection({ settings, onSaved }) {
 
             {def.fields.map(renderField)}
 
-            <SettingsRow label="测试" hint="用上面填的值把一句中文译成英语，不用先保存。会调用一次翻译接口，计入这家服务的用量。">
+            <SettingsRow label="测试" hint="使用当前填写的值将一句中文译为英语，无需保存。调用一次翻译接口，计入该服务用量。">
               <div className="vstack" style={{ gap: 'var(--sp-2)', alignItems: 'flex-start' }}>
                 <button type="button" className="btn" onClick={test} disabled={testing}>
                   {testing ? <Spinner /> : <PlugZap />}
-                  {testing ? '正在测试…' : '测试'}
+                  {testing ? '测试中…' : '测试'}
                 </button>
                 <TestResult result={shownResult} />
               </div>
@@ -454,7 +454,7 @@ export default function TranslationSection({ settings, onSaved }) {
               inline
               label="翻译接口出错时改用 AI 翻译"
               htmlFor="tr-fallback"
-              hint="接口超时、额度用完、不支持客户的语言等情况下，这次改用回复模型翻译，并在输入框下面说明原因。回复模型没配好时照常报错。"
+              hint="接口超时、额度用尽或不支持客户语言时，改用回复模型翻译，并在输入框下方注明原因。未配置回复模型时仍报错。"
             >
               <Switch
                 id="tr-fallback"

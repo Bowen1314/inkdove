@@ -91,7 +91,7 @@ function CountryPicker({ iso, onPick, disabled, invalid, listId }) {
               />
             </div>
             <div ref={listRef} id={listId} role="listbox" aria-label="国家/地区" className="phone-input__list">
-              {list.length === 0 && <div className="phone-input__empty">没有找到</div>}
+              {list.length === 0 && <div className="phone-input__empty">无匹配结果</div>}
               {list.map((c, i) => (
                 <div
                   key={c.iso}

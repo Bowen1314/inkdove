@@ -71,12 +71,12 @@ export function ScheduleFields({ base, pick, onChange, error }) {
   const dayId = `${id}-day`;
   const describedBy = error ? `${dayId}-err` : undefined;
   return (
-    <Field label="更新时间" htmlFor={dayId} hint={`按这台电脑的时区${tz ? `（${tz}）` : ''}`} error={error}>
+    <Field label="更新时间" htmlFor={dayId} hint={`按本机时区${tz ? `（${tz}）` : ''}`} error={error}>
       <div className="schedule-fields">
         <Select
           id={dayId}
           className="schedule-fields__day"
-          aria-label="哪一天"
+          aria-label="日期"
           aria-describedby={describedBy}
           invalid={!!error}
           value={pick.day}
@@ -86,7 +86,7 @@ export function ScheduleFields({ base, pick, onChange, error }) {
         <div className="schedule-fields__time">
           <Select
             className="schedule-fields__num"
-            aria-label="几点"
+            aria-label="小时"
             invalid={!!error}
             value={pick.hour}
             options={hourOptions}
@@ -97,7 +97,7 @@ export function ScheduleFields({ base, pick, onChange, error }) {
           </span>
           <Select
             className="schedule-fields__num"
-            aria-label="几分"
+            aria-label="分钟"
             invalid={!!error}
             value={pick.minute}
             options={minuteOptions}

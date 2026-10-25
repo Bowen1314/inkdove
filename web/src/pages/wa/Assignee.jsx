@@ -116,7 +116,7 @@ export function AssigneeSelect({ conv, users, onAssigned }) {
 
 /** 批量分配结果：skipped 按原因汇总成一句 */
 function bulkText(updated, skipped, toName) {
-  const head = toName ? `已把 ${updated} 个会话分给 ${toName}` : `已取消分配 ${updated} 个会话`;
+  const head = toName ? `已将 ${updated} 个会话分配给 ${toName}` : `已取消分配 ${updated} 个会话`;
   if (!skipped.length) return head;
   const counts = new Map();
   skipped.forEach((s) => counts.set(s.code, (counts.get(s.code) || 0) + 1));
@@ -249,7 +249,7 @@ export function AssignmentHistory({ conv }) {
       ) : list === null ? (
         <div className="muted">分配记录加载失败</div>
       ) : list.length === 0 ? (
-        <div className="muted">还没有分配过</div>
+        <div className="muted">暂无分配记录</div>
       ) : (
         <ol className="assign-log">
           {list.map((r) => (

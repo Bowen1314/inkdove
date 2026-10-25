@@ -67,7 +67,7 @@ function UrlModal({ open, onClose, onAdded, elsewhere }) {
       const src = await api.addUrlSource({ url: u, crawl, maxPages: n });
       onAdded([src]);
       const { addedTo, seeIn } = placeText(elsewhere);
-      if (src?.status === 'error') toast.error(`网页没能读取，可在${seeIn}查看原因`);
+      if (src?.status === 'error') toast.error(`网页读取失败，请在${seeIn}查看原因`);
       else toast.success(`网页已添加${addedTo}`);
       reset();
       // 抓取期间用户可能已经关掉对话框、又打开了别的
@@ -92,7 +92,7 @@ function UrlModal({ open, onClose, onAdded, elsewhere }) {
           </button>
           <button type="submit" form="files-url-form" className="btn btn--primary" disabled={!url.trim() || busy}>
             {busy ? <Spinner /> : <Globe />}
-            {busy ? '正在抓取…' : '添加网页'}
+            {busy ? '抓取中…' : '添加网页'}
           </button>
         </>
       }
@@ -124,7 +124,7 @@ function UrlModal({ open, onClose, onAdded, elsewhere }) {
             disabled={busy}
             onChange={(e) => setCrawl(e.target.checked)}
           />
-          <span>同时抓取同一网站的其他页面</span>
+          <span>同时抓取同站其他页面</span>
         </label>
         <label className={`files-page__pages${crawl ? '' : ' is-disabled'}`}>
           最多
@@ -142,8 +142,8 @@ function UrlModal({ open, onClose, onAdded, elsewhere }) {
         </label>
         <div className="field__hint">
           {busy && crawl
-            ? '正在逐页抓取，页面多时可能需要一两分钟，请不要关闭页面。'
-            : '只能添加公开访问的网页，所有页面会合并成一份资料。'}
+            ? '逐页抓取中，页面较多时需 1–2 分钟，请勿关闭页面。'
+            : '仅支持公开网页，所有页面合并为一份资料。'}
         </div>
       </form>
     </Modal>
@@ -191,7 +191,7 @@ function TextModal({ open, onClose, onAdded, elsewhere }) {
           </button>
           <button type="submit" form="files-text-form" className="btn btn--primary" disabled={!text.trim() || busy}>
             {busy ? <Spinner /> : <ClipboardPaste />}
-            {busy ? '正在添加…' : '添加文本'}
+            {busy ? '添加中…' : '添加文本'}
           </button>
         </>
       }
@@ -217,7 +217,7 @@ function TextModal({ open, onClose, onAdded, elsewhere }) {
             id="src-text"
             className="textarea"
             rows={8}
-            placeholder="把产品介绍、常见问答、售后说明等内容粘贴到这里"
+            placeholder="粘贴产品介绍、常见问答、售后说明等内容"
             value={text}
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
@@ -256,7 +256,7 @@ export function useSourceUpload({ onAdded, dropEnabled = true, elsewhere = false
       const { addedTo, seeIn } = placeText(elsewhere);
       const failed = res.filter((s) => s.status === 'error');
       if (failed.length) {
-        toast.error(`${failed.length} 个文件没能读取，可在${seeIn}查看原因`);
+        toast.error(`${failed.length} 个文件读取失败，请在${seeIn}查看原因`);
       } else {
         toast.success(`已添加 ${res.length} 个文件${addedTo}`);
       }

@@ -244,7 +244,7 @@ export function CopyButton({ text, label = '复制', size = 'sm' }) {
       try {
         document.execCommand('copy');
       } catch {
-        toast.error('复制失败，请手动选中复制');
+        toast.error('复制失败，请手动复制');
         ta.remove();
         return;
       }

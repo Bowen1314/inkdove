@@ -19,28 +19,28 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const enc = encodeURIComponent;
 
 export const DRAFT_OUTCOME_LABELS = {
-  used: '直接用',
-  edited: '改了再发',
-  own: '自己写的',
-  dismissed: '关掉',
-  replaced: '换掉了',
-  unsent: '没发',
+  used: '直接采用',
+  edited: '修改后发送',
+  own: '人工撰写',
+  dismissed: '已关闭',
+  replaced: '已替换',
+  unsent: '未发送',
 };
 const OUTCOME_TONE = { used: 'success', edited: 'warning' };
 const UNUSED_KEYS = ['dismissed', 'replaced', 'unsent', 'own'];
 
 /** 趋势图堆叠顺序从下到上 */
 const DRAFT_SERIES = [
-  { key: 'used', label: '直接用', color: 'var(--success-dot)' },
-  { key: 'edited', label: '改了再发', color: 'var(--warning-dot)' },
-  { key: 'unused', label: '没用', color: 'var(--danger-dot)' },
-  { key: 'pending', label: '还没定', color: 'var(--neutral-dot)' },
+  { key: 'used', label: '直接采用', color: 'var(--success-dot)' },
+  { key: 'edited', label: '修改后发送', color: 'var(--warning-dot)' },
+  { key: 'unused', label: '未采用', color: 'var(--danger-dot)' },
+  { key: 'pending', label: '待定', color: 'var(--neutral-dot)' },
 ];
 
 const RULES = (
   <>
-    人工发出的第一条文字和草稿比：只改了标点、空格，或者只把【待你确认】填上的算直接用；改动不到 75% 的算改了再发；再多算自己写的。
-    点 × 关掉、换一条、起草后 24 小时内没发（或者被机器人、手机上的回复、客户的新消息清掉）都算没用。还没满 24 小时的不算进比率。
+    以人工发出的第一条文字消息与草稿比对：仅改动标点、空格或仅填写【待你确认】的计为直接采用；改动少于 75% 计为修改后发送；其余计为人工撰写。
+    点击 × 关闭、换一条、起草后 24 小时内未发送（或被机器人、手机端回复、客户新消息清除）均计为未采用。未满 24 小时的不计入比率。
   </>
 );
 
@@ -67,43 +67,43 @@ export function DraftsCard({ drafts }) {
       }
     >
       {total === 0 ? (
-        <Empty title="这段时间没有推荐回复和转人工草稿" desc="在会话里点「推荐回复」，或者机器人转人工时起草的草稿，都会统计在这里。" />
+        <Empty title="所选时间段内无推荐回复和转人工草稿" desc="统计会话中点击「推荐回复」生成的草稿及机器人转人工时起草的草稿。" />
       ) : (
         <>
           <div className="dash-stats">
             <Stat
-              label="直接用"
+              label="直接采用"
               value={fmtPct(d.usedRate)}
               tone="success"
               foot={`${fmtNum(outcomes.used)} 条`}
             />
             <Stat
-              label="改了再发"
+              label="修改后发送"
               value={fmtPct(d.editedRate)}
-              foot={`${fmtNum(outcomes.edited)} 条${d.avgEditRatio == null ? '' : ` · 平均改了 ${fmtPct(d.avgEditRatio)}`}`}
+              foot={`${fmtNum(outcomes.edited)} 条${d.avgEditRatio == null ? '' : ` · 平均改动 ${fmtPct(d.avgEditRatio)}`}`}
             />
             <Stat
-              label="没用"
+              label="未采用"
               value={fmtPct(d.unusedRate)}
               foot={UNUSED_KEYS.map((k) => `${DRAFT_OUTCOME_LABELS[k]} ${fmtNum(outcomes[k])}`).join(' · ')}
             />
             <Stat
-              label="还没定"
+              label="待定"
               value={fmtNum(d.pending)}
               unit="条"
-              foot="起草不到 24 小时，不算进比率"
+              foot="起草未满 24 小时，不计入比率"
             />
             {num(files.suggested) > 0 && (
-              <Stat label="建议的文件发出" value={fmtNum(files.sent)} unit={`/ ${fmtNum(files.suggested)} 个`} />
+              <Stat label="建议文件发送数" value={fmtNum(files.sent)} unit={`/ ${fmtNum(files.suggested)} 个`} />
             )}
           </div>
 
           <Sub
-            title="每天起草的"
+            title="每日起草量"
             className="dash-sub--wrap"
             aside={<Legend items={DRAFT_SERIES.map((s) => ({ ...s, value: fmtNum(totals[s.key]) }))} />}
           >
-            <TrendChart data={trend} series={DRAFT_SERIES} label="每天起草的推荐回复和结果" />
+            <TrendChart data={trend} series={DRAFT_SERIES} label="每日推荐回复起草量及结果" />
           </Sub>
 
           <Sub title="按类型" className="dash-sub--rule">
@@ -116,16 +116,16 @@ export function DraftsCard({ drafts }) {
                       起草
                     </th>
                     <th scope="col" className="is-num">
-                      直接用
+                      直接采用
                     </th>
                     <th scope="col" className="is-num">
-                      改了再发
+                      修改后发送
                     </th>
                     <th scope="col" className="is-num">
-                      没用
+                      未采用
                     </th>
                     <th scope="col" className="is-num dash-hide-sm">
-                      还没定
+                      待定
                     </th>
                   </tr>
                 </thead>
@@ -148,7 +148,7 @@ export function DraftsCard({ drafts }) {
           <Sub
             title="按模型和提示词版本"
             className="dash-sub--rule"
-            aside={d.currentPromptVersion && <span className="dash-sub__hint">现在的版本 {d.currentPromptVersion}</span>}
+            aside={d.currentPromptVersion && <span className="dash-sub__hint">当前版本 {d.currentPromptVersion}</span>}
           >
             <div className="dash-scroll">
               <table className="table dash-mini dash-drafts__table">
@@ -159,13 +159,13 @@ export function DraftsCard({ drafts }) {
                       起草
                     </th>
                     <th scope="col" className="is-num">
-                      直接用
+                      直接采用
                     </th>
                     <th scope="col" className="is-num">
-                      改了再发
+                      修改后发送
                     </th>
                     <th scope="col" className="is-num">
-                      没用
+                      未采用
                     </th>
                     <th scope="col" className="is-num dash-hide-sm">
                       平均改动
@@ -178,7 +178,7 @@ export function DraftsCard({ drafts }) {
                       <td className="dash-mini__name" title={`${v.firstAt ? fmtTime(v.firstAt) : ''} – ${v.lastAt ? fmtTime(v.lastAt) : ''}`}>
                         <span className="dash-drafts__kind">{v.label || v.kind}</span>
                         {v.model || '未记录模型'} · {v.promptVersion}
-                        {v.promptVersion === d.currentPromptVersion && <span className="tag tag--info dash-drafts__current">现在</span>}
+                        {v.promptVersion === d.currentPromptVersion && <span className="tag tag--info dash-drafts__current">当前</span>}
                       </td>
                       <td className="is-num">{fmtNum(v.total)}</td>
                       <td className="is-num">{fmtPct(v.usedRate)}</td>
@@ -286,12 +286,12 @@ function Marked({ parts }) {
 /* ================= 列表 ================= */
 
 const FILTERS = [
-  { value: 'all', label: '改了的和没用的（不含没发）' },
-  { value: 'edited', label: '改了再发' },
-  { value: 'own', label: '自己写的' },
-  { value: 'dismissed', label: '关掉' },
-  { value: 'replaced', label: '换掉了' },
-  { value: 'unsent', label: '没发' },
+  { value: 'all', label: '已修改和未采用（不含未发送）' },
+  { value: 'edited', label: '修改后发送' },
+  { value: 'own', label: '人工撰写' },
+  { value: 'dismissed', label: '已关闭' },
+  { value: 'replaced', label: '已替换' },
+  { value: 'unsent', label: '未发送' },
 ];
 
 function DraftItem({ item, onSaveToKb }) {
@@ -317,12 +317,12 @@ function DraftItem({ item, onSaveToKb }) {
       </div>
       <div className="dash-draft__cols">
         <div className="dash-draft__col">
-          <div className="dash-draft__label">客户问的</div>
+          <div className="dash-draft__label">客户提问</div>
           <div className="dash-draft__text dash-draft__text--muted">{item.question || '—'}</div>
         </div>
         <div className="dash-draft__col">
           <div className="dash-draft__label">AI 草稿</div>
-          <div className="dash-draft__text">{diff ? <Marked parts={diff.a} /> : item.text || <span className="muted">（只有文件）</span>}</div>
+          <div className="dash-draft__text">{diff ? <Marked parts={diff.a} /> : item.text || <span className="muted">（仅文件）</span>}</div>
         </div>
         <div className="dash-draft__col">
           <div className="dash-draft__label">
@@ -330,7 +330,7 @@ function DraftItem({ item, onSaveToKb }) {
             {item.sentMessage?.revoked && <span className="tag dash-draft__revoked">已撤回</span>}
           </div>
           <div className="dash-draft__text">
-            {diff ? <Marked parts={diff.b} /> : <span className="muted">没有发出这份草稿</span>}
+            {diff ? <Marked parts={diff.b} /> : <span className="muted">未发送该草稿</span>}
           </div>
         </div>
       </div>
@@ -350,7 +350,7 @@ function DraftItem({ item, onSaveToKb }) {
           )}
           {arr(item.files).length > 0 && <span className="dash-draft__label">建议的文件</span>}
           {arr(item.files).map((f) => (
-            <span key={f.id} className={`tag${f.sent ? ' tag--success' : ''}`} title={f.sent ? '发出去了' : '没发'}>
+            <span key={f.id} className={`tag${f.sent ? ' tag--success' : ''}`} title={f.sent ? '已发送' : '未发送'}>
               {f.deleted ? '已删除的文件' : f.name || '未命名文件'}
               {f.sent ? ' · 已发' : ''}
             </span>
@@ -367,7 +367,7 @@ function DraftItem({ item, onSaveToKb }) {
         {item.sentMessage?.canSaveToKb && (
           <button type="button" className="btn btn--sm" onClick={() => onSaveToKb(item)}>
             <BookPlus aria-hidden="true" />
-            存进知识库
+            存入知识库
           </button>
         )}
       </div>
@@ -436,14 +436,14 @@ export function DraftListCard({ range, accountId, assigneeId, tz, reloadKey }) {
   } else if (items.length === 0) {
     body = (
       <Empty
-        title={filter === 'all' ? '这段时间没有改了的或没用的推荐' : `这段时间没有「${FILTERS.find((f) => f.value === filter)?.label}」的推荐`}
-        desc="直接用的不列在这里。"
+        title={filter === 'all' ? '所选时间段内无已修改或未采用的推荐' : `所选时间段内无「${FILTERS.find((f) => f.value === filter)?.label}」的推荐`}
+        desc="不含直接采用的推荐。"
       />
     );
   } else {
     body = (
       <>
-        <ol className={`dash-drafts__list${state === 'loading' ? ' is-refreshing' : ''}`} aria-label="改得多和没用的推荐">
+        <ol className={`dash-drafts__list${state === 'loading' ? ' is-refreshing' : ''}`} aria-label="改动较大和未采用的推荐">
           {items.map((item) => (
             <DraftItem key={item.id} item={item} onSaveToKb={setKbItem} />
           ))}
@@ -462,7 +462,7 @@ export function DraftListCard({ range, accountId, assigneeId, tz, reloadKey }) {
 
   return (
     <Card
-      title="改得多 / 没用的推荐"
+      title="改动较大 / 未采用的推荐"
       span="span-12"
       aside={
         <Select

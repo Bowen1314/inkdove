@@ -89,7 +89,7 @@ function InviteModal({ open, onClose, accounts, onInvited }) {
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
   const errs = {
     email: !EMAIL_RE.test(form.email.trim()) ? '请填写正确的邮箱' : '',
-    name: !form.name.trim() ? '请填写名字' : '',
+    name: !form.name.trim() ? '请填写姓名' : '',
   };
   const show = (k) => (touched ? errs[k] : '');
 
@@ -143,7 +143,7 @@ function InviteModal({ open, onClose, accounts, onInvited }) {
           <p>
             已邀请 <span className="text-strong">{form.name.trim()}</span>（{form.email.trim()}），角色：{roleLabel(form.role)}。
           </p>
-          <LinkResult url={inviteUrl} note="链接 7 天内有效，请自己发给对方。对方打开后设置密码，就能登录。" />
+          <LinkResult url={inviteUrl} note="链接 7 天内有效，请自行发送给对方。对方设置密码后即可登录。" />
         </div>
       ) : (
         <form id="member-invite-form" className="vstack members__stack" onSubmit={submit} noValidate>
@@ -159,7 +159,7 @@ function InviteModal({ open, onClose, accounts, onInvited }) {
                 onChange={(e) => set('email', e.target.value)}
               />
             </Field>
-            <Field label="名字" htmlFor="inv-name2" error={show('name')}>
+            <Field label="姓名" htmlFor="inv-name2" error={show('name')}>
               <input
                 {...fieldProps('inv-name2', show('name'))}
                 className="input"
@@ -172,11 +172,11 @@ function InviteModal({ open, onClose, accounts, onInvited }) {
             <RolePicker value={form.role} onChange={(v) => set('role', v)} idPrefix="inv" />
           </Field>
           {form.role === 'agent' && (
-            <Field label="负责的号" hint="业务员只能看到和处理这些号的会话。之后也可以再改。">
+            <Field label="负责号码" hint="业务员仅可查看和处理这些号码的会话。">
               <AccountPicker accounts={accounts} value={form.accountIds} onChange={(v) => set('accountIds', v)} />
             </Field>
           )}
-          <div className="field__hint">系统不会发邮件。生成链接后，请自己发给对方。</div>
+          <div className="field__hint">系统不发送邮件，请自行将链接发送给对方。</div>
         </form>
       )}
     </Modal>
@@ -193,7 +193,7 @@ function EditDrawer({ user, self, onClose, accounts, onSaved }) {
   }, [user]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
-  const nameErr = user && !form.name.trim() ? '请填写名字' : '';
+  const nameErr = user && !form.name.trim() ? '请填写姓名' : '';
 
   const save = async (e) => {
     e?.preventDefault();
@@ -245,7 +245,7 @@ function EditDrawer({ user, self, onClose, accounts, onSaved }) {
             <dd>{user.lastLoginAt ? fmtTime(user.lastLoginAt) : '从未登录'}</dd>
           </dl>
           <hr className="divider members__divider" />
-          <Field label="名字" htmlFor="ed-name" error={nameErr}>
+          <Field label="姓名" htmlFor="ed-name" error={nameErr}>
             <input
               {...fieldProps('ed-name', nameErr)}
               className="input"
@@ -254,7 +254,7 @@ function EditDrawer({ user, self, onClose, accounts, onSaved }) {
             />
           </Field>
           {self ? (
-            <Field label="角色" hint="不能修改自己的角色。需要的话请另一位管理员来改。">
+            <Field label="角色" hint="不能修改本人角色，需由其他管理员修改。">
               <div className="members__readonly">{roleLabel(form.role)}</div>
             </Field>
           ) : (
@@ -263,7 +263,7 @@ function EditDrawer({ user, self, onClose, accounts, onSaved }) {
             </Field>
           )}
           {!self && form.role === 'agent' && (
-            <Field label="负责的号">
+            <Field label="负责号码">
               <AccountPicker accounts={accounts} value={form.accountIds} onChange={(v) => set('accountIds', v)} />
             </Field>
           )}
@@ -289,8 +289,8 @@ function AccountNames({ user, accounts }) {
 /** 转交结果的一句话提示 */
 function transferText({ moved = 0, skipped = 0 } = {}, fromName, toName) {
   const parts = [];
-  if (moved > 0 || !skipped) parts.push(`已把 ${moved} 个客户转给 ${toName}`);
-  if (skipped > 0) parts.push(`${skipped} 个没转：${toName} 没有对应号的权限，仍由 ${fromName} 负责`);
+  if (moved > 0 || !skipped) parts.push(`已将 ${moved} 个客户转交给 ${toName}`);
+  if (skipped > 0) parts.push(`${skipped} 个未转交：${toName} 无对应号码权限，仍由 ${fromName} 负责`);
   return parts.join('；');
 }
 
@@ -377,10 +377,10 @@ function TransferModal({ target, users, onClose, onTransferred, onDisable }) {
         <div className="vstack members__stack">
           <p className="muted">
             {disabling
-              ? `停用后对方立即退出登录，不能再登录后台。${fromName} 还负责 ${count} 个客户，可以先转交给别人；不转交的话客户仍记在他名下，之后再转。`
-              : `${fromName} 现在负责 ${count} 个客户，全部转给另一位成员。`}
+              ? `停用后对方立即退出登录，无法再登录后台。${fromName} 负责 ${count} 个客户，可先转交；未转交的客户仍归属该成员，可稍后转交。`
+              : `将 ${fromName} 负责的 ${count} 个客户全部转交给其他成员。`}
           </p>
-          <Field label="转给" htmlFor="tr-to" hint="对方没有对应号权限的客户不会转。">
+          <Field label="转给" htmlFor="tr-to" hint="对方无对应号码权限的客户不转交。">
             <Select id="tr-to" value={toId} onChange={setToId} options={options} placeholder="选择成员" />
           </Field>
         </div>
@@ -473,7 +473,7 @@ export default function MembersPage() {
       }
       const ok = await confirm({
         title: `停用「${u.name || u.email}」？`,
-        message: '停用后对方立即退出登录，不能再登录后台。之后可以重新启用。',
+        message: '停用后对方立即退出登录，无法登录后台。可重新启用。',
         confirmText: '停用',
         danger: true,
       });
@@ -497,8 +497,8 @@ export default function MembersPage() {
   const remove = async (u) => {
     const ok = await confirm({
       title: `删除「${u.name || u.email}」？`,
-      message: `删除后对方立即退出登录，账号不能恢复。对方发过的人工消息仍会保留。${
-        u.assignedCount > 0 ? `他负责的 ${u.assignedCount} 个客户会变成未分配。` : ''
+      message: `删除后对方立即退出登录，帐号无法恢复。已发送的人工消息仍保留。${
+        u.assignedCount > 0 ? `其负责的 ${u.assignedCount} 个客户将变为未分配。` : ''
       }`,
       confirmText: '删除',
       danger: true,
@@ -531,7 +531,7 @@ export default function MembersPage() {
   const columns = [
     {
       key: 'name',
-      header: '名字',
+      header: '姓名',
       sortValue: (u) => u.name || u.email || '',
       render: (u) => (
         <div className="members__person">
@@ -561,7 +561,7 @@ export default function MembersPage() {
     },
     {
       key: 'accounts',
-      header: '负责的号',
+      header: '负责号码',
       hide: 'md',
       render: (u) => <AccountNames user={u} accounts={accounts} />,
     },
@@ -670,7 +670,7 @@ export default function MembersPage() {
           <TableToolbar
             search={search}
             onSearch={setSearch}
-            searchPlaceholder="搜索名字或邮箱"
+            searchPlaceholder="搜索姓名或邮箱"
             count={filtered ? filtered.length : null}
           >
             <Select
@@ -698,9 +698,9 @@ export default function MembersPage() {
             isRowActive={(u) => editing?.id === u.id}
             empty={
               filtering ? (
-                <EmptyState compact title="没有匹配的成员" />
+                <EmptyState compact title="无匹配的成员" />
               ) : (
-                <EmptyState icon={Users} title="还没有成员" />
+                <EmptyState icon={Users} title="暂无成员" />
               )
             }
           />
@@ -739,9 +739,9 @@ export default function MembersPage() {
         {resetLink && (
           <div className="vstack members__stack">
             <p>
-              发给 <span className="text-strong">{resetLink.user.name || resetLink.user.email}</span>，对方打开后设置新密码就能登录。
+              发给 <span className="text-strong">{resetLink.user.name || resetLink.user.email}</span>，对方设置新密码后即可登录。
             </p>
-            <LinkResult url={resetLink.url} note="链接 7 天内有效，只能用一次，请自己发给对方。" />
+            <LinkResult url={resetLink.url} note="链接 7 天内有效，仅可使用一次，请自行发送给对方。" />
           </div>
         )}
       </Modal>

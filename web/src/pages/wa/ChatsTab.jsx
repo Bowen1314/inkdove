@@ -115,11 +115,11 @@ function fmtMuteUntil(d) {
  * replyMode 不知道（号已删除、还没拿到号列表）时按旧样子显示
  */
 function ConvState({ conv, size = 'sm', showActive = false, replyMode = null }) {
-  if (conv.needsHuman) return <StatusDot tone="danger" tinted size={size}>待你处理</StatusDot>;
+  if (conv.needsHuman) return <StatusDot tone="danger" tinted size={size}>待处理</StatusDot>;
   if (isManualMode(replyMode)) return null;
   if (conv.botPaused) return <StatusDot tone="warning" tinted size={size}>人工接管中</StatusDot>;
   const mute = activeMute(conv);
-  if (mute) return <StatusDot tone="neutral" muted size={size}>反复离题，静默到 {fmtMuteUntil(mute)}</StatusDot>;
+  if (mute) return <StatusDot tone="neutral" muted size={size}>多次离题，静默至 {fmtMuteUntil(mute)}</StatusDot>;
   if (!showActive || replyMode === 'off') return null;
   return <StatusDot tone="success" muted size={size}>机器人接待中</StatusDot>;
 }
@@ -131,10 +131,10 @@ export const isWaiting = (c) => c?.lastMessage?.direction === 'in';
 
 /** 列表为空时的标题：业务员只看得到分给自己的会话；admin 按负责人筛选时说明是哪种空 */
 function emptyTitle({ isAdmin, accountFilter, assigneeFilter }) {
-  if (!isAdmin) return accountFilter ? '这个号还没有分配给你的客户' : '管理员还没有给你分配客户';
-  if (assigneeFilter === 'none') return '没有未分配的会话';
-  if (assigneeFilter) return '这个成员还没有负责的会话';
-  return accountFilter ? '这个号还没有会话' : '还没有会话';
+  if (!isAdmin) return accountFilter ? '该号码下暂无已分配的会话' : '暂无已分配的会话';
+  if (assigneeFilter === 'none') return '暂无未分配的会话';
+  if (assigneeFilter) return '该成员暂无负责的会话';
+  return accountFilter ? '该号码暂无会话' : '暂无会话';
 }
 
 const VIEW_OPTIONS = (waitingCount) => [
@@ -262,18 +262,18 @@ function ConvList({
             desc={
               !isAdmin || assigneeFilter ? null : noConnected ? (
                 <>
-                  还没有已连接的号码。
+                  暂无已连接的号码。
                   <Link className="link" to="/whatsapp/numbers">
-                    去连接
+                    前往连接
                   </Link>
                 </>
               ) : (
-                '客户给你的 WhatsApp 发消息后，会显示在这里。'
+                '客户发送的消息将显示在此处。'
               )
             }
           />
         ) : shown.length === 0 ? (
-          <EmptyState compact title={view === 'waiting' && !f ? '没有待回复的会话' : '没有匹配的会话'} />
+          <EmptyState compact title={view === 'waiting' && !f ? '暂无待回复的会话' : '无匹配的会话'} />
         ) : (
           shown.map((c) => {
             const last = c.lastMessage;
@@ -303,7 +303,7 @@ function ConvList({
                     <span className="conv__preview">
                       {last ? (
                         <>
-                          {last.direction === 'out' && <span className="muted">你：</span>}
+                          {last.direction === 'out' && <span className="muted">我方：</span>}
                           {last.text}
                         </>
                       ) : (
@@ -383,7 +383,7 @@ function Translation({ title, state, onRetry, className }) {
     body = (
       <span className="translation__state">
         <Spinner size={12} />
-        正在翻译成中文…
+        翻译中…
       </span>
     );
   } else if (!data && error) {
@@ -396,7 +396,7 @@ function Translation({ title, state, onRetry, className }) {
       </span>
     );
   } else if (data?.via === 'none') {
-    body = <span className="translation__state">原文本来就是中文，不用翻译</span>;
+    body = <span className="translation__state">原文为中文，无需翻译</span>;
   } else if (data) {
     body = (
       <>
@@ -404,10 +404,10 @@ function Translation({ title, state, onRetry, className }) {
           {title} · {viaLabel(data.via)}
           {data.fallbackReason && (
             <Tooltip content={data.fallbackReason}>
-              <span tabIndex={0}>（翻译接口出错，这次改用 AI 翻译）</span>
+              <span tabIndex={0}>（翻译接口异常，已改用 AI 翻译）</span>
             </Tooltip>
           )}
-          {data.truncated && '（原文太长，只翻译了前面一部分）'}
+          {data.truncated && '（原文过长，仅翻译前段）'}
         </span>
         <span className="translation__text">
           <TodoText text={data.text} />
@@ -432,7 +432,7 @@ function KnowledgeRefs({ ids }) {
         label="依据的知识条目"
         trigger={
           <button type="button" className="msg__link">
-            依据 {ids.length} 条知识
+            依据 {ids.length} 个条目
           </button>
         }
       >
@@ -453,7 +453,7 @@ function KnowledgeRefs({ ids }) {
 
 /** 撤回标记：已撤回 · 谁 · 什么时候（墨鸽里撤回的）、客户已撤回 · 什么时候、已在手机上撤回 · 什么时候 */
 function revokedText(r) {
-  const head = r.by === 'customer' ? '客户已撤回' : r.by === 'phone' ? '已在手机上撤回' : '已撤回';
+  const head = r.by === 'customer' ? '客户已撤回' : r.by === 'phone' ? '已在手机端撤回' : '已撤回';
   return [head, r.by === 'member' ? r.name : '', fmtTime(r.at)].filter(Boolean).join(' · ');
 }
 
@@ -467,15 +467,15 @@ function RecognizeNote({ msg }) {
   const what = msg.media.type === 'voice' ? '语音' : '图片';
   return (
     <div className="msg__doc-note">
-      {r.status === 'unsupported' ? `${what}超出识别范围` : `${what}没能识别`}
+      {r.status === 'unsupported' ? `${what}超出识别范围` : `${what}识别失败`}
       {r.error ? `：${r.error}` : ''}
     </div>
   );
 }
 
 const DOC_EXTRACT_NOTE = {
-  no_text: '文件里没有可提取的文字（可能是扫描件或图片）',
-  too_large: '文件超过 10MB，没有提取文字',
+  no_text: '文件中无可提取的文字（可能为扫描件或图片）',
+  too_large: '文件超过 10MB，未提取文字',
 };
 
 /**
@@ -508,12 +508,12 @@ function DocText({ convId, msg }) {
     return (
       <div className="msg__doc-note">
         <Spinner size={12} />
-        正在提取文件里的文字…
+        正在提取文字…
       </div>
     );
   }
   if (ex.status !== 'ok') {
-    const note = ex.status === 'failed' ? `没能提取文字：${ex.error || '文件解析失败'}` : DOC_EXTRACT_NOTE[ex.status];
+    const note = ex.status === 'failed' ? `文字提取失败：${ex.error || '文件解析失败'}` : DOC_EXTRACT_NOTE[ex.status];
     return note ? <div className="msg__doc-note">{note}</div> : null;
   }
   const toggle = () => {
@@ -525,14 +525,14 @@ function DocText({ convId, msg }) {
     <>
       <button type="button" className={`msg__link msg__doc-toggle${open ? ' is-on' : ''}`} onClick={toggle} aria-expanded={open}>
         <FileText aria-hidden="true" />
-        {open ? '收起提取的文字' : `已提取文字 · ${fmtChars(ex.chars)}`}
+        {open ? '收起提取文字' : `已提取文字 · ${fmtChars(ex.chars)}`}
       </button>
       {open && (
         <div className="translation msg__doc-text" aria-live="polite" aria-busy={st.loading || undefined}>
           {st.loading && (
             <span className="translation__state">
               <Spinner size={12} />
-              正在读取…
+              读取中…
             </span>
           )}
           {!st.loading && st.error && (
@@ -546,7 +546,7 @@ function DocText({ convId, msg }) {
           {st.data && (
             <>
               <span className="translation__label">
-                从文件里提取的文字{st.data.truncated ? '（文件较长，只存了前面 2 万字）' : ''}
+                提取的文字{st.data.truncated ? '（文件较长，仅保存前 2 万字）' : ''}
               </span>
               <span className="translation__text msg__doc-body">{st.data.text}</span>
             </>
@@ -561,12 +561,12 @@ function DocText({ convId, msg }) {
 function EditHistory({ history }) {
   return (
     <div className="translation msg__edits">
-      <span className="translation__label">改前的内容</span>
+      <span className="translation__label">修改前内容</span>
       <ol className="msg__edits-list">
         {history.map((h, i) => (
           <li key={`${i}-${h.at}`}>
             <span className="msg__edits-when">
-              {i === 0 ? '原文' : '改过'} · {fmtTime(h.at)}
+              {i === 0 ? '原文' : '修改'} · {fmtTime(h.at)}
             </span>
             <span className="translation__text">{h.text}</span>
           </li>
@@ -659,8 +659,8 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
   /** 「撤回」：确认后调接口。不收起操作区，手机上撤回中、失败时按钮还在 */
   const revoke = async () => {
     const ok = await confirm({
-      title: '撤回这条消息？',
-      message: '对所有人撤回，客户那边会显示「此消息已删除」，墨鸽里保留原文。',
+      title: '撤回该消息？',
+      message: '将对所有人撤回，客户端显示「此消息已删除」，墨鸽保留原文。',
       confirmText: '撤回',
       danger: true,
     });
@@ -737,7 +737,7 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
           <span>{fmtHm(msg.ts)}</span>
         </Tooltip>
         {msg.edited && (
-          <Tooltip content={`最后改于 ${fmtTime(msg.edited.at)}，点开看改前的内容`}>
+          <Tooltip content={`最后编辑于 ${fmtTime(msg.edited.at)}，点击查看修改前内容`}>
             <button
               type="button"
               className={`msg__link msg__edited${editsOpen ? ' is-on' : ''}`}
@@ -770,7 +770,7 @@ function MessageBubble({ msg, convId, manual, canSaveToKb, onSaveToKb, onRevoked
             }}
           >
             <BookPlus aria-hidden="true" />
-            存进知识库
+            存入知识库
           </button>
         )}
         {canRevoke && (
@@ -925,12 +925,12 @@ function DraftBox({
   const entryIds = !kept && Array.isArray(draft?.entryIds) ? draft.entryIds : [];
   if (!text && !fileIds.length) return null;
   const isSuggest = !kept && draft?.kind === 'suggest';
-  const title = kept ? '草稿建议发送的文件（还没发）' : isSuggest ? '推荐回复' : '建议回复（草稿，未发送）';
-  const closeLabel = kept ? '关掉草稿建议的文件' : '关掉这条推荐';
+  const title = kept ? '草稿建议发送的文件（未发送）' : isSuggest ? '推荐回复' : '建议回复（草稿，未发送）';
+  const closeLabel = kept ? '关闭建议文件' : '关闭推荐回复';
   return (
     <div className="draft" aria-busy={regenerating || undefined}>
       <div className="draft__head">
-        <Tooltip content={kept ? '不发了，关掉' : '关掉'}>
+        <Tooltip content={kept ? '不发送并关闭' : '关闭'}>
           <button
             type="button"
             className="btn btn--ghost btn--icon btn--sm draft__close"
@@ -945,7 +945,7 @@ function DraftBox({
         <span className="draft__title">{title}</span>
         <span className="draft__actions">
           {!kept && (
-            <Tooltip content="让 AI 换一种写法">
+            <Tooltip content="由 AI 重新起草">
               <button type="button" className="btn btn--ghost btn--sm" onClick={onRegenerate} disabled={regenerating}>
                 {regenerating ? <Spinner /> : <RefreshCw />}
                 换一条
@@ -965,7 +965,7 @@ function DraftBox({
           <TodoText text={text} />
         </div>
       )}
-      {text && zh && <Translation title="中文意思" state={zh} onRetry={onRetryZh} className="draft__translation" />}
+      {text && zh && <Translation title="中文译文" state={zh} onRetry={onRetryZh} className="draft__translation" />}
       <DraftBasis entryIds={entryIds} fileIds={fileIds} onSend={onSendFiles} sending={sendingFiles} showLabel={!kept} />
     </div>
   );
@@ -1015,10 +1015,10 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
     const left = countTodos(t);
     if (left > 0) {
       const ok = await confirm({
-        title: `还有 ${left} 处【待你确认】没填`,
-        message: '消息里还留着【待你确认：…】，发出去客户会原样看到。建议先改好再发。',
-        confirmText: '照样发送',
-        cancelText: '回去修改',
+        title: `有 ${left} 处【待你确认】未填写`,
+        message: '【待你确认：…】将原样发送给客户，建议修改后再发送。',
+        confirmText: '仍然发送',
+        cancelText: '返回修改',
         danger: true,
         focusCancel: true,
       });
@@ -1052,10 +1052,10 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
       setText(res.text);
       // via：ai 或翻译服务；fallbackReason：翻译接口出错、这次改用了 AI 翻译的原因（状态一行放不下，完整原因另弹提示）
       if (res.fallbackReason) {
-        setStatus(`翻译接口出错，这次用 AI 翻译为 ${res.language}`);
-        toast.info(`翻译接口出错，这次改用 AI 翻译：${res.fallbackReason}`, 8000);
+        setStatus(`翻译接口异常，已用 AI 翻译为 ${res.language}`);
+        toast.info(`翻译接口异常，已改用 AI 翻译：${res.fallbackReason}`, 8000);
       } else if (res.text === original.trim()) {
-        setStatus(`原文已是${res.language}，没有改动`);
+        setStatus(`原文已是${res.language}，未改动`);
       } else {
         setStatus(`已翻译为 ${res.language}${res.via && res.via !== 'ai' ? ` · ${translationProviderLabel(res.via)}` : ''}`);
       }
@@ -1096,15 +1096,15 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
       <div className="composer__bar">
         {todos > 0 && !status ? (
           <button type="button" className="composer__hint composer__hint--todo" onClick={() => selectTodo()}>
-            还有 {todos} 处【待你确认】没填，点这里定位
+            有 {todos} 处【待你确认】未填写，点击定位
           </button>
         ) : (
           <span className={`composer__hint${status ? ' composer__hint--status' : ''}`} aria-live="polite">
-            {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused || manual ? '' : ' · 手动发送后机器人会暂停这个会话'}`}
+            {status || `Enter 发送 · Shift+Enter 换行${conv.botPaused || manual ? '' : ' · 手动发送后该会话的机器人将暂停'}`}
           </span>
         )}
         {showSuggest && (
-          <Tooltip content={suggestBlocked || '让 AI 读上下文起草一条推荐回复，不会直接发出'}>
+          <Tooltip content={suggestBlocked || '由 AI 根据上下文起草回复，不自动发送'}>
             <button
               type="button"
               className="btn btn--ghost btn--sm"
@@ -1118,13 +1118,13 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
           </Tooltip>
         )}
         <SendFileButton conv={conv} manual={manual} onSent={onSent} disabled={sending} />
-        <Tooltip content="翻译成客户的语言">
+        <Tooltip content="翻译为客户语言">
           <button
             type="button"
             className="btn btn--ghost btn--icon btn--sm"
             onClick={translate}
             disabled={!text.trim() || sending || translating}
-            aria-label="翻译成客户的语言"
+            aria-label="翻译为客户语言"
           >
             {translating ? <Spinner /> : <Languages />}
           </button>
@@ -1134,7 +1134,7 @@ function Composer({ conv, manual, text, setText, onSent, inputRef, showSuggest, 
           发送
         </button>
       </div>
-      {compliance && <p className="composer__notice">发出的消息会做合规检查</p>}
+      {compliance && <p className="composer__notice">发送的消息将经过合规检查</p>}
     </div>
   );
 }
@@ -1170,7 +1170,7 @@ function CustomerInfo({ conv }) {
   const lead = useLead(conv);
   const rows = lead
     ? [
-        ['名字', lead.name || conv.contactName],
+        ['姓名', lead.name || conv.contactName],
         ['公司', lead.company],
         ['国家', lead.country],
         ['邮箱', lead.email],
@@ -1188,7 +1188,7 @@ function CustomerInfo({ conv }) {
           {NO_NUMBER_PLATFORM[conv.channel] ? (
             <>
               <dt>渠道</dt>
-              <dd>{NO_NUMBER_PLATFORM[conv.channel]}（没有手机号）</dd>
+              <dd>{NO_NUMBER_PLATFORM[conv.channel]}（无手机号）</dd>
             </>
           ) : (
             <>
@@ -1196,7 +1196,7 @@ function CustomerInfo({ conv }) {
               <dd className="num">{conv.contactNumber || '—'}</dd>
             </>
           )}
-          <dt>所属号</dt>
+          <dt>所属号码</dt>
           <dd>{conv.accountName || '—'}</dd>
         </dl>
       </div>
@@ -1208,7 +1208,7 @@ function CustomerInfo({ conv }) {
           <span className="skeleton skeleton--text" style={{ width: '50%' }} />
         </div>
       ) : lead === null ? (
-        <div className="info__section muted">还没有提取到客户信息。</div>
+        <div className="info__section muted">暂未提取到客户信息。</div>
       ) : (
         <>
           {rows.length > 0 && (
@@ -1418,7 +1418,7 @@ function ChatPane({
       if (res?.id) onConvUpdate(res);
     } catch (e) {
       if (e?.status === 401 || !aliveRef.current) return;
-      toast.error(`没关掉：${e?.message || '请稍后再试'}`);
+      toast.error(`关闭失败：${e?.message || '请稍后重试'}`);
       setClosedAt(null);
       setManual(prev.manual);
       setKeptFiles(prev.keptFiles);
@@ -1475,7 +1475,7 @@ function ChatPane({
         setManual({ draft: { ...d, kind: d.kind || 'suggest' }, seen: false });
         setKeptFiles(null);
       } else {
-        toast.error('AI 这次没写出推荐回复，请再试一次');
+        toast.error('推荐回复生成失败，请重试');
       }
     } catch (e) {
       if (e?.status !== 401) toast.error(suggestErrorText(e, isAdmin));
@@ -1515,7 +1515,7 @@ function ChatPane({
   const noCustomerMsg = Array.isArray(messages) && !messages.some((m) => m.direction === 'in' && !m.revoked);
 
   return (
-    <section className="inbox__chat" aria-label={`和 ${name} 的会话`}>
+    <section className="inbox__chat" aria-label={`与 ${name} 的会话`}>
       <div className={`chat-head${isAdmin && conv ? ' chat-head--assign' : ''}`}>
         <button type="button" className="btn btn--ghost btn--icon chat-head__back" onClick={onBack} aria-label="返回会话列表">
           <ArrowLeft />
@@ -1567,7 +1567,7 @@ function ChatPane({
         <div className="inbox__stream">
           <ErrorState
             compact
-            title={msgError.status === 403 ? '没有权限查看这个会话' : '消息加载失败'}
+            title={msgError.status === 403 ? '无权查看该会话' : '消息加载失败'}
             error={msgError.status === 403 ? null : msgError}
             onRetry={msgError.status === 403 ? undefined : onRetry}
           />
@@ -1608,7 +1608,7 @@ function ChatPane({
             showSuggest={!(!kept && shownDraft?.text?.trim())}
             onSuggest={requestSuggest}
             suggesting={suggesting}
-            suggestBlocked={noCustomerMsg ? '客户还没发过消息' : ''}
+            suggestBlocked={noCustomerMsg ? '客户尚未发送消息' : ''}
             compliance={compliance}
           />
         </div>
@@ -1804,7 +1804,7 @@ export default function ChatsTab() {
     <div className={`page page--fill inbox-page${selectedId ? ' has-selection' : ''}`}>
       <PageHeader
         title="会话"
-        meta={pending > 0 && <StatusDot tone="danger" tinted size="sm">{pending} 个待你处理</StatusDot>}
+        meta={pending > 0 && <StatusDot tone="danger" tinted size="sm">{pending} 个待处理</StatusDot>}
         actions={
           (isAdmin || accounts?.length > 0) && (
             <>
@@ -1828,7 +1828,7 @@ export default function ChatsTab() {
                   onChange={onFilter}
                   options={accountOptions}
                   placement="bottom-end"
-                  aria-label="按号筛选"
+                  aria-label="按号码筛选"
                 />
               )}
             </>
@@ -1876,7 +1876,7 @@ export default function ChatsTab() {
             />
           ) : (
             <section className="inbox__chat inbox__chat--empty">
-              <EmptyState fill icon={MessagesSquare} title="选择一个会话" desc="在左侧选择会话，查看消息记录并手动回复。" />
+              <EmptyState fill icon={MessagesSquare} title="选择会话" desc="从左侧列表选择会话，查看消息并回复。" />
             </section>
           )}
           {showColumn && (

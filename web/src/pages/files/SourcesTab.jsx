@@ -118,7 +118,7 @@ function SourceDrawer({ source, onClose, onDelete, deleting }) {
               <StatusDot tone={st.tone}>{st.label}</StatusDot>
             </dd>
             <dt>知识库</dt>
-            <dd>{s.distilledAt ? `已整理（${fmtTime(s.distilledAt)}）` : '尚未整理进知识库'}</dd>
+            <dd>{s.distilledAt ? `已整理（${fmtTime(s.distilledAt)}）` : '未整理'}</dd>
             <dt>添加时间</dt>
             <dd className="num">{fullTime(s.createdAt) || '—'}</dd>
           </dl>
@@ -143,7 +143,7 @@ function SourceDrawer({ source, onClose, onDelete, deleting }) {
               )}
             </>
           ) : (
-            <div className="muted">这份资料没有可显示的文字内容。</div>
+            <div className="muted">该资料无可显示的文字内容。</div>
           )}
         </div>
       )}
@@ -208,10 +208,10 @@ export default function SourcesTab({ header, onChanged }) {
 
   const removeOne = async (s) => {
     const ok = await confirm({
-      title: '删除这份资料？',
+      title: `删除资料「${s.name}」？`,
       message: (
         <>
-          将删除「{s.name}」。已经从它整理出的知识条目<strong>会保留</strong>，如需删除请到"条目"里操作。
+          已整理出的条目<strong>保留</strong>，如需删除请前往「条目」。
         </>
       ),
       confirmText: '删除',
@@ -245,7 +245,7 @@ export default function SourcesTab({ header, onChanged }) {
       title: `删除 ${ids.length} 份资料？`,
       message: (
         <>
-          已经从这些资料整理出的知识条目<strong>会保留</strong>，如需删除请到"条目"里操作。
+          已整理出的条目<strong>保留</strong>，如需删除请前往「条目」。
         </>
       ),
       confirmText: '删除',
@@ -272,7 +272,7 @@ export default function SourcesTab({ header, onChanged }) {
       toast.success(
         done.length === ids.length
           ? `已删除 ${done.length} 份资料`
-          : `已删除 ${done.length} 份，${ids.length - done.length} 份没删掉`,
+          : `已删除 ${done.length} 份，${ids.length - done.length} 份删除失败`,
       );
       onChanged?.();
     }
@@ -458,8 +458,8 @@ export default function SourcesTab({ header, onChanged }) {
                 total === 0 ? (
                   <EmptyState
                     icon={FileText}
-                    title="还没有资料"
-                    desc={`产品手册、价格表、常见问题、售后政策、公司官网都可以。${SOURCE_FORMATS_TEXT}，也可以直接把文件拖进来。`}
+                    title="暂无资料"
+                    desc={`适用于产品手册、价格表、常见问题、售后政策、公司官网等。${SOURCE_FORMATS_TEXT}，支持拖拽上传。`}
                     action={
                       <button type="button" className="btn btn--primary" onClick={upload.pickFiles} disabled={!!uploading}>
                         <Upload />
@@ -468,7 +468,7 @@ export default function SourcesTab({ header, onChanged }) {
                     }
                   />
                 ) : (
-                  <EmptyState compact title="没有匹配的资料" />
+                  <EmptyState compact title="无匹配的资料" />
                 )
               }
             />

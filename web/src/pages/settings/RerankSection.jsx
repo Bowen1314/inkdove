@@ -23,8 +23,8 @@ const LABELS = {
   apiKey: 'API 密钥',
 };
 const CODES = {
-  rerank_base_url_required: { field: 'baseUrl', text: '开启时必须填写接口地址' },
-  rerank_model_required: { field: 'model', text: '开启时必须填写重排模型' },
+  rerank_base_url_required: { field: 'baseUrl', text: '开启时需填写接口地址' },
+  rerank_model_required: { field: 'model', text: '开启时需填写重排模型' },
 };
 
 const toDraft = (r) => ({ enabled: !!r?.enabled, baseUrl: r?.baseUrl || '', model: r?.model || '' });
@@ -56,8 +56,8 @@ export default function RerankSection({ settings, onSaved }) {
     !needsTest || shownResult?.ok
       ? ''
       : shownResult
-        ? '测试没通过，改好后再测试，成功了才能保存'
-        : `${base.enabled ? '改了重排服务' : '开启前'}要先点「测试」，测试成功才能保存`;
+        ? '测试未通过，请修正后重新测试，测试成功后可保存'
+        : `${base.enabled ? '重排服务已变更' : '开启前'}需点击「测试」，测试成功后可保存`;
   const errOf = (k) => (fieldErr?.field === k ? fieldErr.text : '');
   const set = (k, v) => {
     if (fieldErr?.field === k) setFieldErr(null);
@@ -126,9 +126,9 @@ export default function RerankSection({ settings, onSaved }) {
         r?.ok
           ? {
               ok: true,
-              text: `测试成功：模型 ${r.model || draft.model} 排好了 ${r.results} 段文字${
-                r.topMatches ? '，中文的问题把英文的答案排在了第一' : ''
-              }，用时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
+              text: `测试成功：模型 ${r.model || draft.model} 已排序 ${r.results} 段文本${
+                r.topMatches ? '，中文问题的英文答案排名第一' : ''
+              }，耗时 ${((r.latencyMs || 0) / 1000).toFixed(1)} 秒`,
               conn: testedConn,
             }
           : { ok: false, text: `测试失败：${r?.error || '原因未知'}`, conn: testedConn },
@@ -145,7 +145,7 @@ export default function RerankSection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="重排（rerank，可选）"
-        desc="关键词和按意思搜找出来的候选条目，再请专门的重排模型按和客户问题的相关度排一次，带进回复的条目更准。只在知识库超过约 4 万字、要检索时才用（首页 AI 助手查知识库时超过 6000 字就用）；出错或超时就照原来的顺序，不影响回复。"
+        desc="由重排模型按与客户问题的相关度对关键词和语义检索的候选条目重新排序，提升回复引用的准确性。仅在知识库超过约 4 万字需检索时使用（首页 AI 助手超过 6000 字即使用）；出错或超时时保持原顺序，不影响回复。"
         onSubmit={onSubmit}
         actions={<ResetButton onClick={() => setDraft({ ...DEFAULTS })} disabled={sameDraft(draft, DEFAULTS)} />}
       >
@@ -153,7 +153,7 @@ export default function RerankSection({ settings, onSaved }) {
           inline
           label="重排"
           htmlFor="rr-enabled"
-          hint="开启后，每次检索会把客户最近的话（最多 1500 字）和前 40 条候选条目（每条最多 2000 字）发给重排服务，按服务商的价格计费。"
+          hint="每次检索将客户近期消息（最多 1500 字）和前 40 条候选条目（每条最多 2000 字）发送至重排服务，按服务商价格计费。"
         >
           <Switch id="rr-enabled" checked={draft.enabled} onChange={(v) => set('enabled', v)} label="重排" />
         </SettingsRow>
@@ -161,7 +161,7 @@ export default function RerankSection({ settings, onSaved }) {
         <SettingsRow
           label="接口地址（Base URL）"
           htmlFor="rr-base"
-          hint="按服务商文档填，系统会在后面加上 /rerank。Jina 填 https://api.jina.ai/v1，Cohere 填 https://api.cohere.com/v2，硅基流动填 https://api.siliconflow.cn/v1，Voyage 填 https://api.voyageai.com/v1；自己部署的 vLLM、Xinference 填 http://<主机>:<端口>/v1。"
+          hint="按服务商文档填写，系统自动追加 /rerank。示例：https://api.jina.ai/v1；自部署的 vLLM、Xinference 填写 http://<主机>:<端口>/v1。"
         >
           <input
             {...fieldProps('rr-base', errOf('baseUrl'))}
@@ -175,7 +175,7 @@ export default function RerankSection({ settings, onSaved }) {
           <FieldError id="rr-base">{errOf('baseUrl')}</FieldError>
         </SettingsRow>
 
-        <SettingsRow label="API 密钥" htmlFor="rr-key" hint="自己部署的服务没设密钥就不用填。">
+        <SettingsRow label="API 密钥" htmlFor="rr-key" hint="自部署且未设置密钥时无需填写。">
           <div className="settings-page__secret">
             <SecretField
               id="rr-key"
@@ -196,20 +196,20 @@ export default function RerankSection({ settings, onSaved }) {
         <SettingsRow
           label="重排模型"
           htmlFor="rr-model"
-          hint="例如 Jina 的 jina-reranker-v2-base-multilingual、Cohere 的 rerank-v3.5、硅基流动的 BAAI/bge-reranker-v2-m3 或 Qwen/Qwen3-Reranker-8B、Voyage 的 rerank-2.5。客户和知识库语言不同时选多语言的模型。"
+          hint="示例：jina-reranker-v2-base-multilingual。客户与知识库语言不同时请选用多语言模型。"
         >
           <div className="settings-page__inline">
             <input
               {...fieldProps('rr-model', errOf('model'))}
               className="input input--mono"
-              placeholder="重排模型的名字"
+              placeholder="模型名称"
               value={draft.model}
               onChange={(e) => set('model', e.target.value)}
               spellCheck={false}
             />
             <button type="button" className="btn" onClick={test} disabled={testing || !draft.model.trim() || !draft.baseUrl.trim()}>
               {testing ? <Spinner /> : <PlugZap />}
-              {testing ? '正在测试…' : '测试'}
+              {testing ? '测试中…' : '测试'}
             </button>
           </div>
           <FieldError id="rr-model">{errOf('model')}</FieldError>

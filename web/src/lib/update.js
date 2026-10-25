@@ -76,10 +76,10 @@ export function scheduleResultOf(r) {
   if (!r) return null;
   const head = `${fmtDateTime(r.at)} 的预约更新`;
   if (r.outcome === 'success') {
-    return { tone: 'success', text: r.from ? `${head}：已从 v${r.from} 更新到 v${r.to}` : `${head}：已经是 v${r.to}，不用再更新` };
+    return { tone: 'success', text: r.from ? `${head}：已从 v${r.from} 更新到 v${r.to}` : `${head}：已是 v${r.to}，无需更新` };
   }
   if (r.outcome === 'missed') {
-    return { tone: 'warning', text: `${head}：错过了预约时间（那时服务没在运行），没有更新` };
+    return { tone: 'warning', text: `${head}：已错过预约时间（服务未运行），未更新` };
   }
   return { tone: 'danger', text: `${head}失败：${r.error || '原因不明'}` };
 }

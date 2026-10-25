@@ -224,7 +224,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
       loadJobs();
       reloadSources();
       if (job.status === 'done') toast.success('知识库整理完成');
-      else if (job.status === 'failed') toast.error(job.error || '整理没有完成，请查看日志');
+      else if (job.status === 'failed') toast.error(job.error || '整理未完成，请查看日志');
     }
   }, [active, job, onChanged, loadJobs, reloadSources]);
 
@@ -236,8 +236,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
 
   const cancel = async () => {
     const ok = await confirm({
-      title: '取消这次整理？',
-      message: '取消后任务会停止。之后可以在这里或「文件 → 知识库资料」里重新开始整理。',
+      title: '取消本次整理？',
+      message: '取消后任务停止，可在此处或「文件 → 知识库资料」重新开始。',
       confirmText: '取消整理',
       cancelText: '继续整理',
       danger: true,
@@ -323,8 +323,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
         <EmptyState
           fill
           icon={ListChecks}
-          title="还没有整理过知识库"
-          desc="先添加资料（文件、网址或粘贴文本都可以），再点「开始整理」，系统会把资料整理成知识条目。文件也可以直接拖进来。"
+          title="暂无整理记录"
+          desc="添加资料（文件、网址或文本）后点击「开始整理」，系统将资料整理为条目。支持拖拽上传文件。"
           action={<SourceUploadButton upload={upload} primary label="上传资料" />}
         />
       </>
@@ -373,7 +373,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
           <div className="kb-distill__progress">
             <div className="kb-distill__progress-label">
               <span>
-                {job.status === 'done' ? '全部完成' : job.status === 'queued' ? '排队等待中' : `当前步骤：${phaseLabel}`}
+                {job.status === 'done' ? '全部完成' : job.status === 'queued' ? '排队中' : `当前步骤：${phaseLabel}`}
               </span>
               {total > 0 && (
                 <span className="muted text-sm num">
@@ -415,7 +415,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
               </Link>
               {(job.stats?.gapsFound ?? 0) > 0 && (
                 <Link to="/kb/gaps" className="btn btn--sm">
-                  补充缺失的答案
+                  补充缺失答案
                   <ArrowRight />
                 </Link>
               )}

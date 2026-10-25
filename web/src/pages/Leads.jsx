@@ -24,7 +24,7 @@ import { fmtFull } from '../lib/format.js';
 
 /** 抽屉里能改的字段（和 Lead 字段名一致；改过的字段后端记进 manualFields） */
 const EDIT_FIELDS = ['name', 'company', 'country', 'email', 'interest', 'quantity', 'stage', 'summary'];
-const MANUAL_HINT = '已手动修改，重新提取不会覆盖';
+const MANUAL_HINT = '已手动修改，重新提取时不覆盖';
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const STAGE_OPTIONS = LEAD_STAGES.map(({ value, label }) => ({ value, label }));
@@ -100,7 +100,7 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
     });
     if (!Object.keys(patch).length) return;
     if (patch.email && !EMAIL_RE.test(patch.email)) {
-      setEmailErr('邮箱格式不对');
+      setEmailErr('邮箱格式错误');
       return;
     }
     setBusy('save');
@@ -141,8 +141,8 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
   const remove = async () => {
     if (busy) return;
     const ok = await confirm({
-      title: '删除这条客户线索？',
-      message: `「${displayName(lead)}」的线索删除后无法恢复，会话和聊天记录不受影响。`,
+      title: '删除该客户线索？',
+      message: `「${displayName(lead)}」的线索删除后无法恢复，会话和消息记录不受影响。`,
       confirmText: '删除',
       danger: true,
     });
@@ -212,7 +212,7 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
               <dd>{lead.contactName}</dd>
             </>
           )}
-          <dt>所属号</dt>
+          <dt>所属号码</dt>
           <dd>{acctName || '—'}</dd>
           <dt>最近联系</dt>
           <dd className="num">{fmtFull(lead.lastContactAt) || '—'}</dd>
@@ -221,10 +221,10 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
             {refreshing ? (
               <span className="leads-drawer__busy">
                 <Spinner />
-                正在提取…
+                提取中…
               </span>
             ) : (
-              fmtFull(lead.extractedAt) || '还没提取过'
+              fmtFull(lead.extractedAt) || '未提取'
             )}
           </dd>
           <dt>更新时间</dt>
@@ -245,7 +245,7 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
         </div>
 
         <div className="form-grid leads-drawer__fields">
-          {input('name', '名字')}
+          {input('name', '姓名')}
           {input('company', '公司')}
           {input('country', '国家')}
           {input('email', '邮箱', { type: 'email', autoComplete: 'off' })}
@@ -260,7 +260,7 @@ function LeadDrawer({ lead, acctName, canDelete, onClose, onUpdated, onDeleted }
               className="textarea"
               rows={4}
               value={form.summary}
-              placeholder="还没有摘要"
+              placeholder="暂无摘要"
               onChange={(e) => set('summary', e.target.value)}
             />
           </Field>
@@ -365,7 +365,7 @@ export default function Leads() {
       })
       .catch((e) => {
         if (!alive) return;
-        toast.error(e.status === 404 ? '这条客户线索不存在或已被删除' : e.message);
+        toast.error(e.status === 404 ? '客户线索不存在或已删除' : e.message);
         closeDrawer();
       });
     return () => {
@@ -453,7 +453,7 @@ export default function Leads() {
     },
     {
       key: 'account',
-      header: '所属号',
+      header: '所属号码',
       hide: 'xl',
       sortValue: (l) => acctOf(l) || null,
       render: (l) => <TextCell value={acctOf(l)} />,
@@ -491,7 +491,7 @@ export default function Leads() {
 
   const settingsLink = (
     <Link className="btn btn--primary" to="/settings/leads">
-      去设置里打开
+      前往设置开启
     </Link>
   );
 
@@ -501,11 +501,11 @@ export default function Leads() {
       <EmptyState
         fill
         icon={Contact}
-        title="还没有客户线索"
+        title="暂无客户线索"
         desc={
           extractOff
-            ? '自动提取客户线索已关闭。打开后，客户聊过几轮，系统会自动整理出线索。'
-            : '客户聊过几轮后，系统会自动整理出线索。'
+            ? '自动提取客户线索已关闭。开启后，系统将在客户多轮对话后自动生成线索。'
+            : '客户多轮对话后，系统自动生成线索。'
         }
         action={extractOff && settingsLink}
       />
@@ -516,7 +516,7 @@ export default function Leads() {
         <TableToolbar
           search={q}
           onSearch={setQ}
-          searchPlaceholder="搜索名字、公司、号码"
+          searchPlaceholder="搜索姓名、公司、号码"
           count={leads && !error ? leads.length : undefined}
           end={
             // 导出客户线索只有管理员能做（客户归公司），业务员不显示
@@ -543,7 +543,7 @@ export default function Leads() {
               value={accountId}
               onChange={setAccountId}
               options={accountOptions}
-              aria-label="按号筛选"
+              aria-label="按号码筛选"
             />
           )}
         </TableToolbar>
@@ -561,7 +561,7 @@ export default function Leads() {
             empty={
               <EmptyState
                 compact
-                title="没有符合条件的客户"
+                title="无符合条件的客户"
                 action={
                   <button type="button" className="btn btn--sm" onClick={clearFilters}>
                     清除筛选
@@ -587,7 +587,7 @@ export default function Leads() {
                 自动提取已关闭
               </StatusDot>
               <Link className="link text-sm" to="/settings/leads">
-                去设置里打开
+                前往设置开启
               </Link>
             </span>
           )

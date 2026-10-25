@@ -29,7 +29,7 @@ function RenameModal({ account, open, onClose, onSaved }) {
     try {
       const res = await api.putAccount(account.id, { name: name.trim() });
       onSaved(res && res.id ? res : { ...account, name: name.trim() });
-      toast.success('名称已保存');
+      toast.success('已保存');
     } catch {
       // 已提示
     } finally {
@@ -75,10 +75,10 @@ function RenameModal({ account, open, onClose, onSaved }) {
 function DeleteGroup({ onDelete, deleting }) {
   return (
     <SettingsSection title="删除号码">
-      <SettingsRow inline label="删除这个号" hint="会话和客户线索会保留。要换接入方式，也需要删掉这个号再重新添加。">
+      <SettingsRow inline label="删除号码" hint="会话与客户线索保留。变更接入方式需删除后重新添加。">
         <button type="button" className="btn btn--danger" onClick={onDelete} disabled={deleting}>
           {deleting ? <Spinner /> : <Trash2 />}
-          删除这个号
+          删除号码
         </button>
       </SettingsRow>
     </SettingsSection>
@@ -135,7 +135,7 @@ export default function AccountDetail() {
       <div className="page numbers-detail">
         <PageHeader crumbs={[listCrumb, { label: '号码详情' }]} />
         <ErrorState
-          title={error.status === 404 ? '这个号码不存在或已删除' : error.status === 403 ? '没有权限查看这个号码' : '加载失败'}
+          title={error.status === 404 ? '号码不存在或已删除' : error.status === 403 ? '无权限查看该号码' : '加载失败'}
           error={known ? null : error}
           onRetry={known ? undefined : load}
         />
@@ -159,10 +159,10 @@ export default function AccountDetail() {
   const remove = async () => {
     const ok = await confirm({
       title: `删除号码「${account.name}」？`,
-      message: `删除后这个号不再收发消息${
-        account.channel === 'waha' ? '，扫码登录会被退出' : ''
-      }，删除后不能恢复。已有的会话和客户线索会保留，所属号显示为"（已删除）"；这个号会从所有成员的负责范围里移除。`,
-      confirmText: '删除这个号',
+      message: `删除后该号码停止收发消息${
+        account.channel === 'waha' ? '，扫码登录将退出' : ''
+      }，且无法恢复。会话与客户线索保留，所属号码显示为「（已删除）」，并从所有成员的负责范围中移除。`,
+      confirmText: '删除号码',
       danger: true,
     });
     if (!ok) return;
@@ -170,7 +170,7 @@ export default function AccountDetail() {
     try {
       await api.deleteAccount(account.id);
       invalidateAccounts();
-      toast.success('号码已删除，会话记录仍然保留');
+      toast.success('号码已删除，会话记录已保留');
       navigate('/whatsapp/numbers', { replace: true });
     } catch {
       setDeleting(false);

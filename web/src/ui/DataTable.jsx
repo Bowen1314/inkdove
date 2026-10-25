@@ -235,7 +235,7 @@ export function DataTable({
                             className="checkbox"
                             checked={!!selected?.has(k)}
                             onChange={() => toggleOne(k)}
-                            aria-label="选择这一行"
+                            aria-label="选择此行"
                           />
                         </td>
                       )}

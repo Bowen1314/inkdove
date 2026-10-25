@@ -103,7 +103,7 @@ export default function CampaignList() {
     },
     {
       key: 'accounts',
-      header: '用到的号',
+      header: '发送号码',
       hide: 'lg',
       render: (c) => {
         const text = accountsText(c);
@@ -190,8 +190,8 @@ export default function CampaignList() {
       <EmptyState
         fill
         icon={Megaphone}
-        title="还没有外联任务"
-        desc="上传一份号码文件，系统会按每日上限和对方当地时间，给每个号码发一条开场消息。"
+        title="暂无外联任务"
+        desc="上传号码文件后，系统按每日上限和对方当地时间向每个号码发送一条开场消息。"
         action={newButton}
       />
     );
@@ -222,7 +222,7 @@ export default function CampaignList() {
           empty={
             <EmptyState
               compact
-              title={filtering ? '没有符合条件的任务' : '还没有外联任务'}
+              title={filtering ? '无符合条件的任务' : '暂无外联任务'}
               action={
                 filtering && (
                   <button type="button" className="btn btn--sm" onClick={clearFilters}>

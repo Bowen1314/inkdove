@@ -64,7 +64,7 @@ function PerAccountTable({ campaign, accounts }) {
   const columns = [
     {
       key: 'name',
-      header: '号',
+      header: '号码',
       fluid: true,
       sortValue: (r) => r.accountName || '',
       render: (r) => {
@@ -93,11 +93,11 @@ function PerAccountTable({ campaign, accounts }) {
   ];
   return (
     <DataTable
-      label="各号进度"
+      label="各号码进度"
       columns={columns}
       rows={rows}
       rowKey={(r) => r.accountId}
-      empty={<EmptyState compact title="还没有分配数据" />}
+      empty={<EmptyState compact title="暂无分配数据" />}
     />
   );
 }
@@ -203,7 +203,7 @@ function Recipients({ campaign, accounts, refreshKey }) {
     },
     {
       key: 'account',
-      header: '分配的号',
+      header: '分配号码',
       hide: 'md',
       render: (r) =>
         r.accountId ? (
@@ -263,7 +263,7 @@ function Recipients({ campaign, accounts, refreshKey }) {
             rows={data ? data.rows : null}
             rowKey={(r) => r.id}
             pageSize={PAGE_SIZE}
-            empty={<EmptyState compact title={filter ? `没有「${filterLabel}」的收件人` : '还没有收件人'} />}
+            empty={<EmptyState compact title={filter ? `无「${filterLabel}」的收件人` : '暂无收件人'} />}
           />
           {data && pages > 1 && (
             <div className="pagination">
@@ -365,8 +365,8 @@ export default function CampaignDetail() {
   const cancel = async () => {
     const pending = statsOf(campaign).pending;
     const ok = await confirm({
-      title: '取消这个外联任务？',
-      message: `${pending > 0 ? `剩下 ${fmtNum(pending)} 个待发号码不会再发送，` : ''}已经发出的消息和会话不受影响。取消后不能恢复。`,
+      title: '取消该外联任务？',
+      message: `${pending > 0 ? `剩余 ${fmtNum(pending)} 个待发号码将不再发送，` : ''}已发送的消息和会话不受影响。取消后无法恢复。`,
       confirmText: '取消任务',
       cancelText: '不取消',
       danger: true,
@@ -375,8 +375,8 @@ export default function CampaignDetail() {
   };
   const remove = async () => {
     const ok = await confirm({
-      title: '删除这个外联任务？',
-      message: `「${campaign.name || '未命名任务'}」和它的收件人记录会被删除，已经发出的消息和会话不受影响。`,
+      title: '删除该外联任务？',
+      message: `「${campaign.name || '未命名任务'}」及其收件人记录将被删除，已发送的消息和会话不受影响。`,
       confirmText: '删除',
       danger: true,
     });
@@ -402,7 +402,7 @@ export default function CampaignDetail() {
           <EmptyState
             fill
             icon={SearchX}
-            title="这个外联任务不存在或已被删除"
+            title="外联任务不存在或已删除"
             action={
               <Link className="btn btn--primary" to="/outreach">
                 返回外联列表
@@ -497,14 +497,14 @@ export default function CampaignDetail() {
         )}
         {(status === 'running' || status === 'paused') && offline.length > 0 && (
           <Callout tone="warning">
-            {offline.map((a) => `「${a.name || '未命名号码'}」`).join('')}没有连接，连上之后才会继续发送。
+            {offline.map((a) => `「${a.name || '未命名号码'}」`).join('')}未连接，连接后继续发送。
           </Callout>
         )}
 
         <div className="outreach-detail__progress">
           <div className="outreach-detail__progress-label">
             <span>已发 / 总数</span>
-            {status === 'draft' && <span className="muted text-sm">草稿还没开始发送</span>}
+            {status === 'draft' && <span className="muted text-sm">草稿尚未发送</span>}
           </div>
           <CampaignProgress stats={s} />
         </div>
@@ -566,8 +566,8 @@ export default function CampaignDetail() {
         </dl>
       </div>
 
-      <section className="outreach-detail__section" aria-label="各号进度">
-        <h2 className="outreach-detail__section-title">各号进度</h2>
+      <section className="outreach-detail__section" aria-label="各号码进度">
+        <h2 className="outreach-detail__section-title">各号码进度</h2>
         <PerAccountTable campaign={campaign} accounts={accounts} />
       </section>
 

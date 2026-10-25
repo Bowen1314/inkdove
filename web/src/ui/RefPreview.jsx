@@ -159,9 +159,9 @@ export function RefPreview({ trigger, label, children, placement = 'top-start', 
  */
 export function EntryPreviewBody({ entry, error = false, onOpenFull }) {
   if (entry === undefined) {
-    return <div className="ref-preview__state">{error ? '条目加载失败，请稍后再试' : <><Spinner /> 加载中…</>}</div>;
+    return <div className="ref-preview__state">{error ? '条目加载失败，请稍后重试' : <><Spinner /> 加载中…</>}</div>;
   }
-  if (entry === null) return <div className="ref-preview__state">这个条目已被删除</div>;
+  if (entry === null) return <div className="ref-preview__state">条目已删除</div>;
   return (
     <>
       <div className="ref-preview__meta">
@@ -239,7 +239,7 @@ function PreviewImage({ file }) {
       alive = false;
     };
   }, [file.id, file.updatedAt, tooBig]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (tooBig) return <div className="ref-preview__state">图片较大，点「下载」查看</div>;
+  if (tooBig) return <div className="ref-preview__state">图片较大，请点击「下载」查看</div>;
   if (failed) return <div className="ref-preview__state">图片加载失败</div>;
   if (!url) {
     return (
@@ -260,7 +260,7 @@ export function FilePreviewBody({ file }) {
       </div>
     );
   }
-  if (file === null) return <div className="ref-preview__state">这个文件已被删除</div>;
+  if (file === null) return <div className="ref-preview__state">文件已删除</div>;
   const desc = String(file.description || '').trim();
   return (
     <>
@@ -277,7 +277,7 @@ export function FilePreviewBody({ file }) {
       <div className="ref-preview__title">{file.name}</div>
       {file.filename && file.filename !== file.name && <div className="ref-preview__sub">{file.filename}</div>}
       <div className="ref-preview__body">
-        {desc || <span className="muted">{file.descriptionStatus === 'pending' ? '说明生成中…' : '没有说明'}</span>}
+        {desc || <span className="muted">{file.descriptionStatus === 'pending' ? '说明生成中…' : '无说明'}</span>}
       </div>
       <div className="ref-preview__actions">
         <a className="btn btn--sm" href={api.fileDownloadUrl(file.id)} download={file.filename || file.name}>

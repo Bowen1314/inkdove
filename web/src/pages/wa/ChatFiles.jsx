@@ -45,12 +45,12 @@ export function AttachmentCard({ attachment }) {
 export async function sendFilesInOrder({ convId, files, onSent }) {
   for (let i = 0; i < files.length; i += 1) {
     const f = files[i];
-    const rest = files.length - i - 1 > 0 ? '，后面的文件没有发' : '';
+    const rest = files.length - i - 1 > 0 ? '，后续文件未发送' : '';
     let msg;
     try {
       msg = await api.sendFile(convId, f.id, undefined, { silent: true });
     } catch (e) {
-      toast.error(`「${f.name}」没发出去：${fileErrorText(e)}${rest}`);
+      toast.error(`「${f.name}」发送失败：${fileErrorText(e)}${rest}`);
       return false;
     }
     onSent(msg);
@@ -164,11 +164,11 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
             <EmptyState
               compact
               icon={FolderOpen}
-              title="还没有可发送的文件"
+              title="暂无可发送的文件"
               desc={
                 isAdmin ? (
                   <Link className="link" to="/files/sendable">
-                    去「文件」页上传
+                    前往「文件」页上传
                   </Link>
                 ) : (
                   '请管理员在「文件」页上传。'
@@ -176,7 +176,7 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
               }
             />
           ) : shown.length === 0 ? (
-            <EmptyState compact title="没有匹配的文件" />
+            <EmptyState compact title="无匹配的文件" />
           ) : (
             <div role="listbox" aria-label="可发送的文件">
               {shown.map((f) => {
@@ -211,15 +211,15 @@ function SendFileModal({ open, conv, manual, onClose, onSent }) {
         {/* LINE 没有文件消息：1MB 以内的 jpg、png 按图片发，其他文件发成下载链接（30 天有效） */}
         {conv.channel === 'line' && (
           <div className="field__hint">
-            LINE 发不了文件：1MB 以内的 jpg、png 按图片发，其他文件会发成一条带文件名和下载链接的消息，链接 30 天内有效。
+            LINE 不支持发送文件：1MB 以内的 jpg、png 以图片发送，其他文件以含文件名和下载链接的消息发送，链接 30 天内有效。
           </div>
         )}
         {/* Telegram：10MB 以内的 jpg、png 按图片发（会压缩），其他按文件原样发 */}
         {isTelegram(conv.channel) && (
-          <div className="field__hint">Telegram：10MB 以内的 jpg、png 按图片发（Telegram 会压缩），其他文件原样发；说明文字最多 1024 字。</div>
+          <div className="field__hint">Telegram：10MB 以内的 jpg、png 以图片发送（将被压缩），其他文件按原文件发送；说明文字不超过 1024 字。</div>
         )}
         {/* 人工回复的号没有机器人可暂停 */}
-        {!conv.botPaused && !manual && <div className="field__hint">发送后机器人会暂停这个会话。</div>}
+        {!conv.botPaused && !manual && <div className="field__hint">发送后该会话的机器人将暂停。</div>}
       </div>
     </Modal>
   );

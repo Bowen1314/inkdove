@@ -66,11 +66,11 @@ const scopeLabel = (s) => REPLY_SCOPES.find((x) => x.value === (s === 'allowlist
 
 /** LINE 官方帐号、Telegram 号的客户只有用户 id、没有手机号：按号码的回复范围、白名单、黑名单都用不上（服务端也一律当范围内） */
 const NO_NUMBER_SCOPE_TEXT = {
-  line: '全部客户。LINE 官方帐号只收得到加了好友的人发来的消息，客户没有手机号，白名单和黑名单用不上。',
-  tgbot: '全部客户。Telegram 机器人只收得到主动给机器人发消息的人，客户没有手机号，白名单和黑名单用不上。',
-  tgbiz: '全部客户。客户没有手机号，白名单和黑名单用不上；不想让机器人管的聊天（比如亲友），请在 Telegram 的「聊天自动化」里排除。',
+  line: '全部客户。LINE 官方帐号仅接收好友发来的消息；客户无手机号，白名单和黑名单不适用。',
+  tgbot: '全部客户。Telegram 机器人仅接收主动发给机器人的消息；客户无手机号，白名单和黑名单不适用。',
+  tgbiz: '全部客户。客户无手机号，白名单和黑名单不适用；无需机器人处理的聊天（如亲友）请在 Telegram「聊天自动化」中排除。',
   tguser:
-    '全部客户。客户没有手机号，白名单和黑名单用不上；这个帐号的私聊都会进来，亲友发来的也会。不想让机器人回复的聊天，请在会话里暂停机器人，或者这个号用人工回复。',
+    '全部客户。客户无手机号，白名单和黑名单不适用；该帐号的全部私聊（含亲友）均将接入。如需排除，请在会话中暂停机器人，或对该号码使用人工回复。',
 };
 
 /**
@@ -91,7 +91,7 @@ function ReplyReadOnly({ account }) {
   const allowCount = Array.isArray(account.allowlist) ? account.allowlist.length : 0;
   const blockCount = Array.isArray(account.blocklist) ? account.blocklist.length : 0;
   return (
-    <SettingsSection title="回复" desc="号的设置只有管理员能修改">
+    <SettingsSection title="回复" desc="仅管理员可修改号码设置">
       <SettingsRow inline label="回复方式" hint={modeDesc(mode)}>
         <span className="text-strong nowrap">{replyModeLabel(mode)}</span>
       </SettingsRow>
@@ -200,19 +200,19 @@ function ReplyForm({ account, setAccount, globalSettings }) {
           {mode === 'off' && (
             <>
               {' '}
-              公司话术在
+              公司话术请在
               <Link to="/settings/suggest" className="link">
                 设置 → 推荐回复
               </Link>
-              里写。
+              中配置。
             </>
           )}
         </div>
         {mode === 'auto' && !isConnected(account) && (
           <div className="field__hint numbers-reply__warn">
-            这个号还没连接，{replyModeLabel(mode)}暂时不会生效。
+            该号码未连接，{replyModeLabel(mode)}暂不生效。
             <Link to={connectPath} className="link">
-              去连接
+              前往连接
             </Link>
           </div>
         )}
@@ -221,7 +221,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
       <SettingsRow
         label="身份和语气"
         htmlFor="rp-persona"
-        hint="自动回复和推荐回复都按这里的身份和语气写，留空就用全局设置。例如：你是某某公司的销售小王，语气热情、专业，称呼客户为“您”。"
+        hint="自动回复和推荐回复使用的身份与语气，留空则使用全局设置。示例：你是某某公司的销售小王，语气热情、专业，称呼客户为“您”。"
       >
         <textarea
           id="rp-persona"
@@ -234,12 +234,12 @@ function ReplyForm({ account, setAccount, globalSettings }) {
       </SettingsRow>
 
       {NO_NUMBER_SCOPE_TEXT[account.channel] ? (
-        <SettingsRow label="回复范围" hint="群聊、多人聊天一律不回复。">
+        <SettingsRow label="回复范围" hint="群聊不回复。">
           <div className="muted numbers-readonly">{NO_NUMBER_SCOPE_TEXT[account.channel]}</div>
         </SettingsRow>
       ) : (
         <>
-          <SettingsRow label="回复范围" hint="范围外的号码，消息不会被回复，也不会保存到后台。群聊一律不回复。">
+          <SettingsRow label="回复范围" hint="范围外号码的消息不回复、不保存。群聊不回复。">
             <div className="choice-list" role="radiogroup" aria-label="回复范围">
               {REPLY_SCOPES.map((o) => (
                 <label key={o.value} className="choice">
@@ -261,7 +261,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
           </SettingsRow>
 
           {draft.scope === 'allowlist' && (
-            <SettingsRow label="白名单" htmlFor="rp-allow" hint="每行一个号码，带国家码，例如 8613800138000 或 +1 415 555 0100。">
+            <SettingsRow label="白名单" htmlFor="rp-allow" hint="每行一个号码，含国家区号，如 8613800138000。">
               <textarea
                 id="rp-allow"
                 className="textarea input--mono"
@@ -274,7 +274,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
               />
               <div className="numbers-list-meta" id="rp-allow-meta">
                 {allowCount === 0 ? (
-                  <span className="text-warning">白名单是空的，机器人不会回复任何人（外联对象除外）。</span>
+                  <span className="text-warning">白名单为空，机器人不回复任何人（外联对象除外）。</span>
                 ) : (
                   <span />
                 )}
@@ -286,7 +286,7 @@ function ReplyForm({ account, setAccount, globalSettings }) {
           <SettingsRow
             label="黑名单"
             htmlFor="rp-block"
-            hint="每行一个号码。这些号码的消息不会保存到后台，也不会自动回复，适合填家人、朋友。"
+            hint="每行一个号码。所列号码的消息不保存、不自动回复，适用于亲友。"
           >
             <textarea
               id="rp-block"
@@ -335,10 +335,10 @@ function validateNotify(d) {
 function TestLine({ label, result }) {
   if (result === undefined) return null;
   if (result === null) {
-    return <StatusDot tone="neutral">{label}：未开启，没有发送</StatusDot>;
+    return <StatusDot tone="neutral">{label}：未开启，未发送</StatusDot>;
   }
   return result.ok ? (
-    <StatusDot tone="success">{label}：发送成功，请查收</StatusDot>
+    <StatusDot tone="success">{label}：已发送，请查收</StatusDot>
   ) : (
     <StatusDot tone="danger">
       {label}：发送失败{result.error ? `：${result.error}` : ''}
@@ -346,9 +346,9 @@ function TestLine({ label, result }) {
   );
 }
 
-const EMAIL_NOT_CONFIGURED = '还没有配置发信方式，先到设置里配置才能发邮件通知';
+const EMAIL_NOT_CONFIGURED = '未配置发信方式，请先在设置中配置';
 
-const NOTIFY_DESC = '需要人来处理时通知你：自动回复模式下机器人拿不准、没回复的问题，以及客户发来的语音、图片等机器人处理不了的消息';
+const NOTIFY_DESC = '需人工处理时发送通知：自动回复模式下无法确定、未回复的问题，以及机器人无法处理的语音、图片等消息';
 
 /**
  * 号详情的「通知」分组。admin 能改；agent 只看开关状态（收件邮箱、号码接口不给 agent，改和测试通知都是 403）。
@@ -364,7 +364,7 @@ function OnOff({ on }) {
 
 function NotifyReadOnly({ account }) {
   return (
-    <SettingsSection title="通知" desc={`${NOTIFY_DESC}。收件人只有管理员能看和修改。`}>
+    <SettingsSection title="通知" desc={`${NOTIFY_DESC}。仅管理员可查看和修改收件人。`}>
       <SettingsRow inline label="邮件通知">
         <OnOff on={!!account.notify?.email?.enabled} />
       </SettingsRow>
@@ -399,7 +399,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
   const savedWaOn = !!account.notify?.whatsapp?.enabled;
   // LINE 官方帐号、Telegram 号发不了 WhatsApp 通知（服务端拒绝开启）；万一已经开着，开关留着让人关掉
   const noWa = !isWhatsapp(account.channel);
-  const channelName = CHANNEL_LABEL[account.channel] || '这个号';
+  const channelName = CHANNEL_LABEL[account.channel] || '该号码';
   const anyNotify = draft.emailEnabled || draft.waEnabled;
   // null = 不知道（全局设置还没拿到）
   const emailConfigured = globalSettings ? !!globalSettings.email?.provider : emailBlocked ? false : null;
@@ -409,7 +409,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
   const saveAll = async () => {
     setShowErrors(true);
     if (Object.keys(errors).length) {
-      toast.error('有设置需要修改，请检查标红的项目');
+      toast.error('部分设置有误，请检查标红项');
       return false;
     }
     const patch = {
@@ -462,9 +462,9 @@ function NotifyForm({ account, setAccount, globalSettings }) {
   };
 
   const testHint = !anyNotify
-    ? '先开启至少一种通知方式'
+    ? '请至少开启一种通知方式'
     : dirty
-      ? '会先保存当前修改，再发送测试'
+      ? '将先保存当前修改，再发送测试'
       : `将发送到：${[savedEmailOn && '邮件', savedWaOn && 'WhatsApp'].filter(Boolean).join('、') || '—'}`;
 
   return (
@@ -475,7 +475,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
       onSubmit={onSubmit}
       actions={<RestoreButton onClick={() => setDraft(NOTIFY_DEFAULTS)} disabled={saving || sameDraft(draft, NOTIFY_DEFAULTS)} />}
     >
-      <SettingsRow inline label="邮件通知" hint="用「设置」里配置的发信方式发送">
+      <SettingsRow inline label="邮件通知" hint="使用「设置」中配置的发信方式发送">
         <Switch
           checked={draft.emailEnabled}
           onChange={(v) => set('emailEnabled', v)}
@@ -490,7 +490,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
             tone="warning"
             action={
               <Link to="/settings/email" className="btn btn--sm">
-                去设置
+                前往设置
               </Link>
             }
           >
@@ -500,7 +500,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
       )}
 
       {draft.emailEnabled && (
-        <SettingsRow label="收件人" htmlFor="nt-to" hint="多个地址用逗号或换行分隔">
+        <SettingsRow label="收件人" htmlFor="nt-to" hint="多个地址以逗号或换行分隔">
           <textarea
             id="nt-to"
             className="textarea"
@@ -521,14 +521,14 @@ function NotifyForm({ account, setAccount, globalSettings }) {
       )}
 
       {noWa && !draft.waEnabled ? (
-        <SettingsRow inline label="WhatsApp 通知" hint={`WhatsApp 通知要由这个号发给一个手机号，${channelName}发不了，请用邮件通知`}>
+        <SettingsRow inline label="WhatsApp 通知" hint={`WhatsApp 通知需由该号码发送至手机号，${channelName}不支持，请使用邮件通知`}>
           <span className="muted nowrap">不支持</span>
         </SettingsRow>
       ) : (
         <SettingsRow
           inline
           label="WhatsApp 通知"
-          hint={noWa ? `${channelName}发不了 WhatsApp 通知，请关掉，改用邮件通知` : '用这个号发给下面的号码；这个号码发来的消息不会被自动回复'}
+          hint={noWa ? `${channelName}不支持 WhatsApp 通知，请关闭并改用邮件通知` : '由该号码发送至下方号码；接收号码发来的消息不自动回复'}
         >
           <Switch checked={draft.waEnabled} onChange={(v) => set('waEnabled', v)} label="开启 WhatsApp 通知" />
         </SettingsRow>
@@ -538,7 +538,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
         <SettingsRow
           label="接收通知的号码"
           htmlFor="nt-wa"
-          hint="带国家码，例如 8613800138000。Meta 官方接口的号，这个号码 24 小时内给企业号发过消息才能收到。"
+          hint="含国家区号，如 8613800138000。Meta 官方接口号码：接收号码须在 24 小时内向企业号发过消息。"
         >
           <input
             id="nt-wa"
@@ -557,7 +557,7 @@ function NotifyForm({ account, setAccount, globalSettings }) {
             </div>
           )}
           <div className="field__hint" id="nt-wa-usage">
-            在 WhatsApp 里直接引用通知回复，内容会转发给客户；回复 /d 发送草稿，回复 /resume 恢复机器人。
+            在 WhatsApp 中引用通知回复，内容将转发给客户；回复 /d 发送草稿，回复 /resume 恢复机器人。
           </div>
         </SettingsRow>
       )}

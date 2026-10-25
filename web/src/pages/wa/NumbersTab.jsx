@@ -20,27 +20,27 @@ export const CHANNEL_OPTIONS = [
   {
     value: 'waha',
     title: '扫码连接',
-    desc: '用手机 WhatsApp 扫码关联，几分钟就能用。私人号和 WhatsApp Business 号都可以。',
+    desc: '使用手机 WhatsApp 扫码关联，支持个人号与 WhatsApp Business 号。',
   },
   {
     value: 'meta',
     title: 'Meta 官方接口',
-    desc: '适合已开通 WhatsApp Business Platform 的企业，需要在 Meta 开发者后台配置。',
+    desc: '适用于已开通 WhatsApp Business Platform 的企业，需在 Meta 开发者后台配置。',
   },
   {
     value: 'line',
     title: 'LINE 官方帐号',
-    desc: '接 LINE 官方帐号（Messaging API），客户加好友后来聊。需要在 LINE Developers Console 配置。',
+    desc: '接入 LINE 官方帐号（Messaging API），客户添加好友后发起会话。需在 LINE Developers Console 配置。',
   },
   {
     value: 'tgbot',
     title: 'Telegram 机器人',
-    desc: '客户在 Telegram 里找到你的机器人来聊。在 @BotFather 创建机器人、填 token 即可，不需要公网地址。',
+    desc: '客户通过 Telegram 机器人发起会话。在 @BotFather 创建机器人并填写 token，无需公网地址。',
   },
   {
     value: 'tgbiz',
     title: 'Telegram 私人号',
-    desc: '用你本人的 Telegram 号回复私聊：通过 Telegram 官方的「聊天自动化」把一个机器人连到你的号上。',
+    desc: '以本人 Telegram 帐号回复私聊：通过 Telegram「聊天自动化」将机器人关联到该帐号。',
   },
   {
     value: 'tguser',
@@ -50,7 +50,7 @@ export const CHANNEL_OPTIONS = [
 ];
 
 const TG_TOKEN_RE = /^\d{5,15}:[A-Za-z0-9_-]{30,}$/;
-export const TG_TOKEN_ERROR = '格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段';
+export const TG_TOKEN_ERROR = '格式错误：应为 @BotFather 提供的完整 token（数字:字母串）';
 
 /** status.me.id（如 8613800138000@c.us）→ +8613800138000 */
 export function phoneOf(account) {
@@ -128,7 +128,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
     setTouched(false);
   };
   const setLineField = (k, v) => setLine((l) => ({ ...l, [k]: v }));
-  const lineIdError = channel === 'line' && line.channelId.trim() && !/^\d+$/.test(line.channelId.trim()) ? 'Channel ID 只能是数字' : null;
+  const lineIdError = channel === 'line' && line.channelId.trim() && !/^\d+$/.test(line.channelId.trim()) ? 'Channel ID 须为数字' : null;
   const isTg = isTgBotApi(channel);
   const tgTokenError = isTg && tgToken.trim() && !TG_TOKEN_RE.test(tgToken.trim()) ? TG_TOKEN_ERROR : null;
   const isTgUser = channel === 'tguser';
@@ -177,7 +177,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
         }
       }
       invalidateAccounts();
-      toast.success('号码已添加，接下来完成连接');
+      toast.success('号码已添加，请完成连接');
       reset();
       onCreated(acc);
     } catch {
@@ -225,7 +225,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
             className="input"
             value={name}
             maxLength={40}
-            placeholder="例如：销售小王、售后专线"
+            placeholder="示例：售后专线"
             autoComplete="off"
             onChange={(e) => setName(e.target.value)}
           />
@@ -253,15 +253,15 @@ function AddAccountModal({ open, onClose, onCreated }) {
               </button>
             ))}
           </div>
-          <div className="field__hint">添加后不能更改。要换接入方式，需要删除这个号再重新添加。</div>
-          {channel === 'waha' && <div className="field__hint">每个扫码号大约占用 100–200MB 内存</div>}
+          <div className="field__hint">添加后不可更改；变更接入方式需删除号码后重新添加。</div>
+          {channel === 'waha' && <div className="field__hint">每个号码约占用 100–200MB 内存</div>}
         </div>
         {channel === 'line' && (
           <>
             <Callout tone="info">
-              在 LINE Developers Console 打开这个官方帐号的 Messaging API channel：Basic settings 页面有 Channel ID 和 Channel
-              secret；Messaging API 页面最下面签发长期的 Channel access token。添加后把号详情「连接」里的 Webhook URL 填到 Messaging API
-              页面的 Webhook URL，并打开「Use webhook」。三项可以先空着，之后在「连接」里填。
+              1. 在 LINE Developers Console 打开该官方帐号的 Messaging API channel：Basic settings 页面获取 Channel ID 与 Channel
+              secret，Messaging API 页面底部签发长期 Channel access token。2. 添加后，将号码详情「连接」中的 Webhook URL 填入 Messaging
+              API 页面的 Webhook URL，并开启「Use webhook」。以上三项可留空，稍后在「连接」中填写。
             </Callout>
             <Field label="Channel ID" htmlFor="acc-line-id" error={lineIdError} optional>
               <input
@@ -301,16 +301,16 @@ function AddAccountModal({ open, onClose, onCreated }) {
           <>
             {channel === 'tgbiz' ? (
               <Callout tone="warning">
-                <strong>用私人号接入前请注意：</strong>
-                {'墨鸽会收到这个 Telegram 号的私聊消息（「聊天自动化」里排除的聊天除外），亲友发来的也会进来；开着自动回复时，机器人以你本人的身份回复。' +
-                  '建议在 Telegram 的「聊天自动化」里排除联系人、只管新聊天，或者这个号用人工回复。机器人只能回复 24 小时内给你发过消息的私聊。'}
+                <strong>接入前须知：</strong>
+                {'墨鸽将接收该 Telegram 帐号的全部私聊消息（「聊天自动化」中排除的聊天除外），包括亲友消息；开启自动回复时，机器人以本人身份回复。' +
+                  '建议在「聊天自动化」中排除联系人、仅处理新聊天，或对该号码使用人工回复。机器人仅可回复 24 小时内发来消息的私聊。'}
               </Callout>
             ) : null}
             <Callout tone="info">
               {channel === 'tgbiz'
-                ? '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人（只给这个号用），再在 Bot Settings → Business Mode 里打开 Business Mode。添加后到「连接」里按步骤绑定号主、在「聊天自动化」里添加机器人。'
-                : '在 Telegram 里打开 @BotFather，发送 /newbot 创建一个机器人，把它给的 token 填到下面。客户在 Telegram 里搜索机器人的用户名就能来聊。'}
-              token 可以先空着，之后在「连接」里填。
+                ? '1. 在 Telegram 打开 @BotFather，发送 /newbot 创建该号码专用的机器人。2. 在 Bot Settings → Business Mode 中开启 Business Mode。添加后在「连接」中按步骤绑定号主，并在「聊天自动化」中添加机器人。'
+                : '在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，将返回的 token 填入下方。客户搜索机器人用户名即可发起会话。'}
+              token 可留空，稍后在「连接」中填写。
             </Callout>
             <Field label="机器人 token" htmlFor="acc-tg-token" error={tgTokenError} optional>
               <input
@@ -329,7 +329,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
         {isTgUser && (
           <>
             <Callout tone="warning">
-              <strong>用扫码登录接入前请注意：</strong>
+              <strong>接入前须知：</strong>
               {TGUSER_WARNING}
             </Callout>
             <Callout tone="info">
@@ -341,7 +341,7 @@ function AddAccountModal({ open, onClose, onCreated }) {
                 className="input input--mono"
                 value={tgApi.apiId}
                 inputMode="numeric"
-                placeholder="一串数字"
+                placeholder="纯数字"
                 autoComplete="off"
                 onChange={(e) => setTgApi((v) => ({ ...v, apiId: e.target.value }))}
               />
@@ -380,14 +380,14 @@ function previewImport(text) {
     throw new Error('文件不是有效的 JSON');
   }
   if (!doc || typeof doc !== 'object' || doc.format !== EXPORT_FORMAT) {
-    throw new Error('这不是墨鸽导出的号码配置文件');
+    throw new Error('非墨鸽导出的号码配置文件');
   }
   if (doc.version !== EXPORT_VERSION) {
-    throw new Error(`不支持这个文件版本（version: ${JSON.stringify(doc.version ?? null)}），只能导入 version ${EXPORT_VERSION}`);
+    throw new Error(`不支持该文件版本（version: ${JSON.stringify(doc.version ?? null)}），仅支持 version ${EXPORT_VERSION}`);
   }
-  if (!Array.isArray(doc.accounts)) throw new Error('文件里的 accounts 不是列表');
+  if (!Array.isArray(doc.accounts)) throw new Error('文件中的 accounts 不是数组');
   return doc.accounts.map((a) => ({
-    name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : '（没有名称）',
+    name: typeof a?.name === 'string' && a.name.trim() ? a.name.trim() : '（未命名）',
     channel: a?.channel,
   }));
 }
@@ -416,7 +416,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
     try {
       const res = await api.importAccounts(pick.file, { silent: true });
       setResult(res);
-      if (res.created.length) toast.success(`已导入 ${res.created.length} 个号`);
+      if (res.created.length) toast.success(`已导入 ${res.created.length} 个号码`);
       onImported();
     } catch (err) {
       setError(err?.message || '导入失败，请稍后重试');
@@ -431,10 +431,10 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
     body = (
       <div className="vstack" style={{ gap: 'var(--sp-3)' }}>
         <div className="numbers-import__summary">
-          新建了 {result.created.length} 个号{result.skipped.length > 0 && `，跳过 ${result.skipped.length} 个`}
+          已新建 {result.created.length} 个号码{result.skipped.length > 0 && `，跳过 ${result.skipped.length} 个`}
         </div>
         {result.skipped.length > 0 && (
-          <ul className="numbers-import__list" aria-label="跳过的号">
+          <ul className="numbers-import__list" aria-label="已跳过的号码">
             {result.skipped.map((s, i) => (
               <li key={i} className="numbers-import__item numbers-import__item--stack">
                 <span className="numbers-import__name">{s.name}</span>
@@ -445,7 +445,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
         )}
         {/* 导入时被自动调整过的号（比如没配发信方式，邮件通知被关掉了） */}
         {result.created.some((c) => c.notices?.length > 0) && (
-          <ul className="numbers-import__list" aria-label="需要留意的号">
+          <ul className="numbers-import__list" aria-label="需注意的号码">
             {result.created
               .filter((c) => c.notices?.length > 0)
               .map((c) => (
@@ -457,10 +457,10 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
           </ul>
         )}
         {result.created.length > 0 && hasWaha && (
-          <div className="field__hint">扫码接入的号还没有连接，请到各号的「连接」里重新扫码或用配对码连接。</div>
+          <div className="field__hint">扫码接入的号码尚未连接，请在各号码的「连接」中扫码或使用配对码连接。</div>
         )}
         {result.created.length > 0 && hasTgUser && (
-          <div className="field__hint">Telegram 扫码登录的号还没有登录，请到各号的「连接」里扫码登录。</div>
+          <div className="field__hint">Telegram 扫码登录的号码尚未登录，请在各号码的「连接」中扫码登录。</div>
         )}
       </div>
     );
@@ -487,7 +487,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
       </>
     );
   } else if (!items.length) {
-    body = <div className="muted">文件里没有号码，没有可以导入的内容。</div>;
+    body = <div className="muted">文件中无号码，无可导入内容。</div>;
     footer = (
       <button type="button" className="btn" onClick={onClose}>
         关闭
@@ -497,8 +497,8 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
     body = (
       <div className="vstack" style={{ gap: 'var(--sp-3)' }}>
         {error && <Callout tone="danger">{error}</Callout>}
-        <div className="numbers-import__summary">将新建 {items.length} 个号</div>
-        <ul className="numbers-import__list" aria-label="要新建的号">
+        <div className="numbers-import__summary">将新建 {items.length} 个号码</div>
+        <ul className="numbers-import__list" aria-label="待新建的号码">
           {items.map((a, i) => (
             <li key={i} className="numbers-import__item">
               <span className="numbers-import__name">{a.name}</span>
@@ -506,24 +506,24 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
             </li>
           ))}
         </ul>
-        {hasWaha && <div className="field__hint">扫码接入的号导入后需要重新扫码或用配对码连接。</div>}
+        {hasWaha && <div className="field__hint">扫码接入的号码导入后需重新扫码或使用配对码连接。</div>}
         {hasMeta && (
           <div className="field__hint">
-            Meta 号导入后回调地址会变成新地址，要到 Meta 开发者后台改一下；phoneNumberId 和已有的号重复的会跳过。
+            Meta 号码导入后回调地址将变更，需在 Meta 开发者后台更新；phoneNumberId 与现有号码重复的将跳过。
           </div>
         )}
         {hasLine && (
           <div className="field__hint">
-            LINE 官方帐号导入后 Webhook URL 会变成新地址，要到 LINE Developers Console 改一下；Channel ID 和已有的号重复的会跳过。
+            LINE 官方帐号导入后 Webhook URL 将变更，需在 LINE Developers Console 更新；Channel ID 与现有号码重复的将跳过。
           </div>
         )}
         {(hasTgBot || hasTgBiz) && (
           <div className="field__hint">
-            Telegram 号导入后马上开始收消息，原来的墨鸽要先删掉这个号或停掉，同一个机器人只能在一处收消息；机器人已经给别的号用的会跳过。
-            {hasTgBiz && '私人号导入后要重新绑定号主，并在「聊天自动化」里重新添加一次机器人。'}
+            Telegram 号码导入后立即开始接收消息。同一机器人仅可在一处接收消息，请先在原墨鸽中删除或停用该号码；机器人已被其他号码使用的将跳过。
+            {hasTgBiz && '私人号导入后需重新绑定号主，并在「聊天自动化」中重新添加机器人。'}
           </div>
         )}
-        {hasTgUser && <div className="field__hint">Telegram 扫码登录的号导入后要重新扫码登录：文件里只有 api_id 和 api_hash，没有登录态。</div>}
+        {hasTgUser && <div className="field__hint">Telegram 扫码登录的号码导入后需重新扫码登录：文件仅包含 api_id 和 api_hash，不含登录状态。</div>}
       </div>
     );
     footer = (
@@ -731,7 +731,7 @@ export default function NumbersTab() {
   const exportAll = async () => {
     const ok = await confirm({
       title: '导出号码配置',
-      message: `将导出全部 ${accounts?.length ?? 0} 个号的配置。\n文件里包含 Meta token、LINE 的 channel secret 和 access token、Telegram 机器人 token、代理密码等密钥的明文，请妥善保管。`,
+      message: `将导出全部 ${accounts?.length ?? 0} 个号码的配置。\n文件包含 Meta token、LINE channel secret 与 access token、Telegram 机器人 token、代理密码等密钥明文，请妥善保管。`,
       confirmText: '导出',
     });
     if (!ok) return;
@@ -746,7 +746,7 @@ export default function NumbersTab() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 0);
-      toast.success(`已导出 ${doc.accounts.length} 个号的配置`);
+      toast.success(`已导出 ${doc.accounts.length} 个号码的配置`);
     } catch {
       // 已提示
     } finally {
@@ -794,11 +794,11 @@ export default function NumbersTab() {
       <EmptyState
         fill
         icon={Smartphone}
-        title={isAdmin ? '还没有添加号码' : '还没有分配给你的号码'}
+        title={isAdmin ? '暂无号码' : '暂无已分配的号码'}
         desc={
           isAdmin
-            ? '添加一个 WhatsApp、LINE 或 Telegram 号，接入后客户消息会进到「会话」里，需要时让 AI 推荐回复，也可以开自动回复。一个企业可以接多个号，共用同一个知识库。'
-            : '请联系管理员把号码分配给你。'
+            ? '接入 WhatsApp、LINE 或 Telegram 号码后，客户消息进入「会话」，可使用推荐回复或自动回复。多个号码共用同一知识库。'
+            : '请联系管理员分配号码。'
         }
         action={addButton}
       />
@@ -832,7 +832,7 @@ export default function NumbersTab() {
           empty={
             <EmptyState
               compact
-              title={filtering ? '没有符合条件的号码' : '还没有号码'}
+              title={filtering ? '无符合条件的号码' : '暂无号码'}
               action={
                 filtering && (
                   <button type="button" className="btn btn--sm" onClick={clearFilters}>

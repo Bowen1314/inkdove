@@ -29,7 +29,7 @@ export function ChangePasswordModal({ open, onClose }) {
   const errs = {
     cur: !cur ? '请输入当前密码' : '',
     next: next.length < MIN_PASSWORD ? `新密码至少 ${MIN_PASSWORD} 个字符` : '',
-    again: again !== next ? '两次输入的新密码不一样' : '',
+    again: again !== next ? '两次输入的新密码不一致' : '',
   };
   const invalid = Object.values(errs).some(Boolean);
   const show = (k) => (touched ? errs[k] : '');
@@ -42,7 +42,7 @@ export function ChangePasswordModal({ open, onClose }) {
     setError('');
     try {
       await api.changePassword(cur, next);
-      toast.success('密码已修改，其他设备上的登录已失效');
+      toast.success('密码已修改，其他设备的登录已失效');
       onClose();
     } catch (err) {
       if (err.code === 'bad_credentials' || err.status === 401 || err.status === 403) setError('当前密码不正确');
@@ -81,7 +81,7 @@ export function ChangePasswordModal({ open, onClose }) {
             onChange={(e) => setCur(e.target.value)}
           />
         </Field>
-        <Field label="新密码" htmlFor="pwd-new" error={show('next')} hint={`至少 ${MIN_PASSWORD} 个字符。修改后，你在其他设备上的登录会失效。`}>
+        <Field label="新密码" htmlFor="pwd-new" error={show('next')} hint={`至少 ${MIN_PASSWORD} 个字符。修改后其他设备的登录将失效。`}>
           <input
             {...fieldProps('pwd-new', show('next'))}
             className="input"
@@ -91,7 +91,7 @@ export function ChangePasswordModal({ open, onClose }) {
             onChange={(e) => setNext(e.target.value)}
           />
         </Field>
-        <Field label="再输一次新密码" htmlFor="pwd-again" error={show('again')}>
+        <Field label="确认新密码" htmlFor="pwd-again" error={show('again')}>
           <input
             {...fieldProps('pwd-again', show('again'))}
             className="input"

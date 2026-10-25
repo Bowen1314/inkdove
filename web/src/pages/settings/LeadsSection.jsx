@@ -37,7 +37,7 @@ export default function LeadsSection({ settings, onSaved }) {
         inline
         label="自动提取客户线索"
         htmlFor="ld-enabled"
-        hint="客户停下来 10 分钟后，从会话里提取名字、公司、国家、意向产品、数量和阶段，填进「客户」页。会产生模型调用费用。"
+        hint="客户停止发送消息 10 分钟后，提取姓名、公司、国家、意向产品、数量和阶段，写入「客户」页。产生模型调用费用。"
       >
         <Switch
           id="ld-enabled"
