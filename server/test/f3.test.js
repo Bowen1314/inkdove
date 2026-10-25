@@ -68,13 +68,13 @@ describe('F3 在 WhatsApp 里直接处理转人工', () => {
     assert.equal(await getConv(t, cid(BOSS_CHAT)), null, '通知号码不存成客户会话');
   });
 
-  it('引用通知回复：原样转发给客户，存成 operator 消息（via=whatsapp、sentBy 为空），会话保持暂停，回执"✅ 已发给"', async () => {
+  it('引用通知回复：原样转发给客户，存成 operator 消息（via=whatsapp、sentBy 为空），会话保持暂停，回执"✅ 已发送给"', async () => {
     const { chat, notice } = await handoff('李女士');
     await bossSays('您好，我是店长，马上给您报价', notice.id);
     await waitFor(() => fake.sentTo(chat).length === 1);
     assert.equal(fake.sentTo(chat)[0].text, '您好，我是店长，马上给您报价');
     assert.equal(fake.sentTo(chat)[0].session, acc.waha.sessionName);
-    await waitBossReply('✅ 已发给 李女士');
+    await waitBossReply('✅ 已发送给 李女士');
     const out = (await getMessages(t, cid(chat))).filter((m) => m.direction === 'out');
     assert.equal(out.length, 1);
     assert.equal(out[0].author, 'operator');
@@ -99,12 +99,12 @@ describe('F3 在 WhatsApp 里直接处理转人工', () => {
     assert.equal(fake.sentTo(b.chat)[0].text, '从 stanzaID 找到');
   });
 
-  it('/d：把草稿原样发给客户并清空草稿；没有草稿时回"这个会话没有草稿"', async () => {
+  it('/d：把草稿原样发给客户并清空草稿；没有草稿时回"该会话无草稿"', async () => {
     const { chat, notice } = await handoff('赵先生');
     // 转人工时会自动起草（F2a）；先清掉草稿，测"没有草稿"的分支
     t.ctx.db.prepare('UPDATE conversations SET draft = NULL WHERE id = ?').run(cid(chat));
     await bossSays('/d', notice.id);
-    await waitBossReply('这个会话没有草稿');
+    await waitBossReply('该会话无草稿');
     assert.equal(fake.sentTo(chat).length, 0);
     // 直接写库：A 段格式的旧草稿 {text, createdAt} 也要认
     t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(JSON.stringify({ text: 'A100 是 59 元一个，您要多少？', createdAt: new Date().toISOString() }), cid(chat));
@@ -112,7 +112,7 @@ describe('F3 在 WhatsApp 里直接处理转人工', () => {
     await bossSays(' /D ', notice.id);
     await waitFor(() => fake.sentTo(chat).length === 1);
     assert.equal(fake.sentTo(chat)[0].text, 'A100 是 59 元一个，您要多少？');
-    await waitBossReply('✅ 已发给 赵先生');
+    await waitBossReply('✅ 已发送给 赵先生');
     assert.equal((await getConv(t, cid(chat))).draft, null, '发出后草稿清空');
     const out = (await getMessages(t, cid(chat))).filter((m) => m.direction === 'out');
     assert.equal(out[0].via, 'whatsapp');
@@ -142,10 +142,10 @@ describe('F3 在 WhatsApp 里直接处理转人工', () => {
     assert.equal(msgs.filter((m) => m.direction === 'in').at(-1).botDecision, 'replied');
   });
 
-  it('非文字消息：回"暂时只支持转发文字"，不转发', async () => {
+  it('非文字消息：回"仅支持转发文字"，不转发', async () => {
     const { chat, notice } = await handoff('周女士');
     await bossSays('', notice.id, { hasMedia: true, media: { mimetype: 'image/jpeg' } });
-    await waitBossReply('暂时只支持转发文字');
+    await waitBossReply('仅支持转发文字');
     assert.equal(fake.sentTo(chat).length, 0);
   });
 

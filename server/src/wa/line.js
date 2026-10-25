@@ -35,7 +35,7 @@ export const isInvalidReplyToken = (err) => err instanceof LineError && err.stat
 const auth = (line) => ({ authorization: `Bearer ${line.accessToken}` });
 
 async function lineFetch(url, line, init = {}, timeoutMs = 20_000) {
-  if (!line?.accessToken) throw new LineError('LINE 官方帐号还没有填 Channel access token');
+  if (!line?.accessToken) throw new LineError('LINE 官方帐号未填写 Channel access token');
   const { signal, headers, ...rest } = init;
   const timeout = AbortSignal.timeout(timeoutMs);
   let res;
@@ -46,7 +46,7 @@ async function lineFetch(url, line, init = {}, timeoutMs = 20_000) {
       signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
     });
   } catch (err) {
-    throw new LineError(`连不上 LINE Messaging API：${err?.cause?.code || err?.message || err}`);
+    throw new LineError(`无法连接 LINE Messaging API：${err?.cause?.code || err?.message || err}`);
   }
   const text = await res.text();
   let data = null;
@@ -115,7 +115,7 @@ export async function lineMarkAsRead(apiBase, line, markAsReadToken) {
 function downloadFail(err) {
   if (!(err instanceof HttpGetError)) return err;
   if (err.status) return new LineError(`下载媒体失败：LINE 返回 ${err.status}${err.detail ? `（${err.detail}）` : ''}`, { status: err.status });
-  return new LineError(`连不上 LINE：${err.message}`);
+  return new LineError(`无法连接 LINE：${err.message}`);
 }
 
 /**
@@ -125,7 +125,7 @@ function downloadFail(err) {
  * @returns {Promise<{res:import('node:http').IncomingMessage, mime:string, size:number|null}>}
  */
 export async function lineOpenContent(dataBase, line, messageId, { maxBytes, timeoutMs = 60_000, signal, retries = 5, retryDelayMs = 2000 } = {}) {
-  if (!line?.accessToken) throw new LineError('LINE 官方帐号还没有填 Channel access token');
+  if (!line?.accessToken) throw new LineError('LINE 官方帐号未填写 Channel access token');
   const url = `${dataBase}/v2/bot/message/${encodeURIComponent(messageId)}/content`;
   for (let attempt = 0; ; attempt++) {
     let got;
@@ -136,7 +136,7 @@ export async function lineOpenContent(dataBase, line, messageId, { maxBytes, tim
     }
     if (got.status === 202) {
       got.stream.resume();
-      if (attempt >= retries) throw new LineError('LINE 一直没准备好这个文件（返回 202），请在手机上查看');
+      if (attempt >= retries) throw new LineError('LINE 文件未就绪（持续返回 202），请在手机上查看');
       await sleep(retryDelayMs, signal);
       continue;
     }
@@ -149,7 +149,7 @@ export async function lineOpenContent(dataBase, line, messageId, { maxBytes, tim
  * 只取 https 地址
  */
 export async function lineOpenExternal(url, { maxBytes, timeoutMs = 60_000, signal } = {}) {
-  if (!/^https:\/\//i.test(String(url || ''))) throw new LineError('外部托管的媒体地址不是 https，没有下载');
+  if (!/^https:\/\//i.test(String(url || ''))) throw new LineError('外部托管的媒体地址非 https，已跳过下载');
   let got;
   try {
     got = await httpGet(String(url), { timeoutMs, signal });

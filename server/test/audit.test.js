@@ -73,7 +73,7 @@ describe('操作日志', () => {
 
       await login('looks-like-a-password-777', 'x');
       row = last('auth.login');
-      assert.equal(row.actor_email, '（不是邮箱格式）');
+      assert.equal(row.actor_email, '（邮箱格式无效）');
       assert.ok(!dump().includes('looks-like-a-password-777'));
 
       // 同一个邮箱失败 5 次后限流：第 6 次 429，不记
@@ -122,7 +122,7 @@ describe('操作日志', () => {
       const inv = last('auth.invite_accept');
       assert.equal(inv.ok, 1);
       assert.equal(inv.actor_id, agent.user.id);
-      assert.equal(inv.summary, '接受了邀请，设置登录密码');
+      assert.equal(inv.summary, '接受了邀请并设置登录密码');
 
       const r = await t.req('POST', `/api/users/${agent.user.id}/reset-link`);
       assert.equal(r.status, 200);
@@ -131,7 +131,7 @@ describe('操作日志', () => {
       const a = await t.req('POST', `/api/invites/${token}/accept`, { body: { password: 'agent-reset-password-2' }, auth: false });
       assert.equal(a.status, 200);
       const row = last('auth.invite_accept');
-      assert.equal(row.summary, '用重置链接重设了登录密码');
+      assert.equal(row.summary, '通过重置链接重设了登录密码');
       assert.equal(row.actor_id, agent.user.id);
       agent.password = 'agent-reset-password-2';
       agent.cookie = a.headers.get('set-cookie').split(';')[0];
@@ -152,11 +152,11 @@ describe('操作日志', () => {
       const r = await t.req('PUT', `/api/users/${agent.user.id}`, { body: { name: '张三丰' } });
       assert.equal(r.status, 200);
       let row = last('member.update');
-      assert.equal(row.summary, '修改了成员「张三丰」：名字 张三 → 张三丰');
+      assert.equal(row.summary, '修改了成员「张三丰」：姓名 张三 → 张三丰');
       assert.equal(row.target_type, 'user');
       assert.equal(row.target_id, agent.user.id);
       assert.equal(row.target_name, '张三丰');
-      assert.deepEqual(changesOf(row), [{ field: 'name', label: '名字', from: '张三', to: '张三丰' }]);
+      assert.deepEqual(changesOf(row), [{ field: 'name', label: '姓名', from: '张三', to: '张三丰' }]);
 
       const other = await t.addMember({ email: 'audit-other@example.com', name: '李四' });
       await t.req('PUT', `/api/users/${other.user.id}`, { body: { disabled: true } });
@@ -171,14 +171,14 @@ describe('操作日志', () => {
       const r = await t.req('PUT', `/api/accounts/${acc.id}`, { body: { replyMode: 'auto' } });
       assert.equal(r.status, 200);
       const row = last('account.update');
-      assert.equal(row.summary, '修改了号「销售 1 号」的设置：回复方式 人工回复 → 自动回复');
+      assert.equal(row.summary, '修改了号码「销售 1 号」的设置：回复方式 人工回复 → 自动回复');
       assert.equal(row.category, 'account');
       assert.equal(row.target_type, 'account');
       assert.equal(row.target_name, '销售 1 号');
 
       const ex = await t.req('GET', '/api/accounts/export');
       assert.equal(ex.status, 200);
-      assert.match(last('account.export').summary, /^导出了号码配置（\d+ 个号，文件里有密钥明文）$/);
+      assert.match(last('account.export').summary, /^导出了号码配置（\d+ 个号码，文件含明文密钥）$/);
     });
 
     it('会话：分给谁、暂停机器人；知识库：新建、修改、删除；客户线索导出；在线更新；不认识的接口按兜底记', async () => {
@@ -189,7 +189,7 @@ describe('操作日志', () => {
       let r = await t.req('PUT', `${convPath(convId)}/assignee`, { body: { userId: agent.user.id } });
       assert.equal(r.status, 200);
       let row = last('conversation.assign');
-      assert.match(row.summary, /^把会话「.+」分给了「张三丰」$/);
+      assert.match(row.summary, /^将会话「.+」分配给了「张三丰」$/);
       assert.equal(row.target_id, convId);
       assert.deepEqual(changesOf(row), [{ field: 'assignee', label: '负责人', from: '未分配', to: '张三丰' }]);
       r = await t.req('POST', `${convPath(convId)}/bot`, { body: { paused: true } });
@@ -256,7 +256,7 @@ describe('操作日志', () => {
       let r = await t.req('POST', `${convPath(convId)}/messages/${sent.body.id}/revoke`);
       assert.equal(r.status, 200, JSON.stringify(r.body));
       let row = last('conversation.message_revoke');
-      assert.match(row.summary, /^撤回了会话「.+」里的一条消息$/);
+      assert.match(row.summary, /^撤回了会话「.+」中的一条消息$/);
       assert.equal(row.ok, 1);
       assert.equal(row.category, 'conversation');
       assert.equal(row.target_type, 'conversation');
@@ -268,8 +268,8 @@ describe('操作日志', () => {
       row = last('conversation.message_revoke');
       assert.equal(row.ok, 0);
       assert.equal(row.status, 409);
-      assert.match(row.summary, /^撤回会话「.+」里的一条消息$/);
-      assert.equal(row.error, '这条消息已经撤回了');
+      assert.match(row.summary, /^撤回会话「.+」中的一条消息$/);
+      assert.equal(row.error, '该消息已撤回');
       assert.ok(!dump().includes('revoke-body-should-not-be-stored'), '消息内容不落库');
     });
 
@@ -293,14 +293,14 @@ describe('操作日志', () => {
       r = await t.req('POST', `/api/assistant/chats/${chatId}/retry`);
       assert.equal(r.status, 200, JSON.stringify(r.body));
       row = last('assistant.retry');
-      assert.equal(row.summary, '重新问了 AI 助手');
+      assert.equal(row.summary, '重新向 AI 助手提问了');
       assert.equal(row.category, 'assistant');
       await waitFor(() => status() !== 'running');
 
       r = await t.req('DELETE', `/api/assistant/chats/${chatId}`);
       assert.equal(r.status, 200);
       row = last('assistant.chat_delete');
-      assert.equal(row.summary, '删除了一个 AI 助手对话');
+      assert.equal(row.summary, '删除了 AI 助手对话');
       assert.equal(row.target_name, null);
 
       // 今天的次数用完：429 记成失败，错误信息里也没有问的内容
@@ -314,7 +314,7 @@ describe('操作日志', () => {
       assert.equal(row.ok, 0);
       assert.equal(row.status, 429);
       assert.equal(row.summary, '向 AI 助手提问');
-      assert.match(row.error, /今天的提问次数用完了/);
+      assert.match(row.error, /今日提问次数已用完/);
       t.ctx.db.prepare('DELETE FROM assistant_usage WHERE user_id = ?').run(adminId);
 
       const all = dump();
@@ -326,8 +326,8 @@ describe('操作日志', () => {
       const r = await t.req('PUT', `/api/accounts/${g.id}`, { body: { waha: { proxy: { enabled: false, useGlobal: true } } } });
       assert.equal(r.status, 200, JSON.stringify(r.body));
       const row = last('account.update');
-      assert.deepEqual(changesOf(row), [{ field: 'waha.proxy.useGlobal', label: '用全局代理', from: '关', to: '开' }]);
-      assert.equal(row.summary, '修改了号「全局代理号」的设置：用全局代理 关 → 开');
+      assert.deepEqual(changesOf(row), [{ field: 'waha.proxy.useGlobal', label: '使用全局代理', from: '关', to: '开' }]);
+      assert.equal(row.summary, '修改了号码「全局代理号」的设置：使用全局代理 关 → 开');
     });
 
     it('只读的 GET 不记（导出除外）', async () => {
@@ -447,7 +447,7 @@ describe('操作日志', () => {
       assert.equal(row.status, 403);
       assert.equal(row.actor_id, agent.user.id);
       assert.equal(row.actor_role, 'agent');
-      assert.equal(row.error, '没有权限');
+      assert.equal(row.error, '无权限');
       assert.equal(row.summary, '修改设置');
       assert.equal(row.changes, '[]');
 
@@ -699,12 +699,12 @@ proxies:
     assert.equal(row.ok, 1);
     assert.deepEqual(changesOf(row), [
       { field: 'proxy.subscriptionUrl', label: '全局代理 · 订阅地址', secret: true, note: '已设置' },
-      { field: 'proxy.bypass', label: '全局代理 · 不走代理的地址', from: '（空）', to: '*.corp.example.test', note: '新增 1 个' },
+      { field: 'proxy.bypass', label: '全局代理 · 直连地址', from: '（空）', to: '*.corp.example.test', note: '新增 1 个' },
       { field: 'proxy.subscriptionNodes', label: '全局代理 · 订阅的节点', note: '已设置（2 个节点）' },
     ]);
     assert.equal(
       row.summary,
-      '修改了设置：全局代理 · 订阅地址已设置；全局代理 · 不走代理的地址 （空） → *.corp.example.test；全局代理 · 订阅的节点已设置（2 个节点）',
+      '修改了设置：全局代理 · 订阅地址已设置；全局代理 · 直连地址 （空） → *.corp.example.test；全局代理 · 订阅的节点已设置（2 个节点）',
     );
 
     // 同一个订阅换个写法（多一个查询参数）：地址已修改，节点重新下载
@@ -742,19 +742,19 @@ proxies:
     assert.equal(r.status, 200);
     assert.equal(r.body.ok, false);
     let row = last('settings.proxy_test');
-    assert.equal(row.summary, '测试了全局代理（结果：没通过）');
+    assert.equal(row.summary, '测试了全局代理（结果：未通过）');
     assert.equal(row.category, 'settings');
     assert.equal(row.ok, 1);
     assert.equal(row.error, null);
 
     r = await t.req('POST', '/api/settings/proxy/delay');
     assert.equal(r.body.ok, false);
-    assert.equal(last('settings.proxy_delay').summary, '给全局代理的节点测了速（结果：没通过）');
+    assert.equal(last('settings.proxy_delay').summary, '测试了全局代理节点延迟（结果：未通过）');
 
     r = await t.req('POST', '/api/settings/proxy/refresh');
     assert.equal(r.body.ok, true, JSON.stringify(r.body));
     row = last('settings.proxy_refresh');
-    assert.equal(row.summary, '更新了全局代理的订阅（结果：通过）：全局代理 · 订阅的节点已更新（2 个节点）');
+    assert.equal(row.summary, '更新了全局代理订阅（结果：通过）：全局代理 · 订阅的节点已更新（2 个节点）');
 
     // 清掉订阅地址：地址和订阅的节点都已清空；再更新订阅就没通过
     r = await t.req('PUT', '/api/settings', { body: { proxy: { subscriptionUrl: null } } });
@@ -765,7 +765,7 @@ proxies:
     ]);
     r = await t.req('POST', '/api/settings/proxy/refresh');
     assert.equal(r.body.ok, false);
-    assert.equal(last('settings.proxy_refresh').summary, '更新了全局代理的订阅（结果：没通过）');
+    assert.equal(last('settings.proxy_refresh').summary, '更新了全局代理订阅（结果：未通过）');
     assertNoSecrets();
   });
 });
@@ -808,23 +808,23 @@ describe('操作日志：屏蔽词', () => {
     let r = await t.req('POST', `/api/blockwords/hits/${word.id}/ack`);
     assert.equal(r.status, 200);
     let row = last('blockword.ack');
-    assert.equal(row.summary, '对一条屏蔽词提醒点了「知道了」');
+    assert.equal(row.summary, '确认了一条屏蔽词提醒');
     assert.equal(row.category, 'blockword');
     assert.equal(row.target_type, 'blockword_hit');
     assert.equal(row.target_id, word.id);
     r = await t.req('POST', `/api/blockwords/hits/${ai}/ack`);
-    assert.equal(last('blockword.ack').summary, '对一条 AI 发言检查提醒点了「知道了」');
+    assert.equal(last('blockword.ack').summary, '确认了一条 AI 发言检查提醒');
     r = await t.req('POST', `/api/blockwords/hits/${ai}/false-positive`);
     assert.equal(r.status, 200);
     row = last('blockword.false_positive');
-    assert.equal(row.summary, '把一条 AI 发言检查提醒标了误报');
+    assert.equal(row.summary, '将一条 AI 发言检查提醒标记为误报');
     assert.equal(row.target_id, ai);
     // 屏蔽词命中标误报：400，记成失败
     r = await t.req('POST', `/api/blockwords/hits/${word.id}/false-positive`);
     assert.equal(r.status, 400);
     row = last('blockword.false_positive');
     assert.equal(row.ok, 0);
-    assert.equal(row.summary, '把一条 AI 发言检查提醒标误报');
+    assert.equal(row.summary, '将一条 AI 发言检查提醒标记为误报');
 
     r = await t.req('POST', '/api/blockwords/expand', { body: { seeds: ['seedalpha', 'seedbeta'], languages: ['en'] } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -845,7 +845,7 @@ describe('操作日志：屏蔽词', () => {
       assert.equal(row.ok, 0);
       assert.equal(row.status, 403);
       assert.equal(row.actor_id, agent.user.id);
-      assert.equal(row.error, '没有权限');
+      assert.equal(row.error, '无权限');
     }
     const types = (await t.req('GET', '/api/audit-logs/types')).body;
     assert.ok(types.some((x) => x.value === 'blockword' && x.label === '屏蔽词'));

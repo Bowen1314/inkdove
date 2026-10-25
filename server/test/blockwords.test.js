@@ -124,8 +124,8 @@ describe('屏蔽词匹配规则（单元）', () => {
     assert.equal(wordKey('Z.O.R.P'), 'zorp');
     assert.throws(() => normalizeWordList('zorp'), /blockwords\.words 必须是数组/);
     assert.throws(() => normalizeWordList(['ok', 3]), /blockwords\.words 第 2 行必须是字符串/);
-    assert.throws(() => normalizeWordList(['ok', 'x'.repeat(MAX_BLOCKWORD_CHARS + 1)]), /blockwords\.words 第 2 行太长了/);
-    assert.throws(() => normalizeWordList(['***']), /blockwords\.words 第 1 行「\*\*\*」里没有文字或数字/);
+    assert.throws(() => normalizeWordList(['ok', 'x'.repeat(MAX_BLOCKWORD_CHARS + 1)]), /blockwords\.words 第 2 行过长/);
+    assert.throws(() => normalizeWordList(['***']), /blockwords\.words 第 1 行「\*\*\*」不含文字或数字/);
     const many = Array.from({ length: MAX_BLOCKWORDS + 1 }, (_, i) => `w${i}`);
     assert.throws(() => normalizeWordList(many), /blockwords\.words 最多 500 个词/);
     assert.equal(normalizeWordList(many.slice(0, MAX_BLOCKWORDS)).length, MAX_BLOCKWORDS);
@@ -175,17 +175,17 @@ describe('AI 扩充的整理（单元）', () => {
       { word: '坏词儿', language: 'zh', seed: '坏词', risk: 'medium', reason: '口语', forced: false },
       { word: '瓜', language: 'zh', seed: '坏词', risk: 'high', reason: SINGLE_CHAR_REASON, forced: true },
       { word: 'qx', language: 'en', seed: 'zorp', risk: 'high', reason: SHORT_WORD_REASON, forced: true },
-      { word: 'zorpu', language: '', seed: null, risk: 'high', reason: '模型没有给出误判风险，按高处理', forced: false },
+      { word: 'zorpu', language: '', seed: null, risk: 'high', reason: '模型未给出误判风险，按高风险处理', forced: false },
     ]);
     // 直接给数组也认
     assert.equal(parseExpandOutput([{ word: 'zorpish', language: 'en', risk: 'low' }], req).length, 1);
   });
 
-  it(`最多留 ${MAX_EXPAND_RESULTS} 个；格式不对抛错`, () => {
+  it(`最多留 ${MAX_EXPAND_RESULTS} 个；格式错误抛错`, () => {
     const many = Array.from({ length: 100 }, (_, i) => ({ word: `zorpword${i}`, language: 'en', seed: 'zorp', risk: 'low', reason: 'r' }));
     assert.equal(parseExpandOutput({ candidates: many }, req).length, MAX_EXPAND_RESULTS);
     for (const bad of [null, 'zorp', 42, { words: [] }, { candidates: 'zorp' }]) {
-      assert.throws(() => parseExpandOutput(bad, req), /格式不对/, JSON.stringify(bad));
+      assert.throws(() => parseExpandOutput(bad, req), /格式错误/, JSON.stringify(bad));
     }
   });
 });
@@ -307,7 +307,7 @@ describe('屏蔽词（mock）', () => {
     // 保存时校验
     const bad = await setWords(['ok', 'x'.repeat(MAX_BLOCKWORD_CHARS + 1)]);
     assert.equal(bad.status, 400);
-    assert.match(bad.body.error, /^blockwords\.words 第 2 行太长了/);
+    assert.match(bad.body.error, /^blockwords\.words 第 2 行过长/);
   });
 
   it('后台发消息：命中不发（400，输入的话原样留在前端），记一条、会话状态不变；业务员也查；没命中照常发', async () => {
@@ -316,7 +316,7 @@ describe('屏蔽词（mock）', () => {
     const r = await t.req('POST', `${convPath(id)}/send`, { body: { text: 'Hi, you Z.O.R.P' }, cookie: agent.cookie });
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'blockword_hit');
-    assert.equal(r.body.error, '这条消息里有屏蔽词「zorp」，没有发出去，管理员会收到提醒');
+    assert.equal(r.body.error, '该消息含屏蔽词「zorp」，未发送，管理员将收到提醒');
     assert.equal(fake.sentTo(chat).length, 0, '没发给客户');
     assert.equal((await getMessages(t, id)).filter((m) => m.direction === 'out').length, 0, '没存消息');
     assert.equal((await getConv(t, id)).botPaused, before.botPaused, '没有人工接管');
@@ -365,7 +365,7 @@ describe('屏蔽词（mock）', () => {
     const r = await t.req('POST', `${convPath(id)}/send-file`, { body: { fileId, caption: '目录在这 blarg' }, cookie: agent.cookie });
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'blockword_hit');
-    assert.equal(r.body.error, '文件说明里有屏蔽词「blarg」，文件没有发出去，管理员会收到提醒');
+    assert.equal(r.body.error, '文件说明含屏蔽词「blarg」，文件未发送，管理员将收到提醒');
     assert.equal(fake.mediaTo(chat).length, 0);
     assert.equal(lastHit().source, 'file');
     const ok = await t.req('POST', `${convPath(id)}/send-file`, { body: { fileId, caption: '目录在这' } });
@@ -379,7 +379,7 @@ describe('屏蔽词（mock）', () => {
     const r = await t.req('POST', `${convPath(id)}/translate`, { body: { text: '你这个坏词' }, cookie: agent.cookie });
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'blockword_hit');
-    assert.equal(r.body.error, '这段话里有屏蔽词「坏词」，没有翻译，管理员会收到提醒');
+    assert.equal(r.body.error, '该文本含屏蔽词「坏词」，未翻译，管理员将收到提醒');
     assert.equal(rows("SELECT COUNT(*) n FROM llm_calls WHERE purpose = 'translate'")[0].n, before, '没调模型');
     const h = lastHit();
     assert.equal(h.source, 'translate');
@@ -396,7 +396,7 @@ describe('屏蔽词（mock）', () => {
     assert.equal(msgs.filter((m) => m.direction === 'out').length, 0);
     const inbound = msgs.find((m) => m.direction === 'in');
     assert.equal(inbound.botDecision, 'blocked');
-    assert.match(inbound.decisionReason, /回复里有屏蔽词「zorp」，没有发出，已转人工/);
+    assert.match(inbound.decisionReason, /回复含屏蔽词「zorp」，未发送，已转人工/);
     const conv = await getConv(t, id);
     assert.equal(conv.needsHuman, true);
     assert.equal(conv.botPaused, true);
@@ -426,7 +426,7 @@ describe('屏蔽词（mock）', () => {
     const notice = fake.sentTo(BOSS_CHAT).at(-1);
     const bossSays = (body) => wahaSend(t, acc, BOSS_CHAT, body, { replyTo: { id: notice.id, body: '...' } });
     await bossSays('好的 zorp');
-    await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '❌ 这条消息里有屏蔽词「zorp」，没有发出去，管理员会收到提醒'));
+    await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '❌ 该消息含屏蔽词「zorp」，未发送，管理员将收到提醒'));
     assert.equal(fake.sentTo(chat).length, 0);
     assert.equal(lastHit().source, 'relay');
     t.ctx.db.prepare('UPDATE conversations SET draft = ? WHERE id = ?').run(
@@ -434,7 +434,7 @@ describe('屏蔽词（mock）', () => {
       convIdOf(acc, chat),
     );
     await bossSays('/d');
-    await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '❌ 草稿里有屏蔽词「坏词」，没有发出去，管理员会收到提醒'));
+    await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '❌ 草稿含屏蔽词「坏词」，未发送，管理员将收到提醒'));
     assert.equal(fake.sentTo(chat).length, 0);
     assert.equal((await getConv(t, convIdOf(acc, chat))).draft.text, '草稿里有坏词', '草稿留着');
     assert.equal(hitRows().length, 2);
@@ -469,7 +469,7 @@ describe('屏蔽词（mock）', () => {
     const bad = await t.req('POST', '/api/campaigns', { body: form('Hi from zorp team', '秋季外联'), cookie: agent.cookie });
     assert.equal(bad.status, 400);
     assert.equal(bad.body.code, 'blockword_hit');
-    assert.equal(bad.body.error, '开场消息里有屏蔽词「zorp」，任务没有建，管理员会收到提醒');
+    assert.equal(bad.body.error, '开场消息含屏蔽词「zorp」，任务未创建，管理员将收到提醒');
     let h = lastHit();
     assert.equal(h.source, 'campaign');
     assert.equal(h.campaign_name, '秋季外联');
@@ -485,7 +485,7 @@ describe('屏蔽词（mock）', () => {
     await waitFor(() => t.ctx.outreach.idle());
     const camp = (await t.req('GET', `/api/campaigns/${c.body.campaign.id}`)).body;
     assert.equal(camp.status, 'paused');
-    assert.match(camp.error, /开场消息里有屏蔽词「qx」，任务已自动暂停/);
+    assert.match(camp.error, /开场消息含屏蔽词「qx」，任务已自动暂停/);
     assert.equal(fake.sentTo('8613900001111@c.us').length, 0);
     h = lastHit();
     assert.equal(h.source, 'campaign');
@@ -614,12 +614,12 @@ describe('屏蔽词（mock）', () => {
       assert.equal((await expand({ seeds: ['zorp'], languages: [] })).body.code, 'languages_required');
     });
 
-    it('模型输出格式不对 → 502（说清楚）；模型调用出错 → 502', async () => {
+    it('模型输出格式错误 → 502（说清楚）；模型调用出错 → 502', async () => {
       expandHook.fn = () => ({ words: ['zorpish'] });
       const r = await expand({ seeds: ['zorp'] });
       assert.equal(r.status, 502);
       assert.equal(r.body.code, 'llm_bad_output');
-      assert.match(r.body.error, /格式不对/);
+      assert.match(r.body.error, /格式错误/);
       expandHook.fn = () => {
         throw new Error('上游 500');
       };
@@ -684,7 +684,7 @@ describe('屏蔽词 AI 扩充（真实实现 + 假模型服务）', () => {
     const row = t.ctx.db.prepare("SELECT model, ok FROM llm_calls WHERE purpose = 'blocklist' ORDER BY ts DESC LIMIT 1").get();
     assert.deepEqual({ ...row }, { model: 'gpt-reply', ok: 1 });
 
-    // 不是 JSON
+    // 非 JSON
     llm.state.handler = () => [200, { model: 'gpt-reply', choices: [{ message: { role: 'assistant', content: '好的，下面是一些词：zorpish' } }] }];
     const bad = await t.req('POST', '/api/blockwords/expand', { body: { seeds: ['zorp'] } });
     assert.equal(bad.status, 502);

@@ -271,7 +271,7 @@ describe('Telegram 机器人', () => {
     await tg.close();
   });
 
-  it('未填 token：not_configured，不连 Telegram；token 格式不对 400；不能开 WhatsApp 通知', async () => {
+  it('未填 token：not_configured，不连 Telegram；token 格式错误 400；不能开 WhatsApp 通知', async () => {
     assert.equal(acc.status.state, 'not_configured');
     assert.deepEqual(acc.telegram, { botTokenSet: false });
     assert.equal(acc.waha, null);
@@ -283,7 +283,7 @@ describe('Telegram 机器人', () => {
     const wa = await t.req('PUT', `/api/accounts/${acc.id}`, { body: { notify: { whatsapp: { enabled: true, number: '+86 139 0000 1111' } } } });
     assert.equal(wa.status, 400);
     assert.equal(wa.body.code, 'whatsapp_notify_unsupported');
-    assert.match(wa.body.error, /Telegram 机器人发不了 WhatsApp 通知/);
+    assert.match(wa.body.error, /Telegram 机器人不支持 WhatsApp 通知/);
     const waha = await t.createAccount({ name: '扫码号' });
     assert.equal(waha.telegram, null);
     assert.equal((await t.req('PUT', `/api/accounts/${waha.id}`, { body: { telegram: { botToken: BOT } } })).status, 400, '扫码号没有 telegram 字段');
@@ -463,7 +463,7 @@ describe('Telegram 机器人', () => {
     const bad = await t.req('POST', `${convPath(cid(IVAN))}/messages/${out.id}/revoke`, { body: {} });
     assert.equal(bad.status, 502);
     assert.equal(bad.body.code, 'telegram_error');
-    assert.match(bad.body.error, /删不了/);
+    assert.match(bad.body.error, /无法删除/);
     assert.equal((await getMessages(t, cid(IVAN))).find((m) => m.id === out.id).revoked, null);
     bot.deleteFail = false;
     const ok = await t.req('POST', `${convPath(cid(IVAN))}/messages/${out.id}/revoke`, { body: {} });
@@ -483,7 +483,7 @@ describe('Telegram 机器人', () => {
   it('别处也在用这个 token（409）：failed、中文原因；好了以后自动恢复', async () => {
     bot.conflict = true;
     await waitFor(async () => (await status()).state === 'failed', { message: '409 没有显示出错' });
-    assert.match((await status()).error, /别的地方也在收消息/);
+    assert.match((await status()).error, /正被其他程序使用/);
     bot.conflict = false;
     await waitFor(async () => (await status()).state === 'working', { message: '没有自动恢复' });
     tg.push(BOT, botMsg(OLGA, { text: '恢复后的消息' }));
@@ -493,7 +493,7 @@ describe('Telegram 机器人', () => {
   it('token 失效（401）：停下不再重试；重新保存 token 后重新开始', async () => {
     tg.state.revoked.add(BOT);
     await waitFor(async () => (await status()).state === 'failed', { message: '401 没有显示出错' });
-    assert.match((await status()).error, /token 不对或已经失效/);
+    assert.match((await status()).error, /token 错误或已失效/);
     const n = tg.calls(BOT).length;
     await sleep(300);
     assert.equal(tg.calls(BOT).length, n, 'token 不对时停下，不一直重试');
@@ -521,7 +521,7 @@ describe('Telegram 机器人', () => {
     assert.match(n.subject, /^\[待人工\] 客户 Ivan Petrov（Telegram）：/);
     assert.match(n.text, /客户：Ivan Petrov（Telegram）/);
     assert.ok(!n.subject.includes(String(IVAN.id)));
-    assert.ok(!n.text.split('\n').filter((l) => !l.startsWith('去处理：')).some((l) => l.includes(String(IVAN.id))));
+    assert.ok(!n.text.split('\n').filter((l) => !l.startsWith('查看会话：')).some((l) => l.includes(String(IVAN.id))));
   });
 
   it('导出带 token；导入按机器人去重；其他接入方式带 telegram 报错', async () => {
@@ -539,12 +539,12 @@ describe('Telegram 机器人', () => {
     const dup = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([item])) });
     assert.equal(dup.status, 200, JSON.stringify(dup.body));
     assert.equal(dup.body.created.length, 0);
-    assert.match(dup.body.skipped[0].reason, /机器人 token 已经被号「TG 机器人」使用，同一个 Telegram 机器人不重复导入/);
+    assert.match(dup.body.skipped[0].reason, /机器人 token 已被号码「TG 机器人」使用，同一个 Telegram 机器人不重复导入/);
     const other = { ...item, name: 'TG 二号', telegram: { botToken: BOT2 } };
     const ok = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([other, { ...other, name: 'TG 三号', channel: 'tgbiz' }])) });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.created.length, 1);
-    assert.match(ok.body.skipped[0].reason, /和文件里前面的号「TG 二号」重复/);
+    assert.match(ok.body.skipped[0].reason, /与文件中靠前的号码「TG 二号」重复/);
     const created = t.ctx.accounts.get(ok.body.created[0].id);
     assert.equal(created.channel, 'tgbot');
     assert.deepEqual(created.telegram, { botToken: BOT2 });
@@ -552,7 +552,7 @@ describe('Telegram 机器人', () => {
     await waitFor(() => tg.calls(BOT2, 'getUpdates').length > 0, { message: '导入的号没有开始收消息' });
     const bad = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([{ ...item, channel: 'waha' }])) });
     assert.equal(bad.status, 400);
-    assert.match(bad.body.message || JSON.stringify(bad.body), /telegram 只有 Telegram 号才有/);
+    assert.match(bad.body.message || JSON.stringify(bad.body), /telegram 仅适用于 Telegram 接入方式/);
     await t.req('DELETE', `/api/accounts/${created.id}`);
   });
 
@@ -728,7 +728,7 @@ describe('Telegram 私人号（聊天自动化）', () => {
     assert.equal(st.state, 'waiting');
     assert.deepEqual(st.telegram.owner, { name: 'Bowen Owner' });
     assert.equal(st.telegram.bindLink, null);
-    assert.match(st.error, /是「Stranger」，不是绑定的号主「Bowen Owner」/);
+    assert.match(st.error, /为「Stranger」，与绑定的号主「Bowen Owner」不一致/);
     const u = tg.push(BIZ, botMsg(STRANGER, { text: `/start bind_${code}` }));
     await tg.consumed(BIZ, u);
     assert.equal(tg.calls(BIZ, 'sendMessage').length, 1);
@@ -834,18 +834,18 @@ describe('Telegram 私人号（聊天自动化）', () => {
     await waitFor(async () => (await status()).error, { message: '没有提示缺回复权限' });
     let st = await status();
     assert.equal(st.state, 'working');
-    assert.match(st.error, /没有代你回复消息的权限/);
+    assert.match(st.error, /机器人无回复消息权限/);
     const n = tg.calls(BIZ, 'sendMessage').length;
     const r = await t.req('POST', `${convPath(cid(MARIA))}/send`, { body: { text: '您好' } });
     assert.equal(r.body.status, 'failed');
-    assert.match(r.body.error, /回复消息的权限/);
+    assert.match(r.body.error, /回复消息权限/);
     conn('bc-1', OWNER, ALL_RIGHTS, false);
     await waitFor(async () => (await status()).state === 'waiting', { message: '断开后没有 waiting' });
     st = await status();
     assert.equal(st.telegram.connection.enabled, false);
     const r2 = await t.req('POST', `${convPath(cid(MARIA))}/send`, { body: { text: '您好' } });
     assert.equal(r2.body.status, 'failed');
-    assert.match(r2.body.error, /还没有连上机器人/);
+    assert.match(r2.body.error, /尚未连接机器人/);
     assert.equal(tg.calls(BIZ, 'sendMessage').length, n, '没连好时一条都不发');
   });
 
@@ -860,12 +860,12 @@ describe('Telegram 私人号（聊天自动化）', () => {
     const link = r.body.status.telegram.bindLink;
     assert.match(link, /start=bind_/);
     const audit = t.ctx.db.prepare("SELECT summary FROM audit_logs WHERE action = 'account.telegram_rebind'").get();
-    assert.equal(audit.summary, '清掉号「TG 私人号」绑定的 Telegram 号主');
+    assert.equal(audit.summary, '解除号码「TG 私人号」绑定的 Telegram 号主');
     // 号主先在「聊天自动化」里重新连上，再绑定：绑定后马上能收发
     conn('bc-1', OWNER, ALL_RIGHTS);
     tg.push(BIZ, botMsg(OWNER, { text: `/start bind_${link.split('start=bind_')[1]}` }));
     await waitFor(async () => (await status()).state === 'working', { message: '重新绑定后没有 working' });
-    assert.match(tg.lastTo(BIZ, 'sendMessage', OWNER.id).body.text, /已经连好了/);
+    assert.match(tg.lastTo(BIZ, 'sendMessage', OWNER.id).body.text, /「聊天自动化」已连接/);
 
     const plain = await t.createAccount({ name: 'TG 机器人号', channel: 'tgbot' });
     const w = await t.req('POST', `/api/accounts/${plain.id}/telegram/rebind`);

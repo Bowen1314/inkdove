@@ -245,10 +245,10 @@ describe('客户媒体存盘和显示', () => {
       const before = storedFiles().length;
       const chat = newChat();
       const big = await sendMedia(chat, wahaFile(Buffer.alloc(10), 'video/mp4', { contentLength: MAX + 1 }));
-      assert.deepEqual(big.media, { type: 'video', mime: 'video/mp4', size: MAX + 1, filename: null, stored: 'too_large', error: '文件太大，没有保存' });
+      assert.deepEqual(big.media, { type: 'video', mime: 'video/mp4', size: MAX + 1, filename: null, stored: 'too_large', error: '文件过大，未保存' });
       const streamed = await sendMedia(chat, wahaFile(Buffer.alloc(MAX + 100, 7), 'application/zip', { chunked: true, filename: 'big.zip' }));
       assert.equal(streamed.media.stored, 'too_large');
-      assert.equal(streamed.media.error, '文件太大，没有保存');
+      assert.equal(streamed.media.error, '文件过大，未保存');
       assert.equal(streamed.media.size, null, '没声明大小，不知道实际多大');
       assert.equal(streamed.media.filename, 'big.zip');
       // 正好等于上限的能存
@@ -265,14 +265,14 @@ describe('客户媒体存盘和显示', () => {
       const chat = newChat();
       const gone = await sendMedia(chat, { url: `http://waha:3000/api/files/${acc.waha.sessionName}/NOPE`, mimetype: 'image/jpeg' });
       assert.equal(gone.media.stored, 'failed');
-      assert.equal(gone.media.error, 'WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', '404 给人话，不带 WAHA 的原文');
+      assert.equal(gone.media.error, 'WAHA 返回 404：文件已过期或不存在', '404 给人话，不带 WAHA 的原文');
       const noUrl = await sendMedia(chat, { url: null, mimetype: 'video/mp4' });
       assert.equal(noUrl.media.stored, 'failed');
-      assert.match(noUrl.media.error, /没有提供下载地址/);
+      assert.match(noUrl.media.error, /未返回下载地址/);
       const err = await sendMedia(chat, { url: null, mimetype: 'image/jpeg', error: 'download timeout' });
-      assert.match(err.media.error, /WAHA 下载媒体出错：download timeout/);
+      assert.match(err.media.error, /WAHA 下载媒体失败：download timeout/);
       const outside = await sendMedia(chat, { url: 'http://evil.example.com/steal', mimetype: 'image/jpeg' });
-      assert.match(outside.media.error, /不是 WAHA 的 \/api\/files\/ 路径/);
+      assert.match(outside.media.error, /不属于 WAHA \/api\/files\/ 路径/);
       assert.equal((await fetchMedia(cid(chat), gone.id)).status, 404);
       await wahaSend(t, acc, chat, '后面这条文字照常收');
       await waitFor(async () => (await getMessages(t, cid(chat))).some((m) => m.text === '后面这条文字照常收'));
@@ -654,15 +654,15 @@ describe('媒体下载（node:http）', () => {
     assert.ok(seen.has('/echo'), '跟着跳过去了');
     assert.equal(seen.get('/echo')['x-api-key'], undefined, '别的主机拿不到 key');
     await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/loop'), (err) => {
-      assert.equal(err.message, `WAHA 连不上（${baseA}）：重定向次数太多`);
+      assert.equal(err.message, `无法连接 WAHA（${baseA}）：重定向次数过多`);
       return true;
     });
   });
 
   it('WAHA：出错文案同 request()（404 给人话、HTML 不带正文、JSON 带 message）；超时', async () => {
-    await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/html404'), { message: 'WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', status: 404 });
+    await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/html404'), { message: 'WAHA 返回 404：文件已过期或不存在', status: 404 });
     await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/json403'), { message: 'WAHA 返回 403：forbidden', status: 403 });
-    await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/hang', { timeoutMs: 200 }), { message: `WAHA 连不上（${baseA}）：超时` });
+    await assert.rejects(waha.fetchMedia('http://waha:3000/api/files/s/hang', { timeoutMs: 200 }), { message: `无法连接 WAHA（${baseA}）：超时` });
     // 读正文时超时：存盘报「下载超时」，不留半截文件
     const res = await waha.fetchMedia('http://waha:3000/api/files/s/stall', { timeoutMs: 300 });
     await assert.rejects(store.saveResponse(res, { maxBytes: MEDIA_STORE_MAX_BYTES }), (err) => err instanceof HttpGetError && err.message === '下载超时');

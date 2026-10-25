@@ -117,25 +117,25 @@ export function parseEmbedResponse(format, data, n) {
   let raw;
   let inputTokens = null;
   if (format === 'gemini') {
-    if (!Array.isArray(data?.embeddings)) throw new EmbedError('向量接口返回格式不对（缺少 embeddings 数组）', 'bad_response');
+    if (!Array.isArray(data?.embeddings)) throw new EmbedError('向量接口返回格式错误（缺少 embeddings 数组）', 'bad_response');
     raw = data.embeddings.map((e) => e?.values);
     inputTokens = usageNum(data?.usageMetadata?.promptTokenCount);
   } else {
-    if (!Array.isArray(data?.data)) throw new EmbedError('向量接口返回格式不对（缺少 data 数组）', 'bad_response');
+    if (!Array.isArray(data?.data)) throw new EmbedError('向量接口返回格式错误（缺少 data 数组）', 'bad_response');
     const items = data.data.map((d, i) => ({ i: Number.isInteger(d?.index) ? d.index : i, v: d?.embedding }));
     items.sort((a, b) => a.i - b.i);
     raw = items.map((x) => x.v);
     inputTokens = usageNum(data?.usage?.prompt_tokens) ?? usageNum(data?.usage?.total_tokens);
   }
-  if (raw.length !== n) throw new EmbedError(`向量接口返回了 ${raw.length} 个向量，发过去的是 ${n} 段`, 'bad_response');
+  if (raw.length !== n) throw new EmbedError(`向量接口返回 ${raw.length} 个向量，请求为 ${n} 段`, 'bad_response');
   const vectors = [];
   for (const v of raw) {
     const f = toFloat32(v);
-    if (!f) throw new EmbedError('向量接口返回格式不对（向量不是数字数组）', 'bad_response');
+    if (!f) throw new EmbedError('向量接口返回格式错误（向量不是数字数组）', 'bad_response');
     vectors.push(normalizeVector(f));
   }
   const dims = vectors[0]?.length ?? 0;
-  if (vectors.some((v) => v.length !== dims)) throw new EmbedError('向量接口这次返回的几个向量维度不一样', 'bad_response');
+  if (vectors.some((v) => v.length !== dims)) throw new EmbedError('向量接口返回的向量维度不一致', 'bad_response');
   return { vectors, dims, inputTokens };
 }
 
@@ -165,8 +165,8 @@ function httpError(status, text, statusText, retryAfter, cfg) {
     return new EmbedError(`向量接口鉴权失败（${status}）${detail}。请检查 API 密钥`, 'auth', { status });
   }
   if (status === 404) {
-    const hint = cfg.format === 'openai' ? '（OpenAI 兼容的地址通常以 /v1 结尾，本机 Ollama 填 http://<主机>:11434/v1）' : '';
-    return new EmbedError(`向量接口返回 404${detail}。模型名不对或这个服务没有这个模型，也可能是接口地址不对${hint}`, 'not_found', { status });
+    const hint = cfg.format === 'openai' ? '（OpenAI 兼容地址通常以 /v1 结尾，本机 Ollama 填写 http://<主机>:11434/v1）' : '';
+    return new EmbedError(`向量接口返回 404${detail}。模型名称错误、服务不提供该模型，或接口地址错误${hint}`, 'not_found', { status });
   }
   if (status === 429) {
     return new EmbedError(`向量接口限流（429）${detail}`, 'rate_limit', { status, retryAfterMs: parseRetryAfter(retryAfter) });
@@ -183,18 +183,18 @@ function httpError(status, text, statusText, retryAfter, cfg) {
  * @returns {Promise<{vectors: Float32Array[], dims:number, inputTokens:number|null, model:string}>} 向量已归一化
  */
 export async function embedTexts(cfg, texts, { task = 'document', timeoutMs = 60_000, signal } = {}) {
-  if (!EMBED_FORMATS.includes(cfg?.format)) throw new EmbedError(`向量接口不支持这个格式：${cfg?.format}`, 'config');
-  if (!String(cfg.baseUrl || '').trim()) throw new EmbedError('还没有填写向量接口地址', 'config');
-  if (!String(cfg.model || '').trim()) throw new EmbedError('还没有填写向量模型', 'config');
+  if (!EMBED_FORMATS.includes(cfg?.format)) throw new EmbedError(`向量接口不支持该格式：${cfg?.format}`, 'config');
+  if (!String(cfg.baseUrl || '').trim()) throw new EmbedError('未填写向量接口地址', 'config');
+  if (!String(cfg.model || '').trim()) throw new EmbedError('未填写向量模型', 'config');
   const key = String(cfg.apiKey || '');
   // 密钥只能是可见 ASCII，否则 fetch 拼请求头时会报错，而且报错信息里带着密钥
-  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new EmbedError('API 密钥里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new EmbedError('API 密钥包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   if (!texts.length) return { vectors: [], dims: 0, inputTokens: null, model: cfg.model };
   const { url, headers, body } = buildEmbedRequest(cfg, texts, { task });
   try {
     if (!/^https?:$/.test(new URL(url).protocol)) throw new Error('protocol');
   } catch {
-    throw new EmbedError('向量接口地址格式不对，要以 http:// 或 https:// 开头', 'config');
+    throw new EmbedError('向量接口地址格式错误，需以 http:// 或 https:// 开头', 'config');
   }
 
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -211,14 +211,14 @@ export async function embedTexts(cfg, texts, { task = 'document', timeoutMs = 60
     }
     const code = err?.cause?.code || err?.code || '';
     const reason = CONNECT_ERRORS[code] ? `${CONNECT_ERRORS[code]}（${code}）` : code || err?.cause?.message || err?.message || String(err);
-    throw new EmbedError(`连不上向量接口：${redactKey(reason, key)}`, 'network');
+    throw new EmbedError(`无法连接向量接口：${redactKey(reason, key)}`, 'network');
   }
   if (!res.ok) throw httpError(res.status, text, res.statusText, res.headers.get('retry-after'), cfg);
   let data;
   try {
     data = JSON.parse(text);
   } catch {
-    throw new EmbedError('向量接口返回的不是 JSON，请检查接口地址是否正确', 'bad_response');
+    throw new EmbedError('向量接口返回的内容非 JSON，请检查接口地址', 'bad_response');
   }
   return { ...parseEmbedResponse(cfg.format, data, texts.length), model: cfg.model };
 }

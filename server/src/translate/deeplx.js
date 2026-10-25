@@ -31,8 +31,8 @@ export default {
   async translate(cfg, { text, source, target }, o = {}) {
     const url = String(cfg.url || '').trim();
     const token = String(cfg.token || '').trim();
-    if (!url) throw new TranslateError('DeepLX 还没有填服务地址', 'config');
-    if (token && !visibleAscii(token)) throw new TranslateError('DeepLX 的访问令牌里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+    if (!url) throw new TranslateError('DeepLX 未填写服务地址', 'config');
+    if (token && !visibleAscii(token)) throw new TranslateError('DeepLX 的访问令牌包含空格、中文或其他非法字符，请检查后重新输入', 'config');
     const redactOpts = { secrets: [token], secretUrls: [url, o.endpoint || ''] };
     const headers = { 'content-type': 'application/json' };
     if (token) headers.authorization = `Bearer ${token}`;
@@ -55,9 +55,9 @@ export default {
       const status = res.ok ? code : res.status;
       const detail = detailOf(data?.message || res.text, redactOpts);
       const tail = detail ? `：${detail}` : '';
-      if (status === 429) throw new TranslateError(`DeepLX 请求太频繁，被限流了（429）${tail}。公共服务经常这样，建议自己部署`, 'rate_limit', { status });
-      if (status === 503) throw new TranslateError(`DeepLX 翻译失败（503）${tail}。公共服务经常被 DeepL 暂时封掉，建议自己部署`, 'server', { status });
-      if (status === 400 && /lang/i.test(detail)) throw new TranslateError(`DeepLX 不支持这个语言（400）${tail}`, 'unsupported_language', { status });
+      if (status === 429) throw new TranslateError(`DeepLX 请求过于频繁，已限流（429）${tail}。公共服务常见此问题，建议自行部署`, 'rate_limit', { status });
+      if (status === 503) throw new TranslateError(`DeepLX 翻译失败（503）${tail}。公共服务常被 DeepL 临时封禁，建议自行部署`, 'server', { status });
+      if (status === 400 && /lang/i.test(detail)) throw new TranslateError(`DeepLX 不支持该语言（400）${tail}`, 'unsupported_language', { status });
       throw httpError(LABEL, { ...res, status }, redactOpts, detail);
     }
     const out = Array.isArray(data?.data) ? data.data[0] : data?.data;

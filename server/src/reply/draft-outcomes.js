@@ -12,12 +12,12 @@ import { DRAFT_PROMPT_VERSION } from './prompt-version.js';
 
 /** 结果 → 看板上的叫法 */
 export const DRAFT_OUTCOMES = {
-  used: '直接用',
-  edited: '改了再发',
-  own: '自己写的',
-  dismissed: '关掉',
-  replaced: '换掉了',
-  unsent: '没发',
+  used: '直接采用',
+  edited: '修改后发送',
+  own: '人工撰写',
+  dismissed: '已关闭',
+  replaced: '已替换',
+  unsent: '未发送',
 };
 /** 算「没用」的四种 */
 export const UNUSED_OUTCOMES = ['own', 'dismissed', 'replaced', 'unsent'];

@@ -23,8 +23,8 @@ const ASK_COUNT = 40;
 const EXISTING_IN_PROMPT = 200;
 export const RISKS = ['low', 'medium', 'high'];
 
-export const SHORT_WORD_REASON = '太短，容易和型号、缩写或别的词撞上';
-export const SINGLE_CHAR_REASON = '只有一个字，容易出现在正常的词里（比如「滚」会命中「滚动」）';
+export const SHORT_WORD_REASON = '过短，易与型号、缩写或其他词冲突';
+export const SINGLE_CHAR_REASON = '单字易误中正常词语（如「滚」命中「滚动」）';
 
 /** 屏蔽词扩充的 system prompt */
 export const BLOCKLIST_SYSTEM_PROMPT = `你是外贸公司 WhatsApp 客服后台的屏蔽词整理助手。管理员列了几个不允许业务员和机器人发给客户的词（脏话、侮辱、骂人的话），你帮他补全相关的词，用来在消息发出前拦截。
@@ -120,15 +120,15 @@ export function checkExpandRequest(body) {
     seen.add(wordKey(w));
     seeds.push(w);
   }
-  if (!seeds.length) throw badRequest('请先填几个屏蔽词作为种子', 'seeds_required');
-  if (seeds.length > MAX_EXPAND_SEEDS) throw badRequest(`种子词一次最多 ${MAX_EXPAND_SEEDS} 个，现在有 ${seeds.length} 个`, 'too_many_seeds');
+  if (!seeds.length) throw badRequest('请先填写屏蔽词作为种子词', 'seeds_required');
+  if (seeds.length > MAX_EXPAND_SEEDS) throw badRequest(`种子词最多 ${MAX_EXPAND_SEEDS} 个，当前 ${seeds.length} 个`, 'too_many_seeds');
   const langsIn = b.languages === undefined ? DEFAULT_EXPAND_LANGUAGES : b.languages;
   if (!Array.isArray(langsIn) || langsIn.some((c) => !EXPAND_LANGUAGES.includes(c))) {
-    throw badRequest(`languages 只能从这些里选：${EXPAND_LANGUAGES.join('、')}`);
+    throw badRequest(`languages 仅可选：${EXPAND_LANGUAGES.join('、')}`);
   }
   const languages = [...new Set(langsIn)];
-  if (!languages.length) throw badRequest('至少选一种语言', 'languages_required');
-  if (languages.length > MAX_EXPAND_LANGUAGES) throw badRequest(`一次最多选 ${MAX_EXPAND_LANGUAGES} 种语言`);
+  if (!languages.length) throw badRequest('请至少选择一种语言', 'languages_required');
+  if (languages.length > MAX_EXPAND_LANGUAGES) throw badRequest(`最多选择 ${MAX_EXPAND_LANGUAGES} 种语言`);
   const existing = Array.isArray(b.existing) ? b.existing.filter((w) => typeof w === 'string').slice(0, MAX_BLOCKWORDS) : [];
   return { seeds, languages, existing };
 }
@@ -144,7 +144,7 @@ export function checkExpandRequest(body) {
  */
 export function parseExpandOutput(data, { seeds, languages, existing }) {
   const list = Array.isArray(data) ? data : isPlainObject(data) && Array.isArray(data.candidates) ? data.candidates : null;
-  if (!list) throw new LlmError('模型返回的格式不对：要的是 {"candidates":[…]}');
+  if (!list) throw new LlmError('模型返回格式错误：应为 {"candidates":[…]}');
   const taken = new Set([...seeds, ...existing].map(wordKey));
   const seedOf = new Map(seeds.map((s) => [wordKey(s), s]));
   const out = [];
@@ -163,7 +163,7 @@ export function parseExpandOutput(data, { seeds, languages, existing }) {
     let reason = typeof item.reason === 'string' ? clip(item.reason.trim().replace(/\s+/g, ' '), 80) : '';
     if (!risk) {
       risk = 'high';
-      reason = '模型没有给出误判风险，按高处理';
+      reason = '模型未给出误判风险，按高风险处理';
     }
     const forced = forcedRiskReason(word);
     if (forced) {

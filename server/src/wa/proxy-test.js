@@ -62,7 +62,7 @@ export async function testProxy(px, { url = PROXY_TEST_URL, timeoutMs = 15_000 }
     } catch {
       /* 下面统一报错 */
     }
-    if (typeof ip !== 'string' || !ip) throw new Error('返回内容里没有 ip');
+    if (typeof ip !== 'string' || !ip) throw new Error('返回内容中无 ip');
     return { ok: true, ip, latencyMs: Date.now() - started };
   } catch (err) {
     let msg = String(err?.name === 'TimeoutError' ? `超时（${Math.round(timeoutMs / 1000)} 秒）` : err?.cause?.message || err?.message || err);

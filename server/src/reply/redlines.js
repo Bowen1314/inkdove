@@ -178,19 +178,19 @@ export function findUngroundedPrice(reply, sourceText) {
  */
 export function checkRedLines(reply, sourceText) {
   const identity = findTerms(reply, IDENTITY_TERMS);
-  if (identity.length) return { code: 'identity_leak', reason: `回复里有身份或元话语「${identity[0]}」，会暴露是机器人` };
+  if (identity.length) return { code: 'identity_leak', reason: `回复包含身份或元话语「${identity[0]}」，可能暴露机器人身份` };
   const commit = findTerms(reply, COMMITMENT_TERMS);
-  if (commit.length) return { code: 'commitment_phrase', reason: `回复里有成交或承诺措辞「${commit[0]}」` };
+  if (commit.length) return { code: 'commitment_phrase', reason: `回复包含成交或承诺措辞「${commit[0]}」` };
   const compact = normalizeForCheck(reply).replace(/\s+/g, '');
   for (const re of COMMITMENT_PATTERNS) {
     const m = re.exec(compact);
-    if (m) return { code: 'commitment_phrase', reason: `回复里有成交或承诺措辞「${m[0]}」` };
+    if (m) return { code: 'commitment_phrase', reason: `回复包含成交或承诺措辞「${m[0]}」` };
   }
   const price = findUngroundedPrice(reply, sourceText);
-  if (price) return { code: 'price_mismatch', reason: `价格数字对不上资料：回复里的「${price}」在引用的条目里找不到` };
+  if (price) return { code: 'price_mismatch', reason: `价格与资料不符：回复中的「${price}」未见于引用条目` };
   const srcNorm = normalizeForCheck(sourceText);
   const discount = findTerms(reply, DISCOUNT_TERMS).filter((t) => !hasTerm(srcNorm, t));
-  if (discount.length) return { code: 'discount_word', reason: `回复里有资料没写的优惠措辞「${discount[0]}」` };
+  if (discount.length) return { code: 'discount_word', reason: `回复包含资料未提及的优惠措辞「${discount[0]}」` };
   return null;
 }
 

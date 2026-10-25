@@ -245,7 +245,7 @@ describe('成员：邀请、重置、停用、最后一个 admin', () => {
     await t.loginAs('reset@example.com', 'brand-new-pass-1');
   });
 
-  it('改密码：当前密码不对 400；改完这个人的其他会话失效，当前会话保留', async () => {
+  it('改密码：当前密码错误 400；改完这个人的其他会话失效，当前会话保留', async () => {
     const m = await t.addMember({ email: 'pw@example.com' });
     const other = await t.loginAs('pw@example.com', m.password);
     const bad = await t.req('POST', '/api/auth/password', { cookie: m.cookie, body: { currentPassword: 'nope', newPassword: 'another-pass-1' } });
@@ -340,7 +340,7 @@ describe('权限：agent 调 admin 接口返回 403', () => {
     for (const [method, p, body] of cases) {
       const r = await t.req(method, p, { cookie: agent.cookie, body });
       assert.equal(r.status, 403, `${method} ${p}`);
-      assert.deepEqual(r.body, { error: '没有权限', code: 'forbidden' });
+      assert.deepEqual(r.body, { error: '无权限', code: 'forbidden' });
     }
   });
 

@@ -465,12 +465,12 @@ describe('F15 文件管理', () => {
       const notice = fake.sentTo(BOSS_CHAT).at(-1);
       const conv = await getConv(t, cid(chat));
       assert.deepEqual(conv.draft.fileIds, [catalog.id]);
-      assert.ok(notice.text.includes('草稿附带的文件：2026 产品目录'), notice.text);
+      assert.ok(notice.text.includes('草稿附件：2026 产品目录'), notice.text);
       assert.equal(fake.mediaTo(chat).length, 0, '草稿不自动发');
       const before = (await getFile(catalog.id)).sendCount;
 
       await wahaSend(t, acc, BOSS_CHAT, '/d', { replyTo: { id: notice.id, body: '...' } });
-      await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '✅ 已发给 郑先生'));
+      await waitFor(() => fake.sentTo(BOSS_CHAT).some((m) => m.text === '✅ 已发送给 郑先生'));
       assert.equal(fake.sentTo(chat).length, 1);
       assert.equal(fake.sentTo(chat)[0].text, conv.draft.text);
       assert.equal(fake.mediaTo(chat).length, 1);

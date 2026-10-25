@@ -227,9 +227,9 @@ function applyProxyPatch(px, q, globalProxyReady) {
   }
   if (q.host !== undefined) {
     const v = str(q.host, 'waha.proxy.host', 255).trim();
-    if (v && (/\s|\/|@/.test(v) || v.includes('://'))) throw badRequest('proxy.host 只填主机名或 IP，不带协议头、端口和账号');
+    if (v && (/\s|\/|@/.test(v) || v.includes('://'))) throw badRequest('proxy.host 只填写主机名或 IP，不含协议头、端口和帐号');
     const bare = v.replace(/^\[(.*)\]$/, '$1');
-    if (bare.includes(':') && !net.isIPv6(bare)) throw badRequest('proxy.host 不要带端口，端口填在 port');
+    if (bare.includes(':') && !net.isIPv6(bare)) throw badRequest('proxy.host 不能包含端口，端口请填写在 port');
     px.host = bare;
   }
   if (q.port !== undefined) {
@@ -243,14 +243,14 @@ function applyProxyPatch(px, q, globalProxyReady) {
   if (px.enabled && px.useGlobal) {
     // 只拦「改成用全局代理」：已经在用的再提交一次不报错
     if (!wasGlobal && !globalProxyReady) {
-      throw badRequest('全局代理没有开启：请管理员先在「设置 → 代理」里开启，再选「用全局代理」', 'global_proxy_off');
+      throw badRequest('全局代理未开启，请管理员先在「设置 → 代理」中开启，再选择「用全局代理」', 'global_proxy_off');
     }
     return;
   }
   if (px.enabled && (!px.host || !px.port)) throw badRequest('启用代理时必须填写 host 和 port');
 }
 
-const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
+const forbidden = () => new HttpError(403, 'forbidden', '无权限');
 
 /**
  * 号的部分更新。接口层面整个 PUT 只有 admin 能调（agent 一律 403，见 routes/accounts.js）；
@@ -270,7 +270,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (!isAdmin) throw forbidden();
   };
   if (patch.channel !== undefined && patch.channel !== a.channel) {
-    throw badRequest('接入方式创建后不能改，要换就删掉这个号再新建', 'channel_immutable');
+    throw badRequest('接入方式创建后不可修改，如需更换请删除该号码后重新创建', 'channel_immutable');
   }
   if (patch.name !== undefined) {
     adminOnly();
@@ -297,7 +297,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (!isPlainObject(patch.waha)) throw badRequest('waha 必须是对象');
     if (patch.waha.proxy !== undefined) {
       adminOnly();
-      if (a.channel !== 'waha') throw badRequest('只有扫码号才有 IP 代理');
+      if (a.channel !== 'waha') throw badRequest('仅扫码接入的号码支持 IP 代理');
       applyProxyPatch(a.waha.proxy, patch.waha.proxy, globalProxyReady);
     }
   }
@@ -305,7 +305,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     const m = patch.meta;
     if (!isPlainObject(m)) throw badRequest('meta 必须是对象');
     adminOnly();
-    if (a.channel !== 'meta') throw badRequest('只有 Meta 号才有这些字段');
+    if (a.channel !== 'meta') throw badRequest('仅 Meta 官方接口的号码有这些字段');
     if (m.phoneNumberId !== undefined) {
       const v = str(m.phoneNumberId, 'meta.phoneNumberId', 100).trim();
       if (v && !/^\d+$/.test(v)) throw badRequest('phoneNumberId 只能是数字');
@@ -313,7 +313,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     }
     if (m.apiVersion !== undefined) {
       const v = str(m.apiVersion, 'meta.apiVersion', 20).trim();
-      if (v && !/^v\d+\.\d+$/.test(v)) throw badRequest('apiVersion 格式应为 v26.0 这样');
+      if (v && !/^v\d+\.\d+$/.test(v)) throw badRequest('apiVersion 格式应为 v26.0');
       a.meta.apiVersion = v || DEFAULT_META_API_VERSION;
     }
     if (m.verifyToken !== undefined) a.meta.verifyToken = str(m.verifyToken, 'meta.verifyToken', 500);
@@ -324,7 +324,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     const l = patch.line;
     if (!isPlainObject(l)) throw badRequest('line 必须是对象');
     adminOnly();
-    if (a.channel !== 'line') throw badRequest('只有 LINE 官方帐号才有这些字段');
+    if (a.channel !== 'line') throw badRequest('仅 LINE 官方帐号有这些字段');
     if (l.channelId !== undefined) {
       const v = str(l.channelId, 'line.channelId', 100).trim();
       if (v && !/^\d+$/.test(v)) throw badRequest('Channel ID 只能是数字');
@@ -337,25 +337,25 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     const t = patch.telegram;
     if (!isPlainObject(t)) throw badRequest('telegram 必须是对象');
     adminOnly();
-    if (!a.telegram) throw badRequest('只有 Telegram 号才有这些字段');
+    if (!a.telegram) throw badRequest('仅 Telegram 号码有这些字段');
     if (a.channel === 'tguser') {
-      if (t.botToken !== undefined) throw badRequest('扫码登录的号不用机器人 token');
+      if (t.botToken !== undefined) throw badRequest('Telegram 扫码登录的号码无需机器人 token');
       if (t.apiId !== undefined) {
         const v = typeof t.apiId === 'number' ? String(t.apiId) : str(t.apiId, 'telegram.apiId', 20).trim();
-        if (v && !TG_API_ID_RE.test(v)) throw badRequest('api_id 只能是数字（my.telegram.org 里 App api_id 那一串）', 'bad_api_id');
+        if (v && !TG_API_ID_RE.test(v)) throw badRequest('api_id 只能是数字（my.telegram.org 中的 App api_id）', 'bad_api_id');
         a.telegram.apiId = v;
       }
       if (t.apiHash !== undefined) {
         const v = str(t.apiHash, 'telegram.apiHash', 100).trim().toLowerCase();
-        if (v && !TG_API_HASH_RE.test(v)) throw badRequest('api_hash 格式不对：应该是 my.telegram.org 里 App api_hash 那 32 位字母数字', 'bad_api_hash');
+        if (v && !TG_API_HASH_RE.test(v)) throw badRequest('api_hash 格式错误：应为 my.telegram.org 中 App api_hash 的 32 位字母数字', 'bad_api_hash');
         a.telegram.apiHash = v;
       }
     } else if (t.apiId !== undefined || t.apiHash !== undefined) {
-      throw badRequest('只有扫码登录的号才有 api_id、api_hash');
+      throw badRequest('仅 Telegram 扫码登录的号码有 api_id、api_hash');
     }
     if (t.botToken !== undefined && a.channel !== 'tguser') {
       const v = str(t.botToken, 'telegram.botToken', 200).trim();
-      if (v && !TG_TOKEN_RE.test(v)) throw badRequest('机器人 token 格式不对：应该是 @BotFather 给的「数字:一串字母」那一整段', 'bad_token');
+      if (v && !TG_TOKEN_RE.test(v)) throw badRequest('机器人 token 格式错误：应为 @BotFather 提供的完整 token（数字:字母串）', 'bad_token');
       a.telegram.botToken = v;
     }
   }
@@ -380,7 +380,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
       if (w.enabled !== undefined) {
         const on = boolField(w.enabled, 'notify.whatsapp.enabled');
         if (on && !a.notify.whatsapp.enabled && !isWhatsapp(a.channel)) {
-          throw badRequest(`${CHANNEL_NAMES[a.channel] || '这个号'}发不了 WhatsApp 通知，请用邮件通知`, 'whatsapp_notify_unsupported');
+          throw badRequest(`${CHANNEL_NAMES[a.channel] || '该号码'}不支持 WhatsApp 通知，请使用邮件通知`, 'whatsapp_notify_unsupported');
         }
         a.notify.whatsapp.enabled = on;
       }
@@ -456,14 +456,14 @@ export function exportAccount(acc) {
  */
 export function parseAccountsExport(doc, { emailReady, globalProxyReady = false }) {
   if (!isPlainObject(doc) || doc.format !== ACCOUNTS_EXPORT_FORMAT) {
-    throw badRequest('这不是墨鸽导出的号码配置文件（format 应为 inkdove-accounts）', 'bad_format');
+    throw badRequest('非墨鸽导出的号码配置文件（format 应为 inkdove-accounts）', 'bad_format');
   }
   if (doc.version !== ACCOUNTS_EXPORT_VERSION) {
-    throw badRequest(`不支持这个文件版本（version: ${JSON.stringify(doc.version ?? null)}），只能导入 version 1`, 'unsupported_version');
+    throw badRequest(`不支持该文件版本（version: ${JSON.stringify(doc.version ?? null)}），只能导入 version 1`, 'unsupported_version');
   }
   if (!Array.isArray(doc.accounts)) throw badRequest('accounts 必须是数组', 'bad_format');
   return doc.accounts.map((item, i) => {
-    let label = `第 ${i + 1} 个号`;
+    let label = `第 ${i + 1} 个号码`;
     try {
       if (!isPlainObject(item)) throw badRequest('必须是对象');
       const name = str(item.name ?? '', 'name', 100).trim();
@@ -471,10 +471,10 @@ export function parseAccountsExport(doc, { emailReady, globalProxyReady = false 
       label += `（${name}）`;
       if (!CHANNELS.includes(item.channel)) throw badRequest(`channel 只能是 ${CHANNELS.join('、')}`);
       // applyAccountPatch 在这几种情况下的提示不带字段名，先拦下来
-      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 只有扫码号才有，其他接入方式应为 null');
-      if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 只有 Meta 号才有，其他接入方式应为 null');
-      if (item.channel !== 'line' && item.line != null) throw badRequest('line 只有 LINE 官方帐号才有，其他接入方式应为 null');
-      if (!isTelegram(item.channel) && item.telegram != null) throw badRequest('telegram 只有 Telegram 号才有，其他接入方式应为 null');
+      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 仅适用于扫码接入，其他接入方式应为 null');
+      if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 仅适用于 Meta 官方接口，其他接入方式应为 null');
+      if (item.channel !== 'line' && item.line != null) throw badRequest('line 仅适用于 LINE 官方帐号，其他接入方式应为 null');
+      if (!isTelegram(item.channel) && item.telegram != null) throw badRequest('telegram 仅适用于 Telegram 接入方式，其他接入方式应为 null');
       const draft = { name, channel: item.channel, ...defaultConfig(item.channel) };
       // 没配发信方式时，开着的邮件通知先关掉再校验（拷一份，不改解析出来的原文件内容）；
       // notify 不是对象之类的格式问题仍交给 applyAccountPatch 报错
@@ -483,12 +483,12 @@ export function parseAccountsExport(doc, { emailReady, globalProxyReady = false 
       let patch = item;
       if (!emailReady && isPlainObject(item.notify) && isPlainObject(item.notify.email) && item.notify.email.enabled === true) {
         patch = { ...item, notify: { ...item.notify, email: { ...item.notify.email, enabled: false } } };
-        notices.push('没配发信方式，已关掉邮件通知');
+        notices.push('未配置发信方式，已关闭邮件通知');
       }
       const px = isPlainObject(item.waha) && isPlainObject(item.waha.proxy) ? item.waha.proxy : null;
       if (!globalProxyReady && px && px.enabled === true && px.useGlobal === true) {
         patch = { ...patch, waha: { ...patch.waha, proxy: { ...px, enabled: false } } };
-        notices.push('全局代理没开，已关掉这个号的代理（「用全局代理」的选项保留）');
+        notices.push('全局代理未开启，已关闭该号码的代理（保留「用全局代理」选项）');
       }
       const { name: n, channel, ...config } = applyAccountPatch(draft, patch, { isAdmin: true, emailReady, globalProxyReady });
       return { name: n, channel, config, ...(notices.length ? { notices } : {}) };
@@ -582,8 +582,8 @@ export function createAccountStore(db, config) {
             skipped.push({
               name: it.name,
               reason: dup.inFile
-                ? `${what} 和文件里前面的号「${dup.name}」重复，只导入了前面那个`
-                : `${what} 已经被号「${dup.name}」使用，同一${unit}不重复导入`,
+                ? `${what} 与文件中靠前的号码「${dup.name}」重复，仅导入靠前的号码`
+                : `${what} 已被号码「${dup.name}」使用，同一${unit}不重复导入`,
             });
             continue;
           }
@@ -646,7 +646,7 @@ export function migrateLegacy(db, accounts, log, config) {
   let acc = null;
   if (ch.type === 'waha' || ch.type === 'meta') {
     acc = accounts.create({
-      name: '默认号',
+      name: '默认号码',
       channel: ch.type,
       // 沿用第一期的 session 名，已扫码的登录态不用重扫
       sessionName: ch.type === 'waha' ? ch.waha?.sessionName || config?.legacyWahaSession || 'default' : undefined,

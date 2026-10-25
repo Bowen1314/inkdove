@@ -133,7 +133,7 @@ export function createFileStore(ctx) {
         args.text = clip(r.text, DESCRIBE_TEXT_CHARS);
       }
       description = clip(String((await ctx.ai.describeFile(args)) || '').trim(), MAX_DESCRIPTION);
-      if (!description) throw new Error('模型没有给出描述');
+      if (!description) throw new Error('模型未返回描述');
     } catch (err) {
       if (closed) return;
       log.warn(`[files] 文件 ${id} 自动生成描述失败：${err?.message || err}`);

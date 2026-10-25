@@ -20,7 +20,7 @@ import {
 const T2022 = Math.floor(Date.parse('2022-03-04T05:06:07Z') / 1000);
 const nowSec = () => Math.floor(Date.now() / 1000);
 const iso = (sec) => new Date(sec * 1000).toISOString();
-const SKIP_REASON = '导入的历史消息，机器人不处理';
+const SKIP_REASON = '导入的历史消息，不自动处理';
 
 let seq = 0;
 const newNumber = () => `86139${String(Date.now() % 1e5).padStart(5, '0')}${String(++seq).padStart(2, '0')}`;

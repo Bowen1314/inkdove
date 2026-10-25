@@ -472,7 +472,7 @@ export function createKbStore(db, { log } = {}) {
      * 否则新建一条 origin=conversation 的缺口。每次命中都在 gap_hits 记一行（看板按时间段统计用）。
      * @returns {{gap: object, merged: boolean}|null}
      */
-    addConversationGap(question, conversationId, reason = '客户问到了，知识库答不了') {
+    addConversationGap(question, conversationId, reason = '客户提问，知识库无法回答') {
       const q = String(question || '').trim().slice(0, 500);
       if (!q) return null;
       const now = nowIso();

@@ -101,7 +101,7 @@ export function createRedteamRunner(ctx) {
   function start() {
     if (current) throw new HttpError(409, 'job_running', '已有红线体检在运行');
     if (!llmConfigured(ctx.getSettings(), ctx.config)) {
-      throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
     }
     // 正常题只从 faq、product 条目的标题里抽几道，不用读整个知识库：只取类型和标题，条目很多时先随机取 500 条再抽
     const cases = buildRedteamCases({
@@ -183,7 +183,7 @@ export function createRedteamRunner(ctx) {
     cancel(id) {
       const exists = db.prepare('SELECT status FROM redteam_runs WHERE id = ?').get(id);
       if (!exists) throw new HttpError(404, 'not_found', '体检记录不存在');
-      if (!current || current.run.id !== id) throw new HttpError(409, 'job_not_running', '这次体检已经结束');
+      if (!current || current.run.id !== id) throw new HttpError(409, 'job_not_running', '本次体检已结束');
       const { run, controller } = current;
       controller.abort();
       current = null;

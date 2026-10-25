@@ -215,14 +215,14 @@ export function normalizeWordList(v) {
     const w = raw.trim().replace(/\s+/g, ' ');
     if (!w) return;
     if ([...w].length > MAX_BLOCKWORD_CHARS) {
-      throw badRequest(`blockwords.words 第 ${i + 1} 行太长了，每个词最多 ${MAX_BLOCKWORD_CHARS} 个字`);
+      throw badRequest(`blockwords.words 第 ${i + 1} 行过长，每个词最多 ${MAX_BLOCKWORD_CHARS} 个字`);
     }
     const key = wordKey(w);
-    if (!key) throw badRequest(`blockwords.words 第 ${i + 1} 行「${w}」里没有文字或数字，匹配不到任何内容`);
+    if (!key) throw badRequest(`blockwords.words 第 ${i + 1} 行「${w}」不含文字或数字，无法匹配任何内容`);
     if (seen.has(key)) return;
     seen.add(key);
     out.push(w);
   });
-  if (out.length > MAX_BLOCKWORDS) throw badRequest(`blockwords.words 最多 ${MAX_BLOCKWORDS} 个词，现在有 ${out.length} 个`);
+  if (out.length > MAX_BLOCKWORDS) throw badRequest(`blockwords.words 最多 ${MAX_BLOCKWORDS} 个词，当前 ${out.length} 个`);
   return out;
 }

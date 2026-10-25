@@ -250,16 +250,16 @@ describe('F4 语音和图片识别', () => {
 
       const gif = newChat();
       await sendMedia(gif, wahaFile(Buffer.from('GIF89a'), 'image/gif'));
-      await expectHandoff(gif, 'media_unsupported', /格式 image\/gif 不支持/);
+      await expectHandoff(gif, 'media_unsupported', /格式 image\/gif 不受支持/);
 
       const long = newChat();
       const calls = hooks.calls.transcribe;
       await sendMedia(long, wahaFile(Buffer.from('x'), 'audio/ogg; codecs=opus'), { data: { Message: { audioMessage: { seconds: 200 } } } });
-      await expectHandoff(long, 'media_unsupported', /语音 200 秒，超过 3 分钟/);
+      await expectHandoff(long, 'media_unsupported', /语音时长 200 秒，超过 3 分钟/);
 
       const ogg = newChat();
       await sendMedia(ogg, wahaFile(makeOpus(181), 'audio/ogg; codecs=opus'));
-      await expectHandoff(ogg, 'media_unsupported', /语音 181 秒，超过 3 分钟/);
+      await expectHandoff(ogg, 'media_unsupported', /语音时长 181 秒，超过 3 分钟/);
       assert.equal(hooks.calls.transcribe, calls, '超限的不送去识别');
       assert.equal(llmCalls(cid(ogg)), 0, '没识别不计次数');
     });

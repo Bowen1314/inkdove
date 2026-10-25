@@ -64,16 +64,16 @@ export function parseDashboardQuery(q = {}) {
   let tz = DEFAULT_TZ;
   if (q.tz !== undefined && q.tz !== '') {
     tz = canonicalTz(q.tz);
-    if (!tz) throw badRequest('tz 不是可用的 IANA 时区（例如 Asia/Shanghai）', 'invalid_tz');
+    if (!tz) throw badRequest('tz 不是有效的 IANA 时区（如 Asia/Shanghai）', 'invalid_tz');
   }
   let accountId = null;
   if (q.accountId !== undefined && q.accountId !== '') {
-    if (typeof q.accountId !== 'string' || q.accountId.length > 200) throw badRequest('accountId 不正确');
+    if (typeof q.accountId !== 'string' || q.accountId.length > 200) throw badRequest('accountId 无效');
     accountId = q.accountId;
   }
   let assigneeId = null;
   if (q.assigneeId !== undefined && q.assigneeId !== '') {
-    if (typeof q.assigneeId !== 'string' || q.assigneeId.length > 200) throw badRequest('assigneeId 不正确', 'invalid_assignee');
+    if (typeof q.assigneeId !== 'string' || q.assigneeId.length > 200) throw badRequest('assigneeId 无效', 'invalid_assignee');
     assigneeId = q.assigneeId;
   }
   return { range, tz, accountId, assigneeId };
@@ -108,7 +108,7 @@ export function parseDraftListQuery(q = {}) {
   if (q.cursor !== undefined && q.cursor !== '') {
     const raw = typeof q.cursor === 'string' && q.cursor.length <= 200 ? q.cursor : '';
     const cut = raw.lastIndexOf('|');
-    if (cut <= 0 || cut === raw.length - 1) throw badRequest('cursor 不正确', 'invalid_cursor');
+    if (cut <= 0 || cut === raw.length - 1) throw badRequest('cursor 无效', 'invalid_cursor');
     cursor = { at: raw.slice(0, cut), id: raw.slice(cut + 1) };
   }
   let limit = DRAFT_LIST_LIMIT;

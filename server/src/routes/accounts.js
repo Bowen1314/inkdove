@@ -40,7 +40,7 @@ export function accountsRouter(ctx, auth) {
     const id = String(req.params.id);
     if (!canAccessAccount(req.user, id)) throw forbidden();
     const acc = accounts.get(id);
-    if (!acc) throw notFound('号不存在');
+    if (!acc) throw notFound('号码不存在');
     return acc;
   }
 
@@ -49,7 +49,7 @@ export function accountsRouter(ctx, auth) {
     const botId = isTgBotApi(acc.channel) ? botIdOf(acc.telegram.botToken) : '';
     if (!botId) return;
     const other = accounts.list().find((a) => a.id !== acc.id && isTgBotApi(a.channel) && botIdOf(a.telegram.botToken) === botId);
-    if (other) throw new HttpError(409, 'telegram_bot_in_use', `这个机器人已经给号「${other.name}」用了，同一个机器人只能接一个号`);
+    if (other) throw new HttpError(409, 'telegram_bot_in_use', `该机器人已被号码「${other.name}」使用，一个机器人仅可接入一个号码`);
   }
 
   /** viewer：看的人，agent 看不到 verifyToken 和通知收件人 */
@@ -65,7 +65,7 @@ export function accountsRouter(ctx, auth) {
     if (!isPlainObject(body)) throw badRequest('请求体必须是对象');
     const name = str(body.name ?? '', 'name', 100).trim();
     if (!name) throw badRequest('name 不能为空');
-    if (!CHANNELS.includes(body.channel)) throw badRequest(`channel 只能是 ${CHANNELS.join('、')}`);
+    if (!CHANNELS.includes(body.channel)) throw badRequest(`channel 须为 ${CHANNELS.join('、')} 之一`);
     const acc = accounts.create({ name, channel: body.channel });
     ctx.log.info(`[accounts] ${req.user.email} 新建了号 ${acc.id}（${acc.channel}）`);
     if (isTelegram(acc.channel)) await wa.syncTelegram();
@@ -101,8 +101,8 @@ export function accountsRouter(ctx, auth) {
         if (!err) return next();
         if (err instanceof multer.MulterError) {
           if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '配置文件不能超过 2MB'));
-          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('一次只能上传 1 个文件', 'upload_error'));
-          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 file，且只能有 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('每次仅可上传 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名须为 file，且仅限 1 个文件', 'upload_error'));
           return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
         }
         next(err);
@@ -110,7 +110,7 @@ export function accountsRouter(ctx, auth) {
     },
     (req, res) => {
       const f = /** @type {Express.Multer.File|undefined} */ (req.file);
-      if (!f) throw badRequest('没有收到文件（字段名 file）');
+      if (!f) throw badRequest('未收到文件（字段名 file）');
       let doc;
       try {
         doc = JSON.parse(f.buffer.toString('utf8').replace(/^\uFEFF/, ''));
@@ -179,9 +179,9 @@ export function accountsRouter(ctx, auth) {
   // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）；用全局代理的号测全局代理（经 mihomo）
   router.post('/:id/proxy/test', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
-    if (acc.channel !== 'waha') throw badRequest('这个号不是扫码接入', 'wrong_channel');
+    if (acc.channel !== 'waha') throw badRequest('该号码不是扫码接入', 'wrong_channel');
     const px = acc.waha.proxy;
-    if (!px.enabled) throw new HttpError(400, 'proxy_disabled', '代理没有启用');
+    if (!px.enabled) throw new HttpError(400, 'proxy_disabled', '代理未启用');
     res.json(px.useGlobal ? await ctx.globalProxy.test() : await testProxy(px, { url: ctx.proxyTestUrl }));
   });
 
@@ -215,7 +215,7 @@ export function accountsRouter(ctx, auth) {
   });
   router.post('/:id/telegram/logout', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
-    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
+    if (acc.channel !== 'tguser') throw badRequest('该号码不是 Telegram 扫码登录', 'wrong_channel');
     await wa.tgUserLogout(acc);
     ctx.log.info(`[accounts] ${req.user.email} 让号 ${acc.id} 退出了 Telegram 登录`);
     res.json(await view(accounts.get(acc.id)));
@@ -225,7 +225,7 @@ export function accountsRouter(ctx, auth) {
   // 取到就存进这个号（已有应用就用已有的，没有就新建一个）。手机号和验证码不存、不进日志
   const loadTgUser = (req) => {
     const acc = load(req);
-    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
+    if (acc.channel !== 'tguser') throw badRequest('该号码不是 Telegram 扫码登录', 'wrong_channel');
     if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
     return acc;
   };
@@ -240,7 +240,7 @@ export function accountsRouter(ctx, auth) {
     const got = await myTelegram.apply(acc.id, req.body.code);
     // 取的这几秒里号可能被删了
     const cur = accounts.get(acc.id);
-    if (!cur) throw notFound('号不存在');
+    if (!cur) throw notFound('号码不存在');
     const next = applyAccountPatch(
       cur,
       { telegram: { apiId: got.apiId, apiHash: got.apiHash } },

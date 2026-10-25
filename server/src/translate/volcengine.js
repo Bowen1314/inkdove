@@ -73,24 +73,24 @@ function volcError(err, redactOpts, status) {
   const n = Number.isFinite(Number(err?.CodeN)) ? Number(err.CodeN) : Number(code);
   const detail = detailOf(err?.Message, redactOpts);
   const what = `${code || n}${detail ? `：${detail}` : ''}`;
-  if (n === -415) return new TranslateError(`火山翻译不支持这个语向（${what}）`, 'unsupported_language', { status });
-  if (n === -429 || n === 100018 || code === 'FlowLimitExceeded') return new TranslateError(`火山翻译请求太频繁，被限流了（${what}）`, 'rate_limit', { status });
+  if (n === -415) return new TranslateError(`火山翻译不支持该语向（${what}）`, 'unsupported_language', { status });
+  if (n === -429 || n === 100018 || code === 'FlowLimitExceeded') return new TranslateError(`火山翻译请求过于频繁，已限流（${what}）`, 'rate_limit', { status });
   if (n === 100012 || n === 100013 || /^(LackPolicy|AccessDenied)$/.test(code)) {
-    return new TranslateError(`火山翻译拒绝了这个密钥（${what}）。子账号要在访问控制里给机器翻译的权限`, 'auth', { status });
+    return new TranslateError(`火山翻译拒绝该密钥（${what}）。子账号需在访问控制中授予机器翻译权限`, 'auth', { status });
   }
   if ((n >= 100003 && n <= 100006) || n === 100009 || n === 100010 || /Signature|AccessKey|ClientTokenId|Authentication|Timestamp/i.test(code)) {
     return new TranslateError(`火山翻译鉴权失败（${what}）。请检查 Access Key ID 和 Secret Access Key`, 'auth', { status });
   }
-  if (n === -500 || (n >= 100014 && n <= 100016) || n === 100019 || n === 100001) return new TranslateError(`火山翻译出错了（${what}）`, 'server', { status });
+  if (n === -500 || (n >= 100014 && n <= 100016) || n === 100019 || n === 100001) return new TranslateError(`火山翻译服务异常（${what}）`, 'server', { status });
   return new TranslateError(`火山翻译返回错误（${what}）`, 'bad_request', { status });
 }
 
 function check(cfg) {
   const accessKeyId = String(cfg.accessKeyId || '').trim();
   const secretAccessKey = String(cfg.secretAccessKey || '').trim();
-  if (!accessKeyId || !secretAccessKey) throw new TranslateError('火山翻译还没有填 Access Key ID 和 Secret Access Key', 'config');
+  if (!accessKeyId || !secretAccessKey) throw new TranslateError('火山翻译未填写 Access Key ID 和 Secret Access Key', 'config');
   if (!visibleAscii(accessKeyId) || !visibleAscii(secretAccessKey)) {
-    throw new TranslateError('火山翻译的 Access Key ID 或 Secret Access Key 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+    throw new TranslateError('火山翻译的 Access Key ID 或 Secret Access Key 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   }
   return { accessKeyId, secretAccessKey };
 }
@@ -104,7 +104,7 @@ async function call(cfg, action, payload, o) {
   try {
     host = new URL(base).host;
   } catch {
-    throw new TranslateError('火山翻译的地址格式不对', 'config');
+    throw new TranslateError('火山翻译地址格式错误', 'config');
   }
   const query = { Action: action, Version: VERSION };
   const body = JSON.stringify(payload);
@@ -135,7 +135,7 @@ async function call(cfg, action, payload, o) {
   const err = res.data?.ResponseMetadata?.Error;
   if (err && (err.Code !== undefined || err.CodeN !== undefined)) throw volcError(err, redactOpts, res.status);
   if (!res.ok) throw httpError(LABEL, res, redactOpts);
-  if (!res.data) throw badResponse(LABEL, '不是 JSON');
+  if (!res.data) throw badResponse(LABEL, '非 JSON');
   return res.data;
 }
 

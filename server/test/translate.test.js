@@ -147,7 +147,7 @@ describe('会话输入框一键翻译（mock）', () => {
     const r = await translate(id, 'hello');
     assert.equal(r.status, 400);
     assert.equal(r.body.code, 'language_unknown');
-    assert.equal(r.body.error, '客户还没发过文字消息，判断不了用什么语言');
+    assert.equal(r.body.error, '客户尚未发送文字消息，无法识别语言');
     assert.equal(spy.args, null);
   });
 

@@ -48,22 +48,22 @@ export const isAuthLost = (err) => err instanceof TgUserError ? err.authLost : A
 export function explainTgUser(err) {
   if (err instanceof TgUserError) return err;
   const t = rpcText(err);
-  if (!t) return new TgUserError(`连不上 Telegram：${String(err?.message || err).slice(0, 200)}`);
+  if (!t) return new TgUserError(`无法连接 Telegram：${String(err?.message || err).slice(0, 200)}`);
   const wait = /^(?:FLOOD|SLOWMODE)_WAIT_(\d+)$/.exec(t);
   let msg;
-  if (AUTH_LOST.has(t)) msg = '墨鸽在这个 Telegram 帐号上的登录已经失效（在手机上结束了这个设备、帐号被注销或封禁），请重新扫码登录';
-  else if (t === 'API_ID_INVALID' || t === 'API_ID_PUBLISHED_FLOOD') msg = 'api_id 或 api_hash 不对，请到 my.telegram.org 的 API development tools 里核对';
-  else if (wait) msg = `Telegram 限制了操作频率，请 ${wait[1]} 秒后再试`;
-  else if (t === 'PEER_ID_INVALID' || t === 'USER_ID_INVALID') msg = '找不到这个客户（墨鸽还没有收到过他的消息）';
+  if (AUTH_LOST.has(t)) msg = 'Telegram 登录状态已失效（设备已在手机上移除，或帐号已注销、封禁），请重新扫码登录';
+  else if (t === 'API_ID_INVALID' || t === 'API_ID_PUBLISHED_FLOOD') msg = 'api_id 或 api_hash 错误，请在 my.telegram.org 的 API development tools 中核对';
+  else if (wait) msg = `操作过于频繁，请 ${wait[1]} 秒后重试`;
+  else if (t === 'PEER_ID_INVALID' || t === 'USER_ID_INVALID') msg = '客户不存在（尚未收到该客户的消息）';
   else if (t === 'INPUT_USER_DEACTIVATED') msg = '客户的 Telegram 帐号已注销';
-  else if (t === 'YOU_BLOCKED_USER') msg = '你把这个客户拉黑了，发不过去';
-  else if (t === 'USER_IS_BLOCKED') msg = '客户把你拉黑了，发不过去';
-  else if (t === 'PRIVACY_PREMIUM_REQUIRED' || t === 'PRIVACY_RESTRICTED') msg = '客户的隐私设置不让你给他发消息';
-  else if (t === 'MESSAGE_TOO_LONG') msg = '消息太长了，请分开发';
-  else if (t === 'MEDIA_CAPTION_TOO_LONG') msg = '文件的说明文字太长了';
-  else if (t === 'MESSAGE_DELETE_FORBIDDEN' || t === 'MESSAGE_ID_INVALID') msg = '这条消息删不了（已经删了，或者 Telegram 不让删）';
-  else if (t === 'PASSWORD_HASH_INVALID') msg = '两步验证密码不对';
-  else if (t === 'AUTH_TOKEN_EXPIRED' || t === 'AUTH_TOKEN_INVALID') msg = '二维码过期了，请重新扫码';
+  else if (t === 'YOU_BLOCKED_USER') msg = '已将该客户拉黑，无法发送';
+  else if (t === 'USER_IS_BLOCKED') msg = '已被客户拉黑，无法发送';
+  else if (t === 'PRIVACY_PREMIUM_REQUIRED' || t === 'PRIVACY_RESTRICTED') msg = '客户的隐私设置禁止接收消息';
+  else if (t === 'MESSAGE_TOO_LONG') msg = '消息过长，请分条发送';
+  else if (t === 'MEDIA_CAPTION_TOO_LONG') msg = '文件说明文字过长';
+  else if (t === 'MESSAGE_DELETE_FORBIDDEN' || t === 'MESSAGE_ID_INVALID') msg = '无法删除该消息（已删除或 Telegram 不允许删除）';
+  else if (t === 'PASSWORD_HASH_INVALID') msg = '两步验证密码错误';
+  else if (t === 'AUTH_TOKEN_EXPIRED' || t === 'AUTH_TOKEN_INVALID') msg = '二维码已过期，请重新扫码';
   else msg = `Telegram 返回 ${t}`;
   return new TgUserError(msg, { code: t, authLost: AUTH_LOST.has(t) });
 }

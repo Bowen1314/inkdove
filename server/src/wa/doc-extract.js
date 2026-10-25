@@ -18,15 +18,15 @@ const WORKER_LIMITS = { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 3
 
 /** 提取失败时存下、显示给业务员的原因（固定的话，不带解析库的原文） */
 export const EXTRACT_ERRORS = {
-  timeout: '文件太复杂，提取超时',
-  memory: '文件太复杂，提取时内存不够',
-  failed: '文件解析失败（可能已损坏或加了密码）',
+  timeout: '文件过于复杂，提取超时',
+  memory: '文件过于复杂，提取时内存不足',
+  failed: '文件解析失败（可能已损坏或已加密）',
 };
 
 export class DocExtractError extends Error {
   /** @param {'no_text'|'failed'} status @param {keyof typeof EXTRACT_ERRORS|null} reason */
   constructor(status, reason = null) {
-    super(reason ? EXTRACT_ERRORS[reason] : '没有提取到文字');
+    super(reason ? EXTRACT_ERRORS[reason] : '未提取到文字');
     this.status = status;
     this.reason = reason;
   }

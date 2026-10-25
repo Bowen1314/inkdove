@@ -29,7 +29,7 @@ const RESERVED_NAMES = new Set(['DIRECT', 'REJECT', 'REJECT-DROP', 'PASS', 'COMP
 export const MAX_NODES = 2000;
 const MAX_NAME = 200;
 
-export const NOT_CLASH_HINT = '请换成机场给的 Clash 订阅链接';
+export const NOT_CLASH_HINT = '请改用机场提供的 Clash 订阅链接';
 /** 节点链接（v2rayN 那种订阅一行一个） */
 const LINK_LINE = /^(ss|ssr|vmess|vless|trojan|hysteria2?|hy2|tuic|anytls|wireguard|wg|snell|socks5?|https?):\/\/\S+/im;
 
@@ -77,7 +77,7 @@ const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
  */
 export function parseClashConfig(text) {
   const raw = String(text ?? '').replace(/^﻿/, '');
-  if (!raw.trim()) throw new ClashFormatError('内容是空的');
+  if (!raw.trim()) throw new ClashFormatError('内容为空');
   let data = null;
   try {
     const doc = YAML.parseDocument(raw, { uniqueKeys: false, merge: true, maxAliasCount: 1000 });
@@ -90,8 +90,8 @@ export function parseClashConfig(text) {
   }
   if (!isPlainObject(data) || !Array.isArray(data.proxies)) {
     // 不是 Clash 配置：常见的是机场默认给的 base64 节点链接列表，单独说明
-    if (looksLikeLinkList(raw)) throw new ClashFormatError('内容是节点链接列表，不是 Clash 格式的配置', { notClash: true });
-    throw new ClashFormatError(data === null ? '不是 Clash 格式的配置（YAML 解析失败）' : '不是 Clash 格式的配置（没有 proxies 节点列表）', {
+    if (looksLikeLinkList(raw)) throw new ClashFormatError('内容为节点链接列表，非 Clash 格式配置', { notClash: true });
+    throw new ClashFormatError(data === null ? '非 Clash 格式配置（YAML 解析失败）' : '非 Clash 格式配置（缺少 proxies 节点列表）', {
       notClash: true,
     });
   }
@@ -127,7 +127,7 @@ export function parseClashConfig(text) {
     if (p['dialer-proxy'] !== undefined && !names.has(p['dialer-proxy'])) delete p['dialer-proxy'];
   }
   if (!proxies.length) {
-    throw new ClashFormatError(skipped ? `没有能用的节点（${skipped} 个节点的类型不支持或缺少字段）` : 'proxies 里没有节点');
+    throw new ClashFormatError(skipped ? `无可用节点（${skipped} 个节点类型不支持或缺少字段）` : 'proxies 中无节点');
   }
   return { proxies, skipped };
 }

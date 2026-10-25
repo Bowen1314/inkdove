@@ -151,18 +151,18 @@ export async function decideReply(
   } catch (err) {
     return done('handoff', 'other', `模型调用失败：${err?.message || err}`);
   }
-  if (!gen || !CATEGORIES.includes(gen.category)) return done('handoff', 'other', '模型输出无法解析，按转人工处理');
+  if (!gen || !CATEGORIES.includes(gen.category)) return done('handoff', 'other', '模型输出无法解析，已转人工');
 
   const genReason = clip(String(gen.reason ?? '').trim(), 200);
   // F11：客户明确表示不需要、没兴趣或不想再被联系。不回复、不通知，由服务暂停会话
-  if (gen.category === 'declined') return done('declined', 'declined', genReason || '客户表示不需要、没兴趣或不想再被联系');
+  if (gen.category === 'declined') return done('declined', 'declined', genReason || '客户表示无需求或不愿再被联系');
   if (gen.category === 'offtopic') {
     const offtopicType = offtopicCodeOf(gen.offtopicType);
-    return done('offtopic', offtopicType, `离题：${genReason || '模型判断与本企业业务无关'}`, { offtopicType });
+    return done('offtopic', offtopicType, `离题：${genReason || '模型判定与本企业业务无关'}`, { offtopicType });
   }
   if (gen.category === 'handoff') {
     const handoffType = HANDOFF_TYPES.includes(gen.handoffType) ? gen.handoffType : 'other';
-    return done('handoff', handoffCodeOf(handoffType), genReason || '没把握或客户要求人工（模型判断）', {
+    return done('handoff', handoffCodeOf(handoffType), genReason || '模型无法确定或客户要求人工', {
       handoffType,
       questionZh: clip(String(gen.questionZh ?? '').trim(), 200),
     });
@@ -172,7 +172,7 @@ export async function decideReply(
   let reply = String(gen.reply ?? '').trim();
   let ids = gen.usedEntryIds || [];
   let fileIds = gen.sendFileIds || [];
-  if (!reply) return done('handoff', 'other', '模型没有给出回复内容');
+  if (!reply) return done('handoff', 'other', '模型未生成回复内容');
 
   // ---- F14 套话：重写一次；还命中就删整句；删空了用重写前的版本。只管风格，不转人工 ----
   const cliches = findTerms(reply, CLICHE_TERMS);
@@ -207,15 +207,15 @@ export async function decideReply(
   // 带文件的回复按业务回复把关（寒暄不该发文件）
   if (sendFileIds.length && category === 'smalltalk') category = 'business';
   if (sendFileIds.length > MAX_FILES_PER_REPLY) {
-    return done('blocked', 'bad_file', `一次最多发 ${MAX_FILES_PER_REPLY} 个文件，模型要发 ${sendFileIds.length} 个`);
+    return done('blocked', 'bad_file', `单次最多发送 ${MAX_FILES_PER_REPLY} 个文件，模型请求发送 ${sendFileIds.length} 个`);
   }
   const badFiles = sendFileIds.filter((id) => !activeFileById.has(id));
-  if (badFiles.length) return done('blocked', 'bad_file', `要发送的文件不存在或已停用：${badFiles.slice(0, 3).join('、')}`);
+  if (badFiles.length) return done('blocked', 'bad_file', `待发送的文件不存在或已停用：${badFiles.slice(0, 3).join('、')}`);
   const files = sendFileIds.map((id) => activeFileById.get(id));
   if (category === 'business') {
-    if (!usedEntryIds.length && !files.length) return done('handoff', 'no_citation', '业务回复既没有引用知识条目也没有发文件，无法确认依据');
+    if (!usedEntryIds.length && !files.length) return done('handoff', 'no_citation', '业务回复未引用知识条目或发送文件，无法确认依据');
     const bad = usedEntryIds.filter((id) => !byId.has(id));
-    if (bad.length) return done('handoff', 'no_citation', `引用了不存在的条目 id：${bad.slice(0, 3).join('、')}`);
+    if (bad.length) return done('handoff', 'no_citation', `引用的条目 id 不存在：${bad.slice(0, 3).join('、')}`);
     if (reply.length > MAX_BUSINESS_REPLY) {
       return done('blocked', 'too_long', `回复过长：${reply.length} 字符，业务回复上限 ${MAX_BUSINESS_REPLY}`);
     }
@@ -225,8 +225,8 @@ export async function decideReply(
       return done('blocked', 'too_long', `寒暄回复过长：${reply.length} 字符，上限 ${MAX_SMALLTALK_REPLY}`);
     }
   }
-  if (reply.includes('```')) return done('blocked', 'code_block', '回复里有代码块标记 ```');
-  if (ctx.canary && reply.includes(ctx.canary)) return done('blocked', 'canary', '回复里出现了金丝雀串，疑似提示词泄露');
+  if (reply.includes('```')) return done('blocked', 'code_block', '回复包含代码块标记 ```');
+  if (ctx.canary && reply.includes(ctx.canary)) return done('blocked', 'canary', '回复包含金丝雀串，疑似提示词泄露');
   const cited = usedEntryIds.map((id) => byId.get(id));
   const grounding = [...cited.map((e) => `${e.title}\n${e.content}`), ...files.map((f) => `${f.name}\n${f.description}`)].join('\n');
   const red = checkRedLines(reply, grounding);
@@ -236,7 +236,7 @@ export async function decideReply(
     return done(
       'handoff',
       'file_limit',
-      `这个会话今天自动发文件已到上限，还能发 ${Math.max(0, fileQuota)} 个，这次要发 ${files.length} 个`,
+      `该会话今日自动发送文件已达上限：剩余 ${Math.max(0, fileQuota)} 个，本次请求 ${files.length} 个`,
     );
   }
 
@@ -268,7 +268,7 @@ export async function decideReply(
     case 'commitment':
       return done('handoff', 'review_commitment', `审核判定有议价、成交承诺或身份问题${why ? `：${why}` : ''}`);
     case 'ungrounded':
-      return done('handoff', 'review_ungrounded', `审核未通过${why ? `：${why}` : '：回复里有资料找不到依据的内容'}`);
+      return done('handoff', 'review_ungrounded', `审核未通过${why ? `：${why}` : '：回复包含资料中无依据的内容'}`);
     default:
       return done('handoff', 'review_failed', `审核结果无法识别（${clip(verdict.verdict, 20)}），未发送`);
   }

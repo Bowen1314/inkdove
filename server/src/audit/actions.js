@@ -21,7 +21,7 @@ import { clipText, diffFields, diffObjects, fieldChange, safeUrl } from './diff.
 
 /** 操作类型（action 的前缀）→ 中文，筛选和列表用 */
 export const CATEGORIES = {
-  auth: '登录和账号',
+  auth: '登录与帐号',
   member: '成员',
   account: '号码',
   conversation: '会话',
@@ -39,7 +39,7 @@ export const CATEGORIES = {
 /** 操作对象的类型 → 中文 */
 export const TARGET_TYPES = {
   user: '成员',
-  account: '号',
+  account: '号码',
   conversation: '会话',
   entry: '知识条目',
   gap: '知识缺口',
@@ -82,7 +82,7 @@ export function brief(changes, max = 3) {
 }
 
 /** 测试类接口（HTTP 200，结果在 body.ok 里）的结果 */
-const testResult = (x) => (!x.ok || typeof x.body?.ok !== 'boolean' ? '' : x.body.ok ? '（结果：通过）' : '（结果：没通过）');
+const testResult = (x) => (!x.ok || typeof x.body?.ok !== 'boolean' ? '' : x.body.ok ? '（结果：通过）' : '（结果：未通过）');
 
 /* ---------------- 读对象 ---------------- */
 
@@ -104,9 +104,9 @@ const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 /* ---------------- 字段说明 ---------------- */
 
 const MEMBER_FIELDS = (ctx) => [
-  ['name', { label: '名字' }],
+  ['name', { label: '姓名' }],
   ['role', { label: '角色', values: ROLE_LABELS }],
-  ['accountIds', { label: '能用的号', kind: 'list', item: (id) => accountName(ctx, id) }],
+  ['accountIds', { label: '可用号码', kind: 'list', item: (id) => accountName(ctx, id) }],
   ['disabled', { label: '状态', on: '已停用', off: '启用中' }],
 ];
 const memberView = (r) =>
@@ -119,12 +119,12 @@ const selfProfile = (r) => (r ? Object.fromEntries(Object.entries(PROFILE_FIELDS
 const ACCOUNT_SPECS = {
   name: { label: '名称' },
   replyMode: { label: '回复方式', values: { off: '人工回复', auto: '自动回复' } },
-  persona: { label: 'persona（语气和身份）', kind: 'text' },
-  scope: { label: '回复范围', values: { all: '全部客户', allowlist: '只回白名单' } },
+  persona: { label: 'persona（身份与语气）', kind: 'text' },
+  scope: { label: '回复范围', values: { all: '全部客户', allowlist: '仅白名单' } },
   allowlist: { label: '白名单', kind: 'list' },
   blocklist: { label: '黑名单', kind: 'list' },
   'waha.proxy.enabled': { label: 'IP 代理', on: '开', off: '关' },
-  'waha.proxy.useGlobal': { label: '用全局代理', on: '开', off: '关' },
+  'waha.proxy.useGlobal': { label: '使用全局代理', on: '开', off: '关' },
   'waha.proxy.protocol': { label: '代理协议' },
   'waha.proxy.host': { label: '代理地址' },
   'waha.proxy.port': { label: '代理端口' },
@@ -153,8 +153,8 @@ const SETTINGS_SPECS = {
   'llm.baseUrl': { label: '回复模型 · 接口地址' },
   'llm.apiKey': { label: '回复模型 · API 密钥', kind: 'secret' },
   'llm.model': { label: '回复模型' },
-  'llm.distillModel': { label: '整理知识库用的模型' },
-  'embedding.enabled': { label: '按意思搜知识库' },
+  'llm.distillModel': { label: '知识库整理模型' },
+  'embedding.enabled': { label: '语义检索' },
   'embedding.source': { label: '向量服务' },
   'embedding.format': { label: '向量服务 · 接口格式', values: { openai: 'OpenAI 兼容', gemini: 'Gemini 原生' } },
   'embedding.baseUrl': { label: '向量服务 · 接口地址' },
@@ -164,13 +164,13 @@ const SETTINGS_SPECS = {
   'rerank.baseUrl': { label: '重排服务 · 接口地址' },
   'rerank.apiKey': { label: '重排服务 · API 密钥', kind: 'secret' },
   'rerank.model': { label: '重排模型' },
-  'reply.persona': { label: '默认 persona（语气和身份）', kind: 'text' },
-  'reply.debounceSeconds': { label: '等客户说完再回（秒）' },
-  'reply.maxBotRepliesPerChatPerHour': { label: '每个会话每小时最多自动回复' },
-  'reply.humanize': { label: '回复像真人' },
+  'reply.persona': { label: '默认 persona（身份与语气）', kind: 'text' },
+  'reply.debounceSeconds': { label: '合并等待时间（秒）' },
+  'reply.maxBotRepliesPerChatPerHour': { label: '每会话每小时自动回复上限' },
+  'reply.humanize': { label: '拟人化回复' },
   'media.voice': { label: '识别语音' },
   'media.image': { label: '识别图片' },
-  'media.mediaModel': { label: '识别用的模型' },
+  'media.mediaModel': { label: '识别模型' },
   'media.transcribeModel': { label: '语音转写模型' },
   'leads.enabled': { label: '自动提取客户线索' },
   'email.provider': { label: '发信方式', values: { smtp: 'SMTP', resend: 'Resend' }, empty: '不发信' },
@@ -183,7 +183,7 @@ const SETTINGS_SPECS = {
   'email.resend.apiKey': { label: 'Resend API key', kind: 'secret' },
   'branding.title': { label: '网站名称' },
   pricing: { label: '模型单价', kind: 'json', count: (v) => `${Array.isArray(v) ? v.length : 0} 行` },
-  'outreach.dailyCapPerAccount': { label: '外联 · 每个号每天最多发' },
+  'outreach.dailyCapPerAccount': { label: '外联 · 每号码每日上限' },
   'outreach.minIntervalSeconds': { label: '外联 · 最短间隔（秒）' },
   'outreach.maxIntervalSeconds': { label: '外联 · 最长间隔（秒）' },
   'outreach.windowStart': { label: '外联 · 发送时段开始' },
@@ -191,13 +191,13 @@ const SETTINGS_SPECS = {
   'suggest.companyPrompt': { label: '公司话术', kind: 'text' },
   'translation.mode': { label: '翻译方式', values: { ai: 'AI 翻译', api: '翻译 API' } },
   'translation.provider': { label: '翻译服务', values: Object.fromEntries(TRANSLATION_PROVIDERS.map((p) => [p.id, p.label])) },
-  'translation.fallbackToAi': { label: '翻译接口出错时改用 AI 翻译' },
+  'translation.fallbackToAi': { label: '翻译接口失败时改用 AI 翻译' },
   // 粘贴的 Clash 配置不在设置里（只存解析出的节点，原文不存），比不出来：节点换没换另外记（proxyNodeChanges）
   'proxy.enabled': { label: '全局代理' },
   'proxy.source': { label: '全局代理 · 节点来源', values: { subscription: '订阅地址', config: '粘贴 Clash 配置' } },
   'proxy.subscriptionUrl': { label: '全局代理 · 订阅地址', kind: 'secret' },
-  'proxy.node': { label: '全局代理 · 节点', empty: '自动（选最快的）' },
-  'proxy.bypass': { label: '全局代理 · 不走代理的地址', kind: 'list' },
+  'proxy.node': { label: '全局代理 · 节点', empty: '自动（最低延迟）' },
+  'proxy.bypass': { label: '全局代理 · 直连地址', kind: 'list' },
   'blockwords.enabled': { label: '屏蔽词' },
   'blockwords.words': { label: '屏蔽词 · 词表', kind: 'list' },
   'blockwords.aiCheck': { label: 'AI 发言检查' },
@@ -264,7 +264,7 @@ const FILE_FIELDS = [
   ['status', { label: '状态', values: STATUS_VALUES }],
 ];
 const LEAD_FIELDS = [
-  ['name', { label: '名字' }],
+  ['name', { label: '姓名' }],
   ['company', { label: '公司' }],
   ['country', { label: '国家' }],
   ['email', { label: '邮箱' }],
@@ -312,7 +312,7 @@ export const RULES = [
       const { email, row } = x.before || {};
       const actor = row
         ? actorOf(row)
-        : { id: null, name: '', email: !email ? '（没填邮箱）' : EMAIL_RE.test(email) && email.length <= 200 ? email : '（不是邮箱格式）', role: null };
+        : { id: null, name: '', email: !email ? '（未填写邮箱）' : EMAIL_RE.test(email) && email.length <= 200 ? email : '（邮箱格式无效）', role: null };
       return { actor, summary: '登录失败' };
     },
   },
@@ -363,7 +363,7 @@ export const RULES = [
     run: (x) => {
       if (!x.before?.row) return null;
       const actor = actorOf(x.ok && x.body?.user ? x.body.user : x.before.row);
-      const summary = x.before.kind === 'reset' ? '用重置链接重设{了}登录密码' : '接受{了}邀请，设置登录密码';
+      const summary = x.before.kind === 'reset' ? '通过重置链接重设{了}登录密码' : '接受{了}邀请并设置登录密码';
       return { actor, summary, target: userTarget(x.before.row) };
     },
   },
@@ -410,11 +410,11 @@ export const RULES = [
     before: ({ ctx, params }) => clone(userRow(ctx, params.id)),
     run: (x) => {
       const toId = str(x.req.body?.toUserId);
-      const to = userName(userRow(x.ctx, toId)) || toId || '（没选人）';
+      const to = userName(userRow(x.ctx, toId)) || toId || '（未选择）';
       const from = userName(x.before) || x.params.id;
       const summary = x.ok
-        ? `把成员${q(from)}负责的 ${x.body?.moved ?? 0} 个会话转给{了}${q(to)}${x.body?.skipped ? `（${x.body.skipped} 个对方没有号的权限，没转）` : ''}`
-        : `把成员${q(from)}负责的会话转给${q(to)}`;
+        ? `将成员${q(from)}负责的 ${x.body?.moved ?? 0} 个会话转交{了}${q(to)}${x.body?.skipped ? `（${x.body.skipped} 个因对方无号码权限未转交）` : ''}`
+        : `将成员${q(from)}负责的会话转交${q(to)}`;
       return { summary, target: userTarget(x.before, x.params.id) };
     },
   },
@@ -438,14 +438,14 @@ export const RULES = [
     a: 'account.create',
     run: (x) =>
       x.ok && x.body?.id
-        ? { summary: `新建{了}号${q(x.body.name)}（${CHANNEL_LABELS[x.body.channel] || x.body.channel}）`, target: accountTarget(x.body) }
-        : { summary: '新建号' },
+        ? { summary: `新建{了}号码${q(x.body.name)}（${CHANNEL_LABELS[x.body.channel] || x.body.channel}）`, target: accountTarget(x.body) }
+        : { summary: '新建号码' },
   },
   {
     m: 'GET',
     p: '/accounts/export',
     a: 'account.export',
-    run: (x) => ({ summary: x.ok ? `导出{了}号码配置（${x.ctx.accounts.list().length} 个号，文件里有密钥明文）` : '导出号码配置' }),
+    run: (x) => ({ summary: x.ok ? `导出{了}号码配置（${x.ctx.accounts.list().length} 个号码，文件含明文密钥）` : '导出号码配置' }),
   },
   {
     m: 'POST',
@@ -455,7 +455,7 @@ export const RULES = [
       if (!x.ok) return { summary: '导入号码配置' };
       const created = Array.isArray(x.body?.created) ? x.body.created.length : 0;
       const skipped = Array.isArray(x.body?.skipped) ? x.body.skipped.length : 0;
-      return { summary: `导入{了}号码配置：新建 ${created} 个号${skipped ? `，跳过 ${skipped} 个` : ''}` };
+      return { summary: `导入{了}号码配置：新建 ${created} 个号码${skipped ? `，跳过 ${skipped} 个` : ''}` };
     },
   },
   {
@@ -467,7 +467,7 @@ export const RULES = [
       const after = x.ctx.accounts.get(x.params.id);
       const changes = x.ok && x.before && after ? diffObjects(x.before, after, { specOf: (p) => ACCOUNT_SPECS[p], skip: ACCOUNT_SKIP }) : [];
       const acc = after || x.before;
-      return { summary: `修改{了}号${q(acc?.name ?? x.params.id)}的设置${brief(changes)}`, target: accountTarget(acc, x.params.id), changes };
+      return { summary: `修改{了}号码${q(acc?.name ?? x.params.id)}的设置${brief(changes)}`, target: accountTarget(acc, x.params.id), changes };
     },
   },
   {
@@ -475,22 +475,22 @@ export const RULES = [
     p: '/accounts/:id',
     a: 'account.delete',
     before: ({ ctx, params }) => clone(ctx.accounts.get(params.id)),
-    run: (x) => ({ summary: `删除{了}号${q(x.before?.name ?? x.params.id)}`, target: accountTarget(x.before, x.params.id) }),
+    run: (x) => ({ summary: `删除{了}号码${q(x.before?.name ?? x.params.id)}`, target: accountTarget(x.before, x.params.id) }),
   },
   ...[
-    ['waha/start', 'account.waha_start', (n) => `启动{了}号${n}的扫码连接`],
-    ['waha/logout', 'account.waha_logout', (n) => `让号${n}退出{了} WhatsApp 登录`],
-    ['waha/request-code', 'account.waha_code', (n) => `为号${n}获取{了}手机号配对码`],
-    ['proxy/test', 'account.proxy_test', (n) => `测试{了}号${n}的 IP 代理`],
-    ['notify/test', 'account.notify_test', (n) => `给号${n}发{了}测试通知`],
-    ['telegram/rebind', 'account.telegram_rebind', (n) => `清掉{了}号${n}绑定的 Telegram 号主`],
-    ['telegram/login', 'account.telegram_login', (n) => `启动{了}号${n}的 Telegram 扫码登录`],
+    ['waha/start', 'account.waha_start', (n) => `启动{了}号码${n}的扫码连接`],
+    ['waha/logout', 'account.waha_logout', (n) => `号码${n}退出{了} WhatsApp 登录`],
+    ['waha/request-code', 'account.waha_code', (n) => `为号码${n}获取{了}手机号配对码`],
+    ['proxy/test', 'account.proxy_test', (n) => `测试{了}号码${n}的 IP 代理`],
+    ['notify/test', 'account.notify_test', (n) => `为号码${n}发送{了}测试通知`],
+    ['telegram/rebind', 'account.telegram_rebind', (n) => `解除{了}号码${n}绑定的 Telegram 号主`],
+    ['telegram/login', 'account.telegram_login', (n) => `启动{了}号码${n}的 Telegram 扫码登录`],
     // 只记有人输过密码，密码本身不进审计
-    ['telegram/password', 'account.telegram_password', (n) => `为号${n}输入{了} Telegram 两步验证密码`],
-    ['telegram/logout', 'account.telegram_logout', (n) => `让号${n}退出{了} Telegram 登录`],
+    ['telegram/password', 'account.telegram_password', (n) => `为号码${n}输入{了} Telegram 两步验证密码`],
+    ['telegram/logout', 'account.telegram_logout', (n) => `号码${n}退出{了} Telegram 登录`],
     // 手机号、验证码不进审计
-    ['telegram/api/code', 'account.telegram_api_code', (n) => `为号${n}向 my.telegram.org 获取{了}验证码`],
-    ['telegram/api/apply', 'account.telegram_api_apply', (n) => `为号${n}从 my.telegram.org 取得{了} api_id 和 api_hash`],
+    ['telegram/api/code', 'account.telegram_api_code', (n) => `为号码${n}向 my.telegram.org 获取{了}验证码`],
+    ['telegram/api/apply', 'account.telegram_api_apply', (n) => `为号码${n}从 my.telegram.org 取得{了} api_id 和 api_hash`],
   ].map(([sub, a, say]) => ({
     m: 'POST',
     p: `/accounts/:id/${sub}`,
@@ -517,7 +517,7 @@ export const RULES = [
       const n = x.ok ? x.body?.updated ?? 0 : Array.isArray(ids) ? ids.length : 0;
       const skipped = x.ok && Array.isArray(x.body?.skipped) ? x.body.skipped.length : 0;
       const to = typeof uid === 'string' && uid ? userName(userRow(x.ctx, uid)) || uid : null;
-      const summary = to ? `批量把 ${n} 个会话分给{了}${q(to)}` : `批量取消{了} ${n} 个会话的分配`;
+      const summary = to ? `批量将 ${n} 个会话分配给{了}${q(to)}` : `批量取消{了} ${n} 个会话的分配`;
       return { summary: `${summary}${skipped ? `（跳过 ${skipped} 个）` : ''}`, target: to ? { type: 'user', id: uid, name: to } : null };
     },
   },
@@ -534,7 +534,7 @@ export const RULES = [
       const name = q(convName(c) || x.params.id);
       const change = x.ok ? fieldChange('assignee', userName(c?.assignee) || null, toName, { label: '负责人', empty: '未分配' }) : null;
       return {
-        summary: toName ? `把会话${name}分给{了}${q(toName)}` : `取消{了}会话${name}的分配`,
+        summary: toName ? `将会话${name}分配给{了}${q(toName)}` : `取消{了}会话${name}的分配`,
         target: convTarget(c, x.params.id),
         changes: change ? [change] : [],
       };
@@ -552,14 +552,14 @@ export const RULES = [
     },
   },
   ...[
-    ['POST', 'resolve', 'conversation.resolve', (n) => `把会话${n}标成{了}已处理`],
-    ['DELETE', 'draft', 'conversation.draft_clear', (n) => `清掉{了}会话${n}的推荐回复和草稿`],
-    ['POST', 'translate', 'conversation.translate', (n) => `在会话${n}里用{了}一键翻译`],
-    ['POST', 'messages/:messageId/translation', 'conversation.message_translate', (n) => `把会话${n}里的一条消息翻译成{了}中文`],
+    ['POST', 'resolve', 'conversation.resolve', (n) => `将会话${n}标记{了}为已处理`],
+    ['DELETE', 'draft', 'conversation.draft_clear', (n) => `清除{了}会话${n}的推荐回复和草稿`],
+    ['POST', 'translate', 'conversation.translate', (n) => `在会话${n}中使用{了}一键翻译`],
+    ['POST', 'messages/:messageId/translation', 'conversation.message_translate', (n) => `将会话${n}中的一条消息翻译{了}为中文`],
     // 消息内容不记（发消息本身也不记），只记撤回了哪个会话里的
-    ['POST', 'messages/:messageId/revoke', 'conversation.message_revoke', (n) => `撤回{了}会话${n}里的一条消息`],
-    ['POST', 'suggest', 'conversation.suggest', (n) => `在会话${n}里要{了}一条推荐回复`],
-    ['POST', 'messages/:messageId/kb-draft', 'conversation.kb_draft', (n) => `把会话${n}里的一条人工回复改写成{了}知识条目草稿`],
+    ['POST', 'messages/:messageId/revoke', 'conversation.message_revoke', (n) => `撤回{了}会话${n}中的一条消息`],
+    ['POST', 'suggest', 'conversation.suggest', (n) => `在会话${n}中生成{了}推荐回复`],
+    ['POST', 'messages/:messageId/kb-draft', 'conversation.kb_draft', (n) => `将会话${n}中的一条人工回复改写{了}为知识条目草稿`],
   ].map(([m, sub, a, say]) => ({
     m,
     p: `/wa/conversations/:id/${sub}`,
@@ -610,8 +610,8 @@ export const RULES = [
       target: { type: 'entry', id: x.params.id, name: x.before?.title ?? null },
     }),
   },
-  { m: 'POST', p: '/kb/vectors/rebuild', a: 'kb.vectors_rebuild', run: () => ({ summary: '全部重算{了}知识库的向量' }) },
-  { m: 'POST', p: '/kb/vectors/retry', a: 'kb.vectors_retry', run: () => ({ summary: '重试{了}知识库的向量计算' }) },
+  { m: 'POST', p: '/kb/vectors/rebuild', a: 'kb.vectors_rebuild', run: () => ({ summary: '重新计算{了}知识库全部向量' }) },
+  { m: 'POST', p: '/kb/vectors/retry', a: 'kb.vectors_retry', run: () => ({ summary: '重试{了}知识库向量计算' }) },
   ...[
     ['answer', 'kb.gap_answer', (n) => `回答{了}知识缺口${n}`],
     ['dismiss', 'kb.gap_dismiss', (n) => `忽略{了}知识缺口${n}`],
@@ -623,7 +623,7 @@ export const RULES = [
     run: (x) => ({ summary: say(q(x.before?.question ?? x.params.id)), target: { type: 'gap', id: x.params.id, name: x.before?.question ?? null } }),
   })),
   // 问的内容不记
-  { m: 'POST', p: '/kb/ask', a: 'kb.ask', run: () => ({ summary: '在知识库的测试对话里提{了}一个问题' }) },
+  { m: 'POST', p: '/kb/ask', a: 'kb.ask', run: () => ({ summary: '在知识库测试对话中提问{了}' }) },
   {
     m: 'POST',
     p: '/distill',
@@ -668,7 +668,7 @@ export const RULES = [
   },
   ...[
     ['url', 'kb.source_url', '从网址添加{了}知识库资料'],
-    ['text', 'kb.source_text', '粘贴文字添加{了}知识库资料'],
+    ['text', 'kb.source_text', '通过文本添加{了}知识库资料'],
   ].map(([sub, a, say]) => ({
     m: 'POST',
     p: `/sources/${sub}`,
@@ -731,7 +731,7 @@ export const RULES = [
     run: (x) => {
       const qy = x.req.query || {};
       const filters = [
-        typeof qy.accountId === 'string' && qy.accountId ? `号：${accountName(x.ctx, qy.accountId)}` : '',
+        typeof qy.accountId === 'string' && qy.accountId ? `号码：${accountName(x.ctx, qy.accountId)}` : '',
         typeof qy.stage === 'string' && qy.stage ? `阶段：${LEAD_STAGES[qy.stage] ?? clipText(qy.stage, 20)}` : '',
         typeof qy.q === 'string' && qy.q.trim() ? `关键字：${clipText(qy.q.trim(), 40)}` : '',
       ].filter(Boolean);
@@ -793,8 +793,8 @@ export const RULES = [
   /* ---------- AI 助手 ---------- */
   // 对话只有本人看得到：只记用了助手，问的内容不记；对话标题是第一个问题的前 40 字，删除时也不记
   { m: 'POST', p: '/assistant/ask', a: 'assistant.ask', run: () => ({ summary: '向 AI 助手提问{了}' }) },
-  { m: 'POST', p: '/assistant/chats/:id/retry', a: 'assistant.retry', run: () => ({ summary: '重新问{了} AI 助手' }) },
-  { m: 'DELETE', p: '/assistant/chats/:id', a: 'assistant.chat_delete', run: () => ({ summary: '删除{了}一个 AI 助手对话' }) },
+  { m: 'POST', p: '/assistant/chats/:id/retry', a: 'assistant.retry', run: () => ({ summary: '重新向 AI 助手提问{了}' }) },
+  { m: 'DELETE', p: '/assistant/chats/:id', a: 'assistant.chat_delete', run: () => ({ summary: '删除{了} AI 助手对话' }) },
 
   /* ---------- 屏蔽词 ---------- */
   // 提醒里的原文、AI 扩充的种子词都不记：只记点了哪条提醒（id）、扩充用了几个种子词
@@ -804,7 +804,7 @@ export const RULES = [
     a: 'blockword.ack',
     before: ({ ctx, params }) => ctx.db.prepare('SELECT detector FROM blockword_hits WHERE id = ?').get(params.id)?.detector ?? null,
     run: (x) => ({
-      summary: `对一条${x.before === 'ai' ? ' AI 发言检查' : '屏蔽词'}提醒点{了}「知道了」`,
+      summary: `确认{了}一条${x.before === 'ai' ? ' AI 发言检查' : '屏蔽词'}提醒`,
       target: { type: 'blockword_hit', id: x.params.id, name: null },
     }),
   },
@@ -812,7 +812,7 @@ export const RULES = [
     m: 'POST',
     p: '/blockwords/hits/:id/false-positive',
     a: 'blockword.false_positive',
-    run: (x) => ({ summary: '把一条 AI 发言检查提醒标{了}误报', target: { type: 'blockword_hit', id: x.params.id, name: null } }),
+    run: (x) => ({ summary: '将一条 AI 发言检查提醒标记为误报', target: { type: 'blockword_hit', id: x.params.id, name: null } }),
   },
   {
     m: 'POST',
@@ -857,14 +857,14 @@ export const RULES = [
               ...proxyNodeChanges(x.before.nodes, proxyNodeStamps(x.ctx)),
             ]
           : [];
-      return { summary: `更新{了}全局代理的订阅${testResult(x)}${brief(changes)}`, changes };
+      return { summary: `更新{了}全局代理订阅${testResult(x)}${brief(changes)}`, changes };
     },
   },
-  { m: 'POST', p: '/settings/proxy/delay', a: 'settings.proxy_delay', run: (x) => ({ summary: `给全局代理的节点测{了}速${testResult(x)}` }) },
-  { m: 'POST', p: '/settings/llm/test', a: 'settings.llm_test', run: (x) => ({ summary: `测试{了}回复模型的连接${testResult(x)}` }) },
+  { m: 'POST', p: '/settings/proxy/delay', a: 'settings.proxy_delay', run: (x) => ({ summary: `测试{了}全局代理节点延迟${testResult(x)}` }) },
+  { m: 'POST', p: '/settings/llm/test', a: 'settings.llm_test', run: (x) => ({ summary: `测试{了}回复模型连接${testResult(x)}` }) },
   { m: 'POST', p: '/settings/llm/models', a: 'settings.llm_models', run: (x) => ({ summary: `拉取{了}模型列表${testResult(x)}` }) },
-  { m: 'POST', p: '/settings/embedding/test', a: 'settings.embedding_test', run: (x) => ({ summary: `测试{了}向量服务的连接${testResult(x)}` }) },
-  { m: 'POST', p: '/settings/rerank/test', a: 'settings.rerank_test', run: (x) => ({ summary: `测试{了}重排服务的连接${testResult(x)}` }) },
+  { m: 'POST', p: '/settings/embedding/test', a: 'settings.embedding_test', run: (x) => ({ summary: `测试{了}向量服务连接${testResult(x)}` }) },
+  { m: 'POST', p: '/settings/rerank/test', a: 'settings.rerank_test', run: (x) => ({ summary: `测试{了}重排服务连接${testResult(x)}` }) },
   {
     m: 'POST',
     p: '/settings/translation/test',
@@ -898,12 +898,12 @@ export const RULES = [
       const s = x.ok ? x.body?.schedule : null;
       const when = s?.at ? `${String(s.at).slice(0, 16).replace('T', ' ')} UTC` : '';
       return {
-        summary: s ? `预约{了}在线更新（${when}，更新到 v${s.targetVersion}）` : '预约在线更新',
+        summary: s ? `预约{了}在线更新（${when}，目标版本 v${s.targetVersion}）` : '预约在线更新',
         target: s ? { type: 'update', id: String(s.targetVersion), name: `v${s.targetVersion}` } : null,
       };
     },
   },
-  { m: 'DELETE', p: '/update/schedule', a: 'system.update_unschedule', run: () => ({ summary: '取消{了}预约的在线更新' }) },
+  { m: 'DELETE', p: '/update/schedule', a: 'system.update_unschedule', run: () => ({ summary: '取消{了}在线更新预约' }) },
 ];
 
 /* ---------------- 匹配 ---------------- */

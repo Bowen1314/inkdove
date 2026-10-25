@@ -94,7 +94,7 @@ export function createAssistant(ctx, opts = {}) {
     if (err instanceof AssistantError) return { code: err.code, message: err.message };
     if (err instanceof LlmError) return { code: 'llm_error', message: `模型调用失败：${err.message}` };
     log.error(`[assistant] 出错：${err?.stack || err}`);
-    return { code: 'internal', message: '助手出错了，请重试' };
+    return { code: 'internal', message: '助手处理失败，请重试' };
   }
 
   const getOwnChat = (user, chatId) => {
@@ -108,10 +108,10 @@ export function createAssistant(ctx, opts = {}) {
 
   /** 能不能开始一个新问题：模型配了、没有别的问题在查、今天还有次数 */
   function assertCanStart(user) {
-    if (!llmConfigured(ctx.getSettings(), ctx.config)) throw new HttpError(400, 'llm_not_configured', '还没有配置 AI 模型，请先到设置页填写');
-    if (running.has(user.id)) throw new HttpError(409, 'assistant_busy', '上一个问题还在查，等它答完再问');
+    if (!llmConfigured(ctx.getSettings(), ctx.config)) throw new HttpError(400, 'llm_not_configured', '未配置 AI 模型，请前往设置页填写');
+    if (running.has(user.id)) throw new HttpError(409, 'assistant_busy', '上一个问题尚在处理，请稍后再提问');
     if (usedToday(user.id) >= ASSISTANT_DAILY_QUESTIONS) {
-      throw new HttpError(429, 'assistant_daily_limit', `今天的提问次数用完了（每人每天 ${ASSISTANT_DAILY_QUESTIONS} 次），明天再来`);
+      throw new HttpError(429, 'assistant_daily_limit', `今日提问次数已用完（每人每天 ${ASSISTANT_DAILY_QUESTIONS} 次），请明日再试`);
     }
   }
 
@@ -250,7 +250,7 @@ export function createAssistant(ctx, opts = {}) {
     getMessage(user, chatId, messageId) {
       const chat = getOwnChat(user, chatId);
       const r = db.prepare('SELECT * FROM assistant_messages WHERE id = ? AND chat_id = ?').get(String(messageId ?? ''), chat.id);
-      if (!r) throw notFound('这条问答不存在');
+      if (!r) throw notFound('问答不存在');
       return messageView(user, r);
     },
 
@@ -300,7 +300,7 @@ export function createAssistant(ctx, opts = {}) {
     retry(user, chatId, body = {}) {
       const chat = getOwnChat(user, chatId);
       const last = db.prepare('SELECT * FROM assistant_messages WHERE chat_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(chat.id);
-      if (!last || last.status !== 'failed') throw badRequest('只能重试最后一个没答成的问题', 'nothing_to_retry');
+      if (!last || last.status !== 'failed') throw badRequest('仅可重试最后一个失败的问题', 'nothing_to_retry');
       const time = timeOf(body);
       assertCanStart(user);
       db.prepare(

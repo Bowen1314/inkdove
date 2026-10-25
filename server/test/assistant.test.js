@@ -497,7 +497,7 @@ describe('AI 助手：提问循环', () => {
     assert.equal(m.status, 'failed');
     assert.equal(m.errorCode, 'tools_unsupported');
     assert.equal(m.error, TOOLS_UNSUPPORTED_MESSAGE);
-    assert.equal(m.error, '当前模型或中转站不支持工具调用，助手用不了，请换一个支持的模型');
+    assert.equal(m.error, '当前模型或中转服务不支持工具调用，助手不可用，请更换支持工具调用的模型');
     const n = seen.length;
     const again = await ask(t, { question: '再试一次' });
     assert.equal(again.errorCode, 'tools_unsupported');

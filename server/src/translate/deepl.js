@@ -43,8 +43,8 @@ export default {
    */
   async translate(cfg, { text, source, target }, o = {}) {
     const key = String(cfg.apiKey || '').trim();
-    if (!key) throw new TranslateError('DeepL 还没有填 API Key', 'config');
-    if (!visibleAscii(key)) throw new TranslateError('DeepL 的 API Key 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+    if (!key) throw new TranslateError('DeepL 未填写 API Key', 'config');
+    if (!visibleAscii(key)) throw new TranslateError('DeepL 的 API Key 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
     const redactOpts = { secrets: [key] };
     const body = { text: [text], target_lang: deeplTarget(target) };
     if (source && source !== 'auto') body.source_lang = deeplSource(source);
@@ -59,10 +59,10 @@ export default {
     });
     if (!res.ok) {
       const detail = detailOf(res.data?.message || res.text, redactOpts);
-      if (res.status === 456) throw new TranslateError(`DeepL 这个月的额度用完了（456）${detail ? `：${detail}` : ''}`, 'quota', { status: 456 });
-      if (res.status === 529) throw new TranslateError('DeepL 请求太频繁，被限流了（529）', 'rate_limit', { status: 529 });
+      if (res.status === 456) throw new TranslateError(`DeepL 本月额度已用尽（456）${detail ? `：${detail}` : ''}`, 'quota', { status: 456 });
+      if (res.status === 529) throw new TranslateError('DeepL 请求过于频繁，已限流（529）', 'rate_limit', { status: 529 });
       if (res.status === 400 && /target_lang|source_lang|language/i.test(detail)) {
-        throw new TranslateError(`DeepL 不支持这个语言（400）：${detail}`, 'unsupported_language', { status: 400 });
+        throw new TranslateError(`DeepL 不支持该语言（400）：${detail}`, 'unsupported_language', { status: 400 });
       }
       throw httpError(LABEL, res, redactOpts);
     }

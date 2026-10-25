@@ -32,8 +32,8 @@ function resendErrorMessage(status, data, raw) {
   const name = data && typeof data === 'object' ? data.name : '';
   const msg = (data && typeof data === 'object' && data.message) || String(raw || '').slice(0, 200) || '无返回内容';
   let hint = '';
-  if (/domain is not verified|not verified/i.test(msg)) hint = '（发件地址的域名还没在 Resend 验证，请到 resend.com 的 Domains 里验证）';
-  else if (status === 401 || name === 'missing_api_key' || name === 'invalid_api_key') hint = '（API key 不对或已失效）';
+  if (/domain is not verified|not verified/i.test(msg)) hint = '（发件域名未在 Resend 验证，请在 resend.com 的 Domains 中完成验证）';
+  else if (status === 401 || name === 'missing_api_key' || name === 'invalid_api_key') hint = '（API key 无效或已失效）';
   else if (status === 422 && /from/i.test(msg)) hint = '（发件人格式应为 "名称 <地址>" 或纯邮箱）';
   return `Resend 返回 ${status}${name ? ` ${name}` : ''}：${msg}${hint}`;
 }
@@ -50,9 +50,9 @@ export function createMailer(deps) {
   const createTransport = deps.createMailTransport || ((opts) => nodemailer.createTransport(opts));
 
   async function viaSmtp(e, msg) {
-    if (!e.smtp.host) throw new EmailError('没有填写 SMTP 服务器');
+    if (!e.smtp.host) throw new EmailError('未填写 SMTP 服务器');
     const from = e.from || e.smtp.user;
-    if (!from) throw new EmailError('没有填写发件人');
+    if (!from) throw new EmailError('未填写发件人');
     const transport = createTransport(smtpOptions(e.smtp));
     try {
       const info = await transport.sendMail({ from, to: msg.to.join(', '), subject: msg.subject, text: msg.text, html: msg.html });
@@ -63,8 +63,8 @@ export function createMailer(deps) {
   }
 
   async function viaResend(e, msg) {
-    if (!e.resend.apiKey) throw new EmailError('没有填写 Resend API key');
-    if (!e.from) throw new EmailError('没有填写发件人');
+    if (!e.resend.apiKey) throw new EmailError('未填写 Resend API key');
+    if (!e.from) throw new EmailError('未填写发件人');
     const body = { from: e.from, to: msg.to, subject: msg.subject, text: msg.text };
     if (msg.html) body.html = msg.html;
     for (let attempt = 1; ; attempt++) {
@@ -77,7 +77,7 @@ export function createMailer(deps) {
           signal: AbortSignal.timeout(20_000),
         });
       } catch (err) {
-        throw new EmailError(`连不上 Resend：${err?.cause?.code || err?.message || err}`);
+        throw new EmailError(`无法连接 Resend：${err?.cause?.code || err?.message || err}`);
       }
       const raw = await res.text();
       let data = null;
@@ -105,10 +105,10 @@ export function createMailer(deps) {
      */
     async sendEmail(msg) {
       const e = deps.getSettings().email;
-      if (!Array.isArray(msg.to) || !msg.to.length) throw new EmailError('没有收件地址');
+      if (!Array.isArray(msg.to) || !msg.to.length) throw new EmailError('无收件地址');
       if (e.provider === 'smtp') return viaSmtp(e, msg);
       if (e.provider === 'resend') return viaResend(e, msg);
-      throw new EmailError('还没有配置发信方式');
+      throw new EmailError('未配置发信方式');
     },
   };
 }

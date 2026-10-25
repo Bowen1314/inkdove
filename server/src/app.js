@@ -369,8 +369,8 @@ export function createApp(config, options = {}) {
   app.use((err, _req, res, next) => {
     if (res.headersSent) return next(err);
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message, code: err.code });
-    if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: '请求体不是合法的 JSON', code: 'bad_json' });
-    if (err?.type === 'entity.too.large') return res.status(413).json({ error: '请求体太大', code: 'payload_too_large' });
+    if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: '请求体不是有效的 JSON', code: 'bad_json' });
+    if (err?.type === 'entity.too.large') return res.status(413).json({ error: '请求体超出大小限制', code: 'payload_too_large' });
     log.error(`[inkdove] 未处理的错误：${err?.stack || err}`);
     res.status(500).json({ error: '服务器内部错误', code: 'internal' });
   });

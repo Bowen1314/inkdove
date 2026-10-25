@@ -308,7 +308,7 @@ describe('F11 主动外联（mock）', () => {
       assert.deepEqual(again.map((r) => r.accountId), list.map((r) => r.accountId));
     });
 
-    it('参数和文件校验：single 只能一个号、号不存在、非 .txt、非 UTF-8、空文件、超过 10000 行、超过 1MB', async () => {
+    it('参数和文件校验：single 只能一个号、号码不存在、非 .txt、非 UTF-8、空文件、超过 10000 行、超过 1MB', async () => {
       const a = await wahaAccount();
       const b = await wahaAccount();
       const n = cnNumber().local;
@@ -380,7 +380,7 @@ describe('F11 主动外联（mock）', () => {
   });
 
   describe('发送', () => {
-    it('WAHA：先查号，没有 WhatsApp 的跳过；发到查号给的 chatId；记 sentAt、建会话、写 bot 消息；全部处理完转 done', async () => {
+    it('WAHA：先查号，未注册 WhatsApp 的跳过；发到查号给的 chatId；记 sentAt、建会话、写 bot 消息；全部处理完转 done', async () => {
       const acc = await wahaAccount();
       const a = cnNumber();
       const b = cnNumber();
@@ -403,7 +403,7 @@ describe('F11 主动外联（mock）', () => {
       assert.equal(fake.sentTo(a.chat)[0].text, MESSAGE);
       assert.equal(fake.sentTo(a.chat)[0].session, acc.waha.sessionName);
       assert.equal(fake.sentTo('204060801012345@lid').length, 1);
-      assert.equal(fake.sentTo(b.chat).length, 0, '没有 WhatsApp 的不发');
+      assert.equal(fake.sentTo(b.chat).length, 0, '未注册 WhatsApp 的不发');
       assert.equal(intervals - before, 3, '每查一次号或发一条都等一个间隔（注入成 0）');
 
       const ra = await recipientByNumber(id, a.digits);

@@ -50,14 +50,14 @@ export function sourcesRouter(ctx) {
       if (!err) return next();
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '单个文件不能超过 20MB'));
-        if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 files', 'upload_error'));
+        if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名须为 files', 'upload_error'));
         return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
       }
       next(err);
     });
   }, async (req, res) => {
     const files = /** @type {Express.Multer.File[]} */ (req.files || []);
-    if (!files.length) throw badRequest('没有收到文件（字段名 files）');
+    if (!files.length) throw badRequest('未收到文件（字段名 files）');
     const out = [];
     for (const f of files) {
       const id = newId();

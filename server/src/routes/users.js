@@ -19,7 +19,7 @@ export function usersRouter(ctx, auth) {
     if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw badRequest('accountIds 必须是字符串数组');
     const ids = [...new Set(v)];
     const unknown = ids.filter((id) => !accounts.get(id));
-    if (unknown.length) throw badRequest(`号不存在：${unknown.join('、')}`, 'unknown_account');
+    if (unknown.length) throw badRequest(`号码不存在：${unknown.join('、')}`, 'unknown_account');
     return ids;
   }
   const checkName = (v) => {
@@ -27,7 +27,7 @@ export function usersRouter(ctx, auth) {
     return v.trim();
   };
   const checkRole = (v) => {
-    if (!ROLES.includes(v)) throw badRequest('role 只能是 admin 或 agent');
+    if (!ROLES.includes(v)) throw badRequest('role 须为 admin 或 agent');
     return v;
   };
   function load(id) {
@@ -47,7 +47,7 @@ export function usersRouter(ctx, auth) {
     const b = req.body;
     if (!isPlainObject(b)) throw badRequest('请求体必须是对象');
     const email = auth.validateEmail(b.email);
-    if (auth.getUserByEmail(email)) throw new HttpError(409, 'email_taken', '这个邮箱已经是成员了');
+    if (auth.getUserByEmail(email)) throw new HttpError(409, 'email_taken', '该邮箱已是成员');
     const name = b.name === undefined ? '' : checkName(b.name);
     const role = checkRole(b.role ?? 'agent');
     const accountIds = b.accountIds === undefined ? [] : checkAccountIds(b.accountIds);
@@ -128,7 +128,7 @@ export function usersRouter(ctx, auth) {
 
   router.post('/:id/reset-link', (req, res) => {
     const row = load(req.params.id);
-    if (row.disabled) throw badRequest('这个成员已停用，先启用再生成链接', 'user_disabled');
+    if (row.disabled) throw badRequest('该成员已停用，请先启用再生成链接', 'user_disabled');
     // 还没激活的成员，重新生成的是邀请链接
     const resetUrl = auth.createLink(row.id, row.password_hash ? 'reset' : 'invite');
     res.json({ resetUrl });

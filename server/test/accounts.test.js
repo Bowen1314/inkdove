@@ -329,7 +329,7 @@ describe('第一期数据迁移', () => {
       const accs = created.ctx.accounts.list();
       assert.equal(accs.length, 1);
       const acc = accs[0];
-      assert.equal(acc.name, '默认号');
+      assert.equal(acc.name, '默认号码');
       assert.equal(acc.sessionName, 'shop');
       assert.equal(acc.replyMode, 'auto', '第一期开着自动回复 → auto');
       assert.deepEqual(acc.blocklist, ['8613700000009']);
@@ -520,7 +520,7 @@ describe('号码配置导出 / 导入（admin）', () => {
       assert.deepEqual(r.body.skipped, []);
       assert.deepEqual(r.body.created.map((c) => c.name), ['销售一号', '官方号']);
       const [w3, m3] = r.body.created;
-      assert.deepEqual(w3.notices, ['没配发信方式，已关掉邮件通知']);
+      assert.deepEqual(w3.notices, ['未配置发信方式，已关闭邮件通知']);
       assert.ok(!('notices' in m3), 'Meta 号没开邮件通知，不该有 notices');
       assert.equal(countOf(t3), 2);
 
@@ -536,7 +536,7 @@ describe('号码配置导出 / 导入（admin）', () => {
       const bad = { name: '坏号', channel: 'waha', notify: { email: { enabled: true, to: ['not-an-email'] } } };
       const e = await importInto(t3, docOf([doc.accounts[0], bad]));
       assert.equal(e.status, 400);
-      assert.match(e.body.error, /^第 2 个号（坏号）：/);
+      assert.match(e.body.error, /^第 2 个号码（坏号）：/);
       assert.equal(countOf(t3), 2);
 
       // 配好发信方式后再导入同一个文件：邮件通知照原样开着，没有 notices
@@ -571,7 +571,7 @@ describe('号码配置导出 / 导入（admin）', () => {
     assert.deepEqual(r.body.created.map((c) => c.name), ['甲', '丙', '丁']);
     assert.equal(r.body.skipped.length, 1);
     assert.equal(r.body.skipped[0].name, '乙');
-    assert.match(r.body.skipped[0].reason, /文件里前面的号「甲」/);
+    assert.match(r.body.skipped[0].reason, /与文件中靠前的号码「甲」重复/);
     // 缺的字段按新建号的默认值
     const yi = t.ctx.accounts.get(r.body.created[0].id);
     assert.equal(yi.replyMode, 'off');
@@ -581,7 +581,7 @@ describe('号码配置导出 / 导入（admin）', () => {
   it('不是导出文件、版本不对、accounts 不是数组、没传文件：400，什么都不建', async () => {
     const before = countOf(t);
     const cases = [
-      [{ raw: '{不是 JSON' }, 'bad_format'],
+      [{ raw: '{非 JSON' }, 'bad_format'],
       [{ doc: [] }, 'bad_format'],
       [{ doc: { format: 'something-else', version: 1, accounts: [] } }, 'bad_format'],
       [{ doc: { format: 'inkdove-accounts', version: 2, accounts: [wahaItem('新版本的号')] } }, 'unsupported_version'],
@@ -606,18 +606,18 @@ describe('号码配置导出 / 导入（admin）', () => {
     const before = countOf(t);
     const ok = wahaItem('好号');
     const cases = [
-      [{ channel: 'waha' }, /^第 2 个号：name 不能为空$/],
-      [{ name: 42, channel: 'waha' }, /^第 2 个号：name 必须是字符串$/],
-      ['不是对象', /^第 2 个号：必须是对象$/],
-      [{ name: '坏号', channel: 'telegram' }, /^第 2 个号（坏号）：channel /],
-      [{ name: '坏号', channel: 'waha', scope: 'some' }, /^第 2 个号（坏号）：scope /],
-      [{ name: '坏号', channel: 'waha', waha: { proxy: { enabled: true, host: '', port: null } } }, /^第 2 个号（坏号）：启用代理时必须填写 host 和 port$/],
-      [{ name: '坏号', channel: 'waha', waha: { proxy: { port: 70000 } } }, /^第 2 个号（坏号）：proxy\.port /],
-      [{ name: '坏号', channel: 'waha', meta: { phoneNumberId: '1' } }, /^第 2 个号（坏号）：meta 只有 Meta 号才有/],
-      [{ name: '坏号', channel: 'meta', waha: { proxy: {} } }, /^第 2 个号（坏号）：waha 只有扫码号才有/],
-      [{ name: '坏号', channel: 'meta', meta: { phoneNumberId: 'abc' } }, /^第 2 个号（坏号）：phoneNumberId 只能是数字$/],
-      [{ name: '坏号', channel: 'meta', meta: { accessToken: 123 } }, /^第 2 个号（坏号）：meta\.accessToken 必须是字符串$/],
-      [{ name: '坏号', channel: 'waha', notify: { email: { to: ['not-an-email'] } } }, /^第 2 个号（坏号）：/],
+      [{ channel: 'waha' }, /^第 2 个号码：name 不能为空$/],
+      [{ name: 42, channel: 'waha' }, /^第 2 个号码：name 必须是字符串$/],
+      ['不是对象', /^第 2 个号码：必须是对象$/],
+      [{ name: '坏号', channel: 'telegram' }, /^第 2 个号码（坏号）：channel /],
+      [{ name: '坏号', channel: 'waha', scope: 'some' }, /^第 2 个号码（坏号）：scope /],
+      [{ name: '坏号', channel: 'waha', waha: { proxy: { enabled: true, host: '', port: null } } }, /^第 2 个号码（坏号）：启用代理时必须填写 host 和 port$/],
+      [{ name: '坏号', channel: 'waha', waha: { proxy: { port: 70000 } } }, /^第 2 个号码（坏号）：proxy\.port /],
+      [{ name: '坏号', channel: 'waha', meta: { phoneNumberId: '1' } }, /^第 2 个号码（坏号）：meta 仅适用于 Meta 官方接口/],
+      [{ name: '坏号', channel: 'meta', waha: { proxy: {} } }, /^第 2 个号码（坏号）：waha 仅适用于扫码接入/],
+      [{ name: '坏号', channel: 'meta', meta: { phoneNumberId: 'abc' } }, /^第 2 个号码（坏号）：phoneNumberId 只能是数字$/],
+      [{ name: '坏号', channel: 'meta', meta: { accessToken: 123 } }, /^第 2 个号码（坏号）：meta\.accessToken 必须是字符串$/],
+      [{ name: '坏号', channel: 'waha', notify: { email: { to: ['not-an-email'] } } }, /^第 2 个号码（坏号）：/],
     ];
     for (const [bad, re] of cases) {
       const r = await importInto(t, docOf([ok, bad, wahaItem('后面的好号')]));

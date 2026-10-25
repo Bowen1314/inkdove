@@ -37,12 +37,12 @@ export function quoteWords(words) {
   return words.length > 5 ? `${shown}等 ${words.length} 个` : shown;
 }
 
-const SUBJECT = { operator: '这条消息', file: '文件说明', translate: '这段话', relay: '这条消息', campaign: '开场消息', bot: '回复' };
-const RESULT = { file: '文件没有发出去', translate: '没有翻译', campaign: '任务没有建' };
+const SUBJECT = { operator: '该消息', file: '文件说明', translate: '该文本', relay: '该消息', campaign: '开场消息', bot: '回复' };
+const RESULT = { file: '文件未发送', translate: '未翻译', campaign: '任务未创建' };
 
 /** 给发送人看的提示：「这条消息里有屏蔽词「xxx」，没有发出去，管理员会收到提醒」 */
 export function hitMessage(source, words) {
-  return `${SUBJECT[source] || '这条消息'}里有屏蔽词${quoteWords(words)}，${RESULT[source] || '没有发出去'}，管理员会收到提醒`;
+  return `${SUBJECT[source] || '该消息'}含屏蔽词${quoteWords(words)}，${RESULT[source] || '未发送'}，管理员将收到提醒`;
 }
 
 function rowToHit(r) {
@@ -234,7 +234,7 @@ export function createBlockwords(ctx) {
         id,
       );
       const row = db.prepare('SELECT * FROM blockword_hits WHERE id = ?').get(id);
-      if (!row) throw notFound('这条记录不存在');
+      if (!row) throw notFound('记录不存在');
       return toHit(row);
     },
 
@@ -244,8 +244,8 @@ export function createBlockwords(ctx) {
      */
     falsePositive(id, user) {
       const row = db.prepare('SELECT detector FROM blockword_hits WHERE id = ?').get(id);
-      if (!row) throw notFound('这条记录不存在');
-      if (row.detector !== 'ai') throw badRequest('只有 AI 发言检查发现的才能标误报', 'not_ai_hit');
+      if (!row) throw notFound('记录不存在');
+      if (row.detector !== 'ai') throw badRequest('仅 AI 发言检查的结果可标记为误报', 'not_ai_hit');
       const now = nowIso();
       const by = user?.id ?? null;
       const name = clip(user ? user.name || user.email || '' : '', 100);
@@ -272,7 +272,7 @@ export function createBlockwords(ctx) {
       const severity = String(q.severity ?? '');
       if (severity && !SEVERITIES.includes(severity)) throw badRequest('severity 只能是 severe 或 mild');
       const who = String(q.who ?? '');
-      if (who.length > 100) throw badRequest('who 不对');
+      if (who.length > 100) throw badRequest('who 无效');
       const from = isoParam(q.from, 'from');
       const to = isoParam(q.to, 'to');
       const page = Number(q.page ?? 1);
@@ -325,7 +325,7 @@ export function createBlockwords(ctx) {
     async expand(body) {
       const req = checkExpandRequest(body);
       const s = ctx.getSettings();
-      if (!llmConfigured(s, ctx.config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到「设置 → AI 模型」填写');
+      if (!llmConfigured(s, ctx.config)) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往「设置 → AI 模型」填写');
       const existing = [...new Set([...req.existing, ...(s.blockwords?.words || [])])];
       let data;
       try {
@@ -336,7 +336,7 @@ export function createBlockwords(ctx) {
       try {
         return { candidates: parseExpandOutput(data, { ...req, existing }) };
       } catch (err) {
-        throw new HttpError(502, 'llm_bad_output', `扩充失败：${err?.message || err}。请重试，或者换个模型`);
+        throw new HttpError(502, 'llm_bad_output', `扩充失败：${err?.message || err}。请重试或更换模型`);
       }
     },
   };

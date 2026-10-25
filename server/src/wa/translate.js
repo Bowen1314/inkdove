@@ -94,7 +94,7 @@ async function aiTranslate(ctx, conv, source, customerMessages, { conduct = fals
   }
   const language = typeof out?.language === 'string' ? out.language.trim() : '';
   const translation = typeof out?.translation === 'string' ? out.translation.trim() : '';
-  if (!language || !translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回的结果不完整，请重试');
+  if (!language || !translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回结果不完整，请重试');
   const result = { text: clip(translation, MAX_TRANSLATION), language: clip(language, 20) };
   if (conduct) {
     // 检查结果只用来提醒，出什么错都不影响这次翻译
@@ -132,7 +132,7 @@ async function customerLanguage(ctx, conv, meta, provider, cfg, customer) {
     // 返回格式不对、这段话的语言对方不支持之类：交给本地判断
   }
   if (!lang) lang = detectLocal(sample);
-  if (!lang) throw new TranslateError('判断不出客户用的是什么语言（客户的消息太短，或者都是数字、符号）', 'language_unknown');
+  if (!lang) throw new TranslateError('无法识别客户语言（消息过短或仅含数字、符号）', 'language_unknown');
   cache.delete(conv.id);
   while (cache.size >= LANGUAGE_CACHE_MAX) cache.delete(cache.keys().next().value);
   cache.set(conv.id, { seq: customer.latestSeq, lang });
@@ -142,10 +142,10 @@ async function customerLanguage(ctx, conv, meta, provider, cfg, customer) {
 /** 选的翻译服务和它的配置；没选、没配好抛 TranslateError（config） */
 function apiProvider(tr) {
   const provider = getTranslationProvider(tr.provider);
-  if (!provider) throw new TranslateError('还没有选翻译服务', 'config');
+  if (!provider) throw new TranslateError('未选择翻译服务', 'config');
   const cfg = tr.providers[provider.id] || {};
   const missing = missingField(provider.id, cfg);
-  if (missing) throw new TranslateError(`${provider.label} 还没配好（没填 ${FIELD_LABELS[missing] || missing}）`, 'config');
+  if (missing) throw new TranslateError(`${provider.label} 配置不完整（未填写 ${FIELD_LABELS[missing] || missing}）`, 'config');
   return { provider, cfg };
 }
 
@@ -163,7 +163,7 @@ async function apiTranslate(ctx, conv, source, customer, tr) {
   const r = await callTranslationProvider(ctx, meta, 'translate', provider.id, cfg, { text: source, source: 'auto', target });
   if (r.detectedSource && r.detectedSource === target) return done(source);
   const out = String(r.text ?? '').trim();
-  if (!out) throw new TranslateError(`${provider.label} 返回的译文是空的`, 'bad_response');
+  if (!out) throw new TranslateError(`${provider.label} 返回的译文为空`, 'bad_response');
   return done(out);
 }
 
@@ -185,11 +185,11 @@ async function afterApiError(ctx, conv, err, tr, canUseAi, aiFn) {
   if (!(err instanceof TranslateError)) throw err;
   ctx.log.warn?.(`[translate] 会话 ${conv.id}：${err.message}`);
   if (!tr.fallbackToAi) throw apiFailure(err, '');
-  if (!canUseAi) throw apiFailure(err, '（回复模型还没配好，没法改用 AI 翻译）');
+  if (!canUseAi) throw apiFailure(err, '（回复模型未配置，无法改用 AI 翻译）');
   try {
     return { ...(await aiFn()), via: 'ai', fallbackReason: err.message };
   } catch (aiErr) {
-    if (aiErr instanceof HttpError) throw new HttpError(aiErr.status, aiErr.code, `翻译接口出错（${err.message}），改用 AI 翻译也失败了：${aiErr.message.replace(/^翻译失败：/, '')}`);
+    if (aiErr instanceof HttpError) throw new HttpError(aiErr.status, aiErr.code, `翻译接口出错（${err.message}），改用 AI 翻译也失败：${aiErr.message.replace(/^翻译失败：/, '')}`);
     throw aiErr;
   }
 }
@@ -204,24 +204,24 @@ async function afterApiError(ctx, conv, err, tr, canUseAi, aiFn) {
  * @returns {Promise<{text:string, language:string, via:string, fallbackReason?:string}>}
  */
 export async function translateForConversation(ctx, conv, text, user = null) {
-  if (typeof text !== 'string' || !text.trim()) throw badRequest('要翻译的内容不能为空');
+  if (typeof text !== 'string' || !text.trim()) throw badRequest('翻译内容不能为空');
   const source = text.trim();
-  if (source.length > MAX_TRANSLATE_TEXT) throw badRequest(`要翻译的内容不能超过 ${MAX_TRANSLATE_TEXT} 字`, 'text_too_long');
+  if (source.length > MAX_TRANSLATE_TEXT) throw badRequest(`翻译内容不能超过 ${MAX_TRANSLATE_TEXT} 字`, 'text_too_long');
   ctx.blockwords?.guard(source, { source: 'translate', accountId: conv.accountId, conversationId: conv.id, user });
   const settings = ctx.getSettings();
   const tr = settings.translation;
   const canUseAi = llmConfigured(settings, ctx.config);
 
   if (tr?.mode !== 'api') {
-    if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+    if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
     const customer = recentCustomerTexts(ctx.db, conv.id);
-    if (!customer.texts.length) throw badRequest('客户还没发过文字消息，判断不了用什么语言', 'language_unknown');
+    if (!customer.texts.length) throw badRequest('客户尚未发送文字消息，无法识别语言', 'language_unknown');
     const conduct = !!ctx.conduct?.enabled();
     return { ...(await aiTranslate(ctx, conv, source, customer.texts, { conduct, user })), via: 'ai' };
   }
 
   const customer = recentCustomerTexts(ctx.db, conv.id);
-  if (!customer.texts.length) throw badRequest('客户还没发过文字消息，判断不了用什么语言', 'language_unknown');
+  if (!customer.texts.length) throw badRequest('客户尚未发送文字消息，无法识别语言', 'language_unknown');
   try {
     return await apiTranslate(ctx, conv, source, customer, tr);
   } catch (err) {
@@ -265,7 +265,7 @@ async function aiToChinese(ctx, conv, source) {
     throw new HttpError(502, 'llm_error', `翻译失败：${err?.message || err}`);
   }
   const translation = typeof out?.translation === 'string' ? out.translation.trim() : '';
-  if (!translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回的结果不完整，请重试');
+  if (!translation) throw new HttpError(502, 'llm_error', '翻译失败：模型返回结果不完整，请重试');
   return { text: clip(translation, MAX_TRANSLATION) };
 }
 
@@ -276,7 +276,7 @@ async function apiToChinese(ctx, conv, source, tr) {
   const r = await callTranslationProvider(ctx, meta, 'translate', provider.id, cfg, { text: source, source: 'auto', target: 'zh' });
   if (r.detectedSource === 'zh') return { text: source, via: 'none' };
   const out = String(r.text ?? '').trim();
-  if (!out) throw new TranslateError(`${provider.label} 返回的译文是空的`, 'bad_response');
+  if (!out) throw new TranslateError(`${provider.label} 返回的译文为空`, 'bad_response');
   return { text: clip(out, MAX_TRANSLATION), via: provider.id };
 }
 
@@ -305,7 +305,7 @@ async function dispatchToChinese(ctx, conv, source) {
   const canUseAi = llmConfigured(settings, ctx.config);
   let r;
   if (tr?.mode !== 'api') {
-    if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+    if (!canUseAi) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
     r = { ...(await aiToChinese(ctx, conv, source)), via: 'ai' };
   } else {
     try {
@@ -333,7 +333,7 @@ export async function translateMessage(ctx, conv, messageId) {
   const saved = storedTranslation(row.translation);
   if (saved) return saved;
   const full = messageSourceText(row);
-  if (!full) throw badRequest('这条消息没有要翻译的文字（图片描述本来就是中文；语音、图片还在识别的，识别完再翻译）', 'nothing_to_translate');
+  if (!full) throw badRequest('该消息无可翻译的文字（图片描述已是中文；语音、图片识别完成后可翻译）', 'nothing_to_translate');
   const truncated = full.length > MAX_TRANSLATE_TEXT;
   // 截断时别把 emoji 这类四字节字符劈成两半
   const source = truncated ? full.slice(0, MAX_TRANSLATE_TEXT).replace(/[\uD800-\uDBFF]$/, '') : full;
@@ -357,7 +357,7 @@ export async function translateMessage(ctx, conv, messageId) {
 export async function translateDraft(ctx, conv, body) {
   const createdAt = body?.createdAt;
   const text = body?.text;
-  if (typeof createdAt !== 'string' || !createdAt) throw badRequest('createdAt 必须是草稿的生成时间');
+  if (typeof createdAt !== 'string' || !createdAt) throw badRequest('createdAt 须为草稿生成时间');
   if (typeof text !== 'string' || !text.trim()) throw badRequest('草稿正文不能为空');
   if (text.length > MAX_TRANSLATE_TEXT) throw badRequest(`草稿正文不能超过 ${MAX_TRANSLATE_TEXT} 字`, 'text_too_long');
   const draft = safeJsonParse(ctx.db.prepare('SELECT draft FROM conversations WHERE id = ?').get(conv.id)?.draft, null);
@@ -405,15 +405,15 @@ export async function fixDraftPlaceholders(ctx, conv, text, { timeoutMs = ctx.pl
   let timer;
   try {
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`超过 ${Math.round(timeoutMs / 1000)} 秒没有返回`)), timeoutMs);
+      timer = setTimeout(() => reject(new Error(`超过 ${Math.round(timeoutMs / 1000)} 秒未返回`)), timeoutMs);
     });
     const r = await Promise.race([dispatchToChinese(ctx, conv, source), deadline]);
-    if (r.via === 'none') throw new Error('翻译服务认为原文是中文，没有翻译');
+    if (r.via === 'none') throw new Error('翻译服务判定原文为中文，未翻译');
     const lines = String(r.text ?? '')
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter(Boolean);
-    if (lines.length !== foreign.length) throw new Error(`译文行数对不上（${foreign.length} 处占位，译文 ${lines.length} 行）`);
+    if (lines.length !== foreign.length) throw new Error(`译文行数不一致（${foreign.length} 处占位，译文 ${lines.length} 行）`);
     const zh = new Map();
     foreign.forEach((c, i) => {
       const t = clip(lines[i].replace(/[【】]/g, '').trim(), MAX_PLACEHOLDER_ZH);

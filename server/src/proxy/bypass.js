@@ -49,16 +49,16 @@ export function parseBypassRule(line) {
 export function checkBypassList(input) {
   let list = input;
   if (typeof list === 'string') list = list.split(/\r?\n/);
-  if (!Array.isArray(list)) throw badRequest('proxy.bypass 必须是数组（每项一个地址）');
+  if (!Array.isArray(list)) throw badRequest('proxy.bypass 须为数组（每项一个地址）');
   const out = [];
   let n = 0;
   for (const item of list) {
     n++;
-    if (typeof item !== 'string') throw badRequest(`proxy.bypass 第 ${n} 行必须是字符串`);
+    if (typeof item !== 'string') throw badRequest(`proxy.bypass 第 ${n} 行须为字符串`);
     if (!item.trim()) continue;
-    if (item.length > 300) throw badRequest(`proxy.bypass 第 ${n} 行太长`);
+    if (item.length > 300) throw badRequest(`proxy.bypass 第 ${n} 行过长`);
     const r = parseBypassRule(item);
-    if (!r) throw badRequest(`proxy.bypass 第 ${n} 行不是域名、*.域名、IP 或网段：${item.trim().slice(0, 60)}`);
+    if (!r) throw badRequest(`proxy.bypass 第 ${n} 行格式无效，应为域名、*.域名、IP 或网段：${item.trim().slice(0, 60)}`);
     if (!out.includes(r.value)) out.push(r.value);
   }
   if (out.length > MAX_BYPASS_LINES) throw badRequest(`proxy.bypass 最多 ${MAX_BYPASS_LINES} 行`);

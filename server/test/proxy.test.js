@@ -357,7 +357,7 @@ describe('代理协议转换中继（F13）', () => {
     await p.body?.cancel();
   });
 
-  it('上游连不上时 502；目标格式不对 400', async () => {
+  it('上游连不上时 502；目标格式错误 400', async () => {
     const bad = await viaRelay(relay.port, 'not-a-target', basic(relay.username, relay.password));
     assert.equal(bad.status, 400);
     const down = await viaRelay(relay.port, '127.0.0.1:9', basic(relay.username, relay.password));

@@ -110,7 +110,7 @@ describe('不走代理的地址', () => {
     ]);
     assert.throws(() => checkBypassList(['ok.example.com', 'bad host']), /proxy\.bypass 第 2 行/);
     assert.throws(() => checkBypassList(['10.0.0.0/33']), /proxy\.bypass 第 1 行/);
-    assert.throws(() => checkBypassList('x'.repeat(10) && 5), /proxy\.bypass 必须是数组/);
+    assert.throws(() => checkBypassList('x'.repeat(10) && 5), /proxy\.bypass 须为数组/);
   });
 
   it('永远直连：本机、内网、不带点的主机名、保留后缀；公网地址走代理', () => {
@@ -161,7 +161,7 @@ describe('Clash 配置解析', () => {
       );
     }
     assert.throws(() => parseClashConfig(LINK_LIST), (err) => err.notClash && /节点链接列表/.test(err.message));
-    assert.throws(() => parseClashConfig('proxies:\n  - {name: a, type: direct}\n'), /没有能用的节点/);
+    assert.throws(() => parseClashConfig('proxies:\n  - {name: a, type: direct}\n'), /无可用节点/);
   });
 
   it('重名、保留名、墨鸽分组名的节点去掉；dialer-proxy 指向不存在的节点时删掉', () => {
@@ -268,7 +268,7 @@ describe('下载订阅', () => {
   });
 
   it('太大、超时、机场返回错误：信息里不带订阅地址和 token', async () => {
-    await assert.rejects(fetchSubscription(`${sub.url}/big/${TOKEN}`, { maxBytes: 100_000 }), (err) => noSecret(err) && /太大/.test(err.message));
+    await assert.rejects(fetchSubscription(`${sub.url}/big/${TOKEN}`, { maxBytes: 100_000 }), (err) => noSecret(err) && /过大/.test(err.message));
     await assert.rejects(fetchSubscription(`${sub.url}/slow/${TOKEN}`, { timeoutMs: 300 }), (err) => noSecret(err) && /超时/.test(err.message));
     await assert.rejects(fetchSubscription(`${sub.url}/forbidden/${TOKEN}`), (err) => noSecret(err) && /403/.test(err.message));
     await assert.rejects(fetchSubscription(`http://127.0.0.1:9/${TOKEN}`), noSecret);
@@ -389,11 +389,11 @@ describe('出口路由：全局 fetch、node:http、SMTP（Node 自带的 undici
   });
 
   it('开着但代理没就绪：请求失败，不退回直连', async () => {
-    enableRouting({ port: proxy.port, isDirect: () => false, waitReady: () => Promise.reject(new Error('全局代理没有在运行：测试')) });
+    enableRouting({ port: proxy.port, isDirect: () => false, waitReady: () => Promise.reject(new Error('全局代理未运行：测试')) });
     const n = hits.length;
     const c = proxy.state.connects.length;
-    await assert.rejects(fetch(`${target.url}/never`), (err) => /全局代理没有在运行/.test(err?.cause?.message || err.message));
-    await assert.rejects(httpGet(`${target.url}/never`), /全局代理没有在运行/);
+    await assert.rejects(fetch(`${target.url}/never`), (err) => /全局代理未运行/.test(err?.cause?.message || err.message));
+    await assert.rejects(httpGet(`${target.url}/never`), /全局代理未运行/);
     assert.equal(hits.length, n);
     assert.equal(proxy.state.connects.length, c);
   });
@@ -447,7 +447,7 @@ describe('号的导入：用全局代理', () => {
     const [off] = parseAccountsExport(doc, { emailReady: false, globalProxyReady: false });
     assert.equal(off.config.waha.proxy.enabled, false);
     assert.equal(off.config.waha.proxy.useGlobal, true);
-    assert.match(off.notices.join(), /全局代理没开/);
+    assert.match(off.notices.join(), /全局代理未开启/);
     const [on] = parseAccountsExport(doc, { emailReady: false, globalProxyReady: true });
     assert.equal(on.config.waha.proxy.enabled, true);
     assert.equal(on.notices, undefined);
@@ -569,8 +569,8 @@ describe('全局代理：设置页、mihomo 进程、号用全局代理（假 mi
     };
     await bad({ bypass: ['ok.example.com', 'bad host'] }, /^proxy\.bypass 第 2 行/);
     await bad({ subscriptionUrl: 'ftp://x.example.test' }, /^proxy\.subscriptionUrl/);
-    await bad({ enabled: true }, /^proxy\.subscriptionUrl 还没有填订阅地址/, 'proxy_no_nodes');
-    await bad({ source: 'config', config: 'trojan://fake@us.node.example.test:443#US' }, /^proxy\.config 粘贴的配置不对：内容是节点链接列表/, 'proxy_config_invalid');
+    await bad({ enabled: true }, /^proxy\.subscriptionUrl 未填写订阅地址/, 'proxy_no_nodes');
+    await bad({ source: 'config', config: 'trojan://fake@us.node.example.test:443#US' }, /^proxy\.config 粘贴的配置无效：内容为节点链接列表/, 'proxy_config_invalid');
   });
 
   it('不是 Clash 的订阅：400，提示换成 Clash 订阅链接，信息里不带地址', async () => {
@@ -623,7 +623,7 @@ describe('全局代理：设置页、mihomo 进程、号用全局代理（假 mi
     const r2 = await t.req('PUT', '/api/settings', { body: { proxy: { config: only } } });
     assert.equal(r2.status, 400);
     assert.equal(r2.body.code, 'proxy_config_invalid');
-    assert.match(r2.body.error, /^proxy\.config mihomo 不接受这些节点：proxy 0: fake invalid node/);
+    assert.match(r2.body.error, /^proxy\.config mihomo 无法加载节点：proxy 0: fake invalid node/);
     assert.ok(!r2.body.error.includes('fake-bad-password-9'), r2.body.error);
     assert.equal((await status()).config.nodeCount, 3);
     // 设置页的「清除」：config: null 清掉粘贴的节点

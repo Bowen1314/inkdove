@@ -533,7 +533,7 @@ describe('F6 客户线索（mock）', () => {
       // fetch 的 text() 会去掉 BOM，下面按去掉之后的文本比
       const text = r.body.replace(/^\uFEFF/, '');
       const lines = text.split('\r\n');
-      assert.equal(lines[0], '名字,公司,国家,邮箱,号码,昵称,所属号,意向产品,数量,阶段,摘要,最近联系,提取时间,更新时间');
+      assert.equal(lines[0], '姓名,公司,国家,邮箱,号码,昵称,所属号码,意向产品,数量,阶段,摘要,最近联系,提取时间,更新时间');
       assert.ok(r.body.includes(',议价,'), 'stage 导出为中文');
       assert.ok(r.body.includes(',有下单意向,'));
       assert.ok(!/,negotiation,|,order_intent,/.test(r.body));

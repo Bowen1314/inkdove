@@ -127,10 +127,10 @@ const PAIR_POLL_MS = 500;
 export const HISTORY_CHAT_LIMIT = 100;
 export const HISTORY_MESSAGES_PER_CHAT = 20;
 const HISTORY_IMPORT_DELAY_MS = 10_000;
-const HISTORY_SKIP_REASON = '导入的历史消息，机器人不处理';
+const HISTORY_SKIP_REASON = '导入的历史消息，不自动处理';
 /** 客户媒体存盘：一个文件最多下这么久（64MB 的视频在慢线路上也够） */
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
-const MEDIA_TOO_LARGE_TEXT = '文件太大，没有保存';
+const MEDIA_TOO_LARGE_TEXT = '文件过大，未保存';
 /**
  * 消息撤回（对所有人删除）的时限。WhatsApp 官方只说「两天多一点」，广泛报道的是 2 天 12 小时（60 小时，2022-08 起）；
  * 这里少算 1 小时：我方发的消息 ts 记的是发送接口返回之后的时间，比 WhatsApp 那边略晚，服务器时钟也可能有偏差
@@ -148,7 +148,7 @@ export const LINE_REPLY_WINDOW_MS = 50 * 1000;
 /** LINE 图片消息的预览图最大 1MB（原图 10MB）。墨鸽不缩图、预览图就用原图，所以只有 1MB 以内的 jpeg/png 按图片发，更大的按链接发 */
 export const LINE_IMAGE_MAX_BYTES = 1024 * 1024;
 /** 推送超出每月额度时消息上记的原因（号的状态里也显示） */
-export const LINE_QUOTA_TEXT = 'LINE 本月可推送的消息数用完了，升级套餐或等下个月；1 分钟内的回复不受影响';
+export const LINE_QUOTA_TEXT = 'LINE 本月推送额度已用完，请升级套餐或等待下月重置；1 分钟内的回复不受影响';
 /** 处理过的 LINE webhookEventId、取过的客户名字留多久 */
 const LINE_EVENT_KEEP_MS = 3600 * 1000;
 const LINE_NAME_CACHE_MS = 3600 * 1000;
@@ -170,7 +170,7 @@ export const SPLIT_MIN_CHARS = 160;
 export const MAX_REPLY_PARTS = 3;
 
 export const USAGE_HINT =
-  '用法：引用（回复）某条转人工通知再发文字，内容会转发给那位客户；引用后发 /d 发送通知里的草稿，发 /resume 恢复机器人。通知超过 7 天后不能再引用。';
+  '用法：引用转人工通知并发送文字，内容将转发给对应客户；引用后发送 /d 发出通知中的草稿，发送 /resume 恢复机器人。通知超过 7 天后无法引用。';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 /** F1 拟真等待的默认时长（毫秒）。测试里整体注入成 0 */
@@ -707,14 +707,14 @@ export function createWaService(ctx, opts = {}) {
   try {
     mediaStore.cleanTmp();
     db.prepare(
-      `UPDATE messages SET media = json_set(media, '$.stored', 'failed', '$.error', '下载被中断（服务重启），请在手机上查看')
+      `UPDATE messages SET media = json_set(media, '$.stored', 'failed', '$.error', '下载中断（服务重启），请在手机端查看')
        WHERE media IS NOT NULL AND json_valid(media) AND json_extract(media, '$.stored') = 'pending'`,
     ).run();
     // 提取文字到一半进程退出了的：记为失败（文件还在，业务员可以下载了看）
     db.prepare(
       `UPDATE messages SET media = json_set(media, '$.extract', json(?))
        WHERE media IS NOT NULL AND json_valid(media) AND json_extract(media, '$.extract.status') = 'pending'`,
-    ).run(JSON.stringify({ status: 'failed', error: '提取被中断（服务重启）' }));
+    ).run(JSON.stringify({ status: 'failed', error: '提取中断（服务重启）' }));
   } catch (err) {
     log.warn(`[wa] 清理没下完的媒体出错：${err?.message || err}`);
   }
@@ -790,17 +790,17 @@ export function createWaService(ctx, opts = {}) {
 
   /** 发文本（不落库）。号被删了、未配置时抛错 */
   async function sendRaw(acc, chatId, text) {
-    if (!acc) throw new Error('这个号已删除');
+    if (!acc) throw new Error('该号码已删除');
     const entry = rememberSent(acc.id, chatId, text, isTelegram(acc.channel));
     let id;
     if (acc.channel === 'waha') id = await waha.sendText(acc.sessionName, chatId, text);
     else if (acc.channel === 'meta') id = await metaSendText(config.metaGraphUrl, acc.meta, chatId, text);
     else if (acc.channel === 'line') id = await lineSend(acc, chatId, [{ type: 'text', text }]);
     else if (acc.channel === 'tguser') {
-      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 一条消息最多 ${TG_TEXT_MAX} 个字，这条有 ${text.length} 个字，请分开发`);
+      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 单条消息上限 ${TG_TEXT_MAX} 字，当前 ${text.length} 字，请分条发送`);
       id = await tgUserClient(acc).sendText(chatId, text);
     } else if (isTelegram(acc.channel)) {
-      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 一条消息最多 ${TG_TEXT_MAX} 个字，这条有 ${text.length} 个字，请分开发`);
+      if (text.length > TG_TEXT_MAX) throw new Error(`Telegram 单条消息上限 ${TG_TEXT_MAX} 字，当前 ${text.length} 字，请分条发送`);
       const t = tgTarget(acc);
       id = await tgSendText(config.telegramApiUrl, t.token, chatId, text, { businessConnectionId: t.businessConnectionId });
     } else throw new Error('未知的接入方式');
@@ -854,7 +854,7 @@ export function createWaService(ctx, opts = {}) {
    */
   function lineFileMessages(file, caption) {
     if (!/^https:\/\//i.test(config.publicBaseUrl)) {
-      throw new Error('LINE 发图片和文件要用公网 HTTPS 地址：INKDOVE_PUBLIC_BASE_URL 现在不是 https://，没有发送');
+      throw new Error('LINE 发送图片和文件需公网 HTTPS 地址：INKDOVE_PUBLIC_BASE_URL 不是 https://，未发送');
     }
     const url = publicFileUrl(config, file.id);
     if ((file.mime === 'image/jpeg' || file.mime === 'image/png') && file.size <= LINE_IMAGE_MAX_BYTES) {
@@ -873,7 +873,7 @@ export function createWaService(ctx, opts = {}) {
    * 扫码登录的号限制一样（用户帐号其实能发更大的文件，和机器人保持一致）。
    */
   async function sendFileRaw(acc, chatId, file, caption = '') {
-    if (!acc) throw new Error('这个号已删除');
+    if (!acc) throw new Error('该号码已删除');
     const entry = rememberSent(acc.id, chatId, caption, isTelegram(acc.channel));
     const diskPath = ctx.files.filePath(file.id);
     const asImage = file.mime === 'image/jpeg' || file.mime === 'image/png';
@@ -884,8 +884,8 @@ export function createWaService(ctx, opts = {}) {
       else wfile.url = internalFileUrl(config, file.id);
       id = await waha.sendMedia(asImage ? 'image' : 'file', acc.sessionName, chatId, wfile, caption);
     } else if (acc.channel === 'meta') {
-      if (file.mime === 'image/webp') throw new Error('Meta 不支持把 webp 图片当图片或文档发送，请换成 jpg 或 png');
-      if (asImage && file.size > META_IMAGE_MAX_BYTES) throw new Error('Meta 发图片不能超过 5MB，请压缩后再上传');
+      if (file.mime === 'image/webp') throw new Error('Meta 不支持发送 webp 图片，请转换为 jpg 或 png');
+      if (asImage && file.size > META_IMAGE_MAX_BYTES) throw new Error('Meta 图片大小上限为 5MB，请压缩后重新上传');
       const pnid = acc.meta.phoneNumberId;
       const upload = async () => {
         // Meta 的文档类型里没有 csv，按纯文本上传（文件名不变）
@@ -915,16 +915,16 @@ export function createWaService(ctx, opts = {}) {
     } else if (acc.channel === 'line') {
       id = await lineSend(acc, chatId, lineFileMessages(file, caption));
     } else if (acc.channel === 'tguser') {
-      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件的说明文字最多 ${TG_CAPTION_MAX} 个字，请缩短，或者把文字单独发`);
-      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 发文件不能超过 50MB');
+      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件说明上限 ${TG_CAPTION_MAX} 字，请缩短或单独发送文字`);
+      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 文件大小上限为 50MB');
       id = await tgUserClient(acc).sendFile(
         chatId,
         { buffer: await fs.promises.readFile(diskPath), filename: file.filename, mime: file.mime },
         { asPhoto: asImage && file.size <= TG_PHOTO_MAX_BYTES, caption },
       );
     } else if (isTelegram(acc.channel)) {
-      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件的说明文字最多 ${TG_CAPTION_MAX} 个字，请缩短，或者把文字单独发`);
-      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 机器人发文件不能超过 50MB');
+      if (caption.length > TG_CAPTION_MAX) throw new Error(`Telegram 文件说明上限 ${TG_CAPTION_MAX} 字，请缩短或单独发送文字`);
+      if (file.size > TG_UPLOAD_MAX_BYTES) throw new Error('Telegram 机器人文件大小上限为 50MB');
       const t = tgTarget(acc);
       id = await tgSendFile(
         config.telegramApiUrl,
@@ -943,7 +943,7 @@ export function createWaService(ctx, opts = {}) {
 
   /** 给某个号码发文本（通知、F3 回执用）。LINE 官方帐号、Telegram 号只能给聊过的人发，没有号码可发 */
   const sendToNumber = async (acc, number, text) => {
-    if (acc && !isWhatsapp(acc.channel)) throw new Error(`${CHANNEL_NAMES[acc.channel] || '这个号'}不能给手机号发消息`);
+    if (acc && !isWhatsapp(acc.channel)) throw new Error(`${CHANNEL_NAMES[acc.channel] || '该号码'}不支持向手机号发送消息`);
     return sendRaw(acc, acc?.channel === 'waha' ? `${number}@c.us` : number, text);
   };
 
@@ -1196,7 +1196,7 @@ export function createWaService(ctx, opts = {}) {
     if (pause) {
       cancelTimer(convId);
       abortSending(convId, 'paused');
-      skipPending(convId, '会话已暂停（等人工处理）');
+      skipPending(convId, '会话已暂停（待人工处理）');
     }
     const fresh = !before.needs_human;
     if (fresh) ctx.records.handoffStart({ conversationId: convId, accountId: before.account_id, code });
@@ -1607,11 +1607,11 @@ export function createWaService(ctx, opts = {}) {
       let res;
       let mime = media.mime || '';
       if (acc.channel === 'waha') {
-        if (media.error) throw new Error(`WAHA 下载媒体出错：${media.error}`);
-        if (!media.url) throw new Error('WAHA 没有提供下载地址（检查 WAHA_EVENTS_DOWNLOAD_MEDIA）');
+        if (media.error) throw new Error(`WAHA 下载媒体失败：${media.error}`);
+        if (!media.url) throw new Error('WAHA 未返回下载地址，请检查 WAHA_EVENTS_DOWNLOAD_MEDIA');
         res = await waha.fetchMedia(media.url, { timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS, signal });
       } else if (acc.channel === 'meta') {
-        if (!media.id) throw new Error('消息里没有 media id');
+        if (!media.id) throw new Error('消息缺少 media id');
         const opened = await metaOpenMedia(config.metaGraphUrl, acc.meta, media.id, {
           maxBytes: mediaMaxBytes,
           timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS,
@@ -1624,16 +1624,16 @@ export function createWaService(ctx, opts = {}) {
         let opened;
         if (media.url) opened = await lineOpenExternal(media.url, o);
         else if (media.id) opened = await lineOpenContent(config.lineDataApiUrl, acc.line, media.id, { ...o, retryDelayMs: lineContentRetryMs });
-        else throw new Error('消息里没有消息 id');
+        else throw new Error('消息缺少消息 id');
         res = opened.res;
         mime = mime || opened.mime;
       } else if (acc.channel === 'tguser') {
-        if (!media.id) throw new Error('消息里没有文件 id');
+        if (!media.id) throw new Error('消息缺少文件 id');
         res = tgUserClient(acc).openFile(media.id, { fileSize: media.size ?? null, maxBytes: mediaMaxBytes, signal });
         // mtcute 给的是普通的 Readable，没有响应头；类型用消息里的
         res.headers = {};
       } else if (isTelegram(acc.channel)) {
-        if (!media.id) throw new Error('消息里没有文件 id');
+        if (!media.id) throw new Error('消息缺少文件 id');
         const opened = await tgOpenFile(config.telegramApiUrl, acc.telegram.botToken, media.id, {
           maxBytes: mediaMaxBytes,
           knownSize: media.size ?? null,
@@ -1784,8 +1784,8 @@ export function createWaService(ctx, opts = {}) {
 
   async function downloadMedia(acc, media, maxBytes) {
     if (acc.channel === 'waha') {
-      if (media.error) throw new Error(`WAHA 下载媒体出错：${media.error}`);
-      if (!media.url) throw new Error('WAHA 没有提供媒体地址（检查 WAHA_EVENTS_DOWNLOAD_MEDIA）');
+      if (media.error) throw new Error(`WAHA 下载媒体失败：${media.error}`);
+      if (!media.url) throw new Error('WAHA 未返回媒体地址，请检查 WAHA_EVENTS_DOWNLOAD_MEDIA');
       return waha.downloadMedia(media.url, { maxBytes });
     }
     if (acc.channel === 'meta') return metaDownloadMedia(config.metaGraphUrl, acc.meta, media.id, { maxBytes });
@@ -1811,10 +1811,10 @@ export function createWaService(ctx, opts = {}) {
   async function loadForRecognition(type, media, saved, download) {
     const limits = MEDIA_LIMITS[type];
     if (type === 'image' && media.mime && !limits.mimes.includes(media.mime)) {
-      throw new RecognizeError('media_unsupported', `格式 ${media.mime} 不支持，只支持 jpeg、png、webp`);
+      throw new RecognizeError('media_unsupported', `格式 ${media.mime} 不受支持，仅支持 jpeg、png、webp`);
     }
     if (type === 'voice' && media.seconds && media.seconds > limits.maxSeconds) {
-      throw new RecognizeError('media_unsupported', `语音 ${Math.round(media.seconds)} 秒，超过 3 分钟`);
+      throw new RecognizeError('media_unsupported', `语音时长 ${Math.round(media.seconds)} 秒，超过 3 分钟上限`);
     }
     let buffer = null;
     let mime;
@@ -1835,19 +1835,19 @@ export function createWaService(ctx, opts = {}) {
       }
     }
     if (!buffer) {
-      if (!download) throw new RecognizeError('media_failed', '存下的文件读不出来');
+      if (!download) throw new RecognizeError('media_failed', '已保存的文件无法读取');
       try {
         ({ buffer, mime } = await download());
       } catch (err) {
-        if (err instanceof TooLargeError || /文件太大/.test(String(err?.message))) throw tooBig();
+        if (err instanceof TooLargeError || /文件(太|过)大/.test(String(err?.message))) throw tooBig();
         throw new RecognizeError('media_failed', `下载失败：${err?.message || err}`);
       }
     }
     mime = media.mime || baseMime(mime);
-    if (type === 'image' && !limits.mimes.includes(mime)) throw new RecognizeError('media_unsupported', `格式 ${mime || '未知'} 不支持，只支持 jpeg、png、webp`);
+    if (type === 'image' && !limits.mimes.includes(mime)) throw new RecognizeError('media_unsupported', `格式 ${mime || '未知'} 不受支持，仅支持 jpeg、png、webp`);
     if (type === 'voice') {
       const secs = media.seconds || oggDurationSeconds(buffer);
-      if (secs && secs > limits.maxSeconds) throw new RecognizeError('media_unsupported', `语音 ${Math.round(secs)} 秒，超过 3 分钟`);
+      if (secs && secs > limits.maxSeconds) throw new RecognizeError('media_unsupported', `语音时长 ${Math.round(secs)} 秒，超过 3 分钟上限`);
     }
     return { buffer, mime };
   }
@@ -1864,7 +1864,7 @@ export function createWaService(ctx, opts = {}) {
       throw new RecognizeError('media_failed', err?.message || String(err));
     }
     text = clip(String(text || '').trim(), MAX_STORED_TEXT - 200);
-    if (!text) throw new RecognizeError('media_failed', '模型没有返回内容');
+    if (!text) throw new RecognizeError('media_failed', '模型未返回内容');
     return text;
   }
 
@@ -1895,7 +1895,7 @@ export function createWaService(ctx, opts = {}) {
     const conv = getConvRow(convId);
     if (!conv) return;
     const used = conv.llm_day === today ? conv.llm_calls : 0;
-    if (used + 1 > DAILY_LLM_LIMIT) return fail('media_failed', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`, { mark: false });
+    if (used + 1 > DAILY_LLM_LIMIT) return fail('media_failed', `该会话今日模型调用已达上限（${DAILY_LLM_LIMIT} 次）`, { mark: false });
     let loaded;
     try {
       loaded = await loadForRecognition(type, m.media, saved, () => downloadMedia(acc, m.media, MEDIA_LIMITS[type].maxBytes));
@@ -2042,17 +2042,17 @@ export function createWaService(ctx, opts = {}) {
     const settle = (decision, reason, code = null) => settleMessages(convId, lastSeq, decision, reason, code);
     const acc = conv.account_id ? accounts.get(conv.account_id) : null;
 
-    if (!acc) return void settle('skipped', '这个号已删除');
+    if (!acc) return void settle('skipped', '该号码已删除');
     if (acc.replyMode !== 'auto') return void settle('skipped', '这个号没开自动回复');
     if (conv.bot_paused) return void settle('skipped', '会话已暂停（人工接管中）');
     if (!llmConfigured(s, config)) {
       log.warn('[wa] 模型未配置，跳过自动回复');
-      return void settle('skipped', '还没有配置模型');
+      return void settle('skipped', '未配置模型');
     }
     // 第 4 层：反复离题静默
     if (conv.muted_until) {
       if (Date.parse(conv.muted_until) > Date.now()) {
-        const reason = `反复离题，静默中（到 ${conv.muted_until}）`;
+        const reason = `反复离题，静默至 ${conv.muted_until}`;
         settle('offtopic', reason, 'muted');
         recordDecision(acc.id, convId, { decision: 'offtopic', code: 'muted', reason });
         return;
@@ -2067,7 +2067,7 @@ export function createWaService(ctx, opts = {}) {
       )
       .get(convId, hourAgo).n;
     if (botCount >= s.reply.maxBotRepliesPerChatPerHour) {
-      const detail = `过去一小时已自动回复 ${botCount} 次`;
+      const detail = `近一小时已自动回复 ${botCount} 次`;
       const reason = `回复次数超限：${detail}`;
       settle('handoff', reason, 'rate_limit');
       recordDecision(acc.id, convId, { decision: 'handoff', code: 'rate_limit', reason });
@@ -2080,7 +2080,7 @@ export function createWaService(ctx, opts = {}) {
     const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
     if (usedToday + 2 > DAILY_LLM_LIMIT) {
       log.warn(`[wa] 会话 ${logConv(convId)} 今天的模型调用已达上限（${usedToday}/${DAILY_LLM_LIMIT}）`);
-      return void settle('skipped', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次）`);
+      return void settle('skipped', `该会话今日模型调用已达上限（${DAILY_LLM_LIMIT} 次）`);
     }
     // 每个号每分钟 30 条
     const st = state(acc.id);
@@ -2119,8 +2119,8 @@ export function createWaService(ctx, opts = {}) {
     const used = (conv.llm_day === today ? conv.llm_calls : 0) + result.llmCalls;
     db.prepare('UPDATE conversations SET llm_day = ?, llm_calls = ? WHERE id = ?').run(today, used, convId);
     const accNow = accounts.get(acc.id);
-    if (!accNow) return void settle('skipped', '这个号已删除');
-    if (conv.bot_paused || closed) return void settle('skipped', '生成回复期间人工接管了这个会话');
+    if (!accNow) return void settle('skipped', '该号码已删除');
+    if (conv.bot_paused || closed) return void settle('skipped', '生成回复期间会话已由人工接管');
     // 生成期间客户撤回了这一轮里的消息：这份回复是照着撤回的话写的，不发；撤回的那条已经记为 skipped，剩下的重新走一轮
     const revokedNow = db
       .prepare(`SELECT 1 FROM messages WHERE conversation_id = ? AND revoked_at IS NOT NULL AND seq IN (${pending.map(() => '?').join(', ')}) LIMIT 1`)
@@ -2144,7 +2144,7 @@ export function createWaService(ctx, opts = {}) {
     // 屏蔽词：自动回复里有就不发，按「回复被拦截」转人工（和规则拦截一样暂停、起草、通知），管理员另外会收到提醒
     if (result.decision === 'replied') {
       const hit = ctx.blockwords.check(result.reply, { source: 'bot', accountId: acc.id, conversationId: convId });
-      if (hit) result = { ...result, decision: 'blocked', code: 'blockword', reason: `回复里有屏蔽词${quoteWords(hit.words)}，没有发出，已转人工` };
+      if (hit) result = { ...result, decision: 'blocked', code: 'blockword', reason: `回复含屏蔽词${quoteWords(hit.words)}，未发送，已转人工` };
     }
 
     switch (result.decision) {
@@ -2386,7 +2386,7 @@ export function createWaService(ctx, opts = {}) {
       .slice(0, MAX_FILES_PER_REPLY);
     // 括号里写成外文的【待你确认：…】译成中文（只在有的时候调一次翻译，失败、超时照原样）
     const text = clip(await fixDraftPlaceholders(ctx, { id: convId, accountId: acc.id }, String(out?.text ?? '').trim()), MAX_DRAFT_TEXT);
-    if (!text && !fileIds.length) throw new Error('推荐回复是空的');
+    if (!text && !fileIds.length) throw new Error('推荐回复为空');
     const entryIds = draftEntryIds(out?.entryIds, c.entries);
     return { draft: { kind: 'suggest', text, fileIds, entryIds, createdAt: nowIso() }, startSeq };
   }
@@ -2438,7 +2438,7 @@ export function createWaService(ctx, opts = {}) {
         .slice(0, MAX_FILES_PER_REPLY);
       // 同推荐回复：括号里写成外文的【待你确认：…】译成中文
       const text = clip(await fixDraftPlaceholders(ctx, { id: convId, accountId: acc.id }, String(out?.text ?? '').trim()), MAX_DRAFT_TEXT);
-      if (!text && !fileIds.length) throw new Error('草稿是空的');
+      if (!text && !fileIds.length) throw new Error('草稿为空');
       draft = { kind: 'handoff', text, fileIds, entryIds: draftEntryIds(out?.entryIds, c.entries), createdAt: nowIso() };
       // 草稿里写了负责人的名字、电话这些，记下是谁的（没用资料就不记，改派也不清）
       if (agentProfile) draft.agentUserId = before.assignee_id;
@@ -2605,7 +2605,7 @@ export function createWaService(ctx, opts = {}) {
       }
     };
     if (!m.text) {
-      await replyAdmin('暂时只支持转发文字');
+      await replyAdmin('仅支持转发文字');
       return 'command_non_text';
     }
     const convId = notifier.findNotice(acc.id, m.replyToId);
@@ -2618,7 +2618,7 @@ export function createWaService(ctx, opts = {}) {
     }
     const conv = getConvRow(convId);
     if (!conv) {
-      await replyAdmin('❌ 发送失败：这个会话已不存在');
+      await replyAdmin('❌ 发送失败：会话不存在');
       return 'command_failed';
     }
     const who = displayName(conv);
@@ -2631,13 +2631,13 @@ export function createWaService(ctx, opts = {}) {
     if (/^\/d$/i.test(cmd)) {
       const draft = parseDraft(conv.draft);
       if (!draft) {
-        await replyAdmin('这个会话没有草稿');
+        await replyAdmin('该会话无草稿');
         return 'command_no_draft';
       }
       // 屏蔽词：草稿文字里有就整份不发（文件也不发），草稿留着
       const hit = draft.text.trim() ? ctx.blockwords.check(draft.text, { source: 'relay', accountId: acc.id, conversationId: convId }) : null;
       if (hit) {
-        await replyAdmin(`❌ 草稿里有屏蔽词${quoteWords(hit.words)}，没有发出去，管理员会收到提醒`);
+        await replyAdmin(`❌ 草稿含屏蔽词${quoteWords(hit.words)}，未发送，管理员将收到提醒`);
         return 'command_blocked';
       }
       // F15：先发草稿文字，再发草稿里的文件；视为人工亲自发送
@@ -2650,14 +2650,14 @@ export function createWaService(ctx, opts = {}) {
       for (const fid of draft.fileIds) {
         const f = ctx.files.get(fid);
         if (!f || f.status !== 'active') {
-          errors.push('草稿里的文件已删除或停用');
+          errors.push('草稿中的文件已删除或停用');
           continue;
         }
         const msg = await operatorDeliverFile(acc, convId, f, { via: 'whatsapp', sentBy: null });
         if (msg.status !== 'sent') errors.push(`${f.filename}：${msg.error || '未知原因'}`);
       }
       if (!errors.length) {
-        await replyAdmin(`✅ 已发给 ${who}`);
+        await replyAdmin(`✅ 已发送给 ${who}`);
         return 'command_draft';
       }
       await replyAdmin(`❌ 发送失败：${errors.join('；')}`);
@@ -2671,7 +2671,7 @@ export function createWaService(ctx, opts = {}) {
     }
     const msg = await operatorDeliver(acc, convId, m.text, { via: 'whatsapp', sentBy: null });
     if (msg.status === 'sent') {
-      await replyAdmin(`✅ 已发给 ${who}`);
+      await replyAdmin(`✅ 已发送给 ${who}`);
       return 'command_forward';
     }
     await replyAdmin(`❌ 发送失败：${msg.error || '未知原因'}`);
@@ -2877,7 +2877,7 @@ export function createWaService(ctx, opts = {}) {
   };
 
   const assertWaha = (acc) => {
-    if (acc.channel !== 'waha') throw badRequest('这个号不是扫码接入', 'wrong_channel');
+    if (acc.channel !== 'waha') throw badRequest('该号码不是扫码接入', 'wrong_channel');
   };
 
   /**
@@ -3042,7 +3042,7 @@ export function createWaService(ctx, opts = {}) {
     const m = /current status is (\w+)/i.exec(err.message);
     if (err.status === 422 && (m || err.message.includes('SCAN_QR_CODE'))) {
       const now = m ? `（当前：${statusLabel(m[1])}）` : '';
-      return new HttpError(409, 'not_scan_qr', `现在不能获取配对码：会话不在等待关联状态${now}，请稍后重新获取`);
+      return new HttpError(409, 'not_scan_qr', `暂无法获取配对码：会话不在等待关联状态${now}，请稍后重试`);
     }
     return new HttpError(502, 'waha_error', `获取配对码失败：${err.message}`);
   }
@@ -3055,13 +3055,13 @@ export function createWaService(ctx, opts = {}) {
   async function wahaRequestCode(acc, rawPhone) {
     assertWaha(acc);
     const phone = parsePairingPhone(rawPhone);
-    if (!phone) throw badRequest('请填带国家码的完整号码，例如 +86 138 0000 0000', 'bad_phone');
+    if (!phone) throw badRequest('请输入含国家区号的完整号码，例如 +86 138 0000 0000', 'bad_phone');
     const st = state(acc.id);
     const checkInterval = () => {
       const left = st.pairCodeAt + PAIR_CODE_INTERVAL_MS - Date.now();
-      if (left > 0) throw new HttpError(429, 'too_frequent', `获取配对码太频繁，请 ${Math.ceil(left / 1000)} 秒后再试`);
+      if (left > 0) throw new HttpError(429, 'too_frequent', `获取配对码过于频繁，请 ${Math.ceil(left / 1000)} 秒后重试`);
     };
-    const connected = () => new HttpError(409, 'already_connected', '这个号已经连接，不用再关联；要换号请先退出登录');
+    const connected = () => new HttpError(409, 'already_connected', '该号码已连接，无需关联；如需更换号码，请先退出登录');
     checkInterval();
     try {
       const sess = await waha.getSession(acc.sessionName, 10_000);
@@ -3072,7 +3072,7 @@ export function createWaService(ctx, opts = {}) {
       // FAILED 的号重启后连回来了，不用再关联
       if (status === 'WORKING') throw connected();
       if (status !== 'SCAN_QR_CODE') {
-        throw new HttpError(502, 'waha_error', `会话没能进入等待关联状态（当前：${statusLabel(status)}），请稍后再试`);
+        throw new HttpError(502, 'waha_error', `会话未能进入等待关联状态（当前：${statusLabel(status)}），请稍后重试`);
       }
       // 等会话的这段时间里可能有另一个申请先发出去了：真正找 WhatsApp 要码之前再判一次间隔，判完立刻记下时间
       checkInterval();
@@ -3375,11 +3375,11 @@ export function createWaService(ctx, opts = {}) {
       return new HttpError(
         502,
         'waha_timeout',
-        '撤回没有确认：WAHA 超时没有响应。客户那边可能已经撤回了，收到 WhatsApp 的撤回通知后这里会自动标上；没有的话可以再试一次',
+        '撤回未确认：WAHA 响应超时。消息可能已撤回，收到 WhatsApp 撤回通知后将自动标记；如未标记，请重试',
       );
     }
     // WAHA 等会话进入 WORKING 等不到时回 422
-    if (err.status === 422) return new HttpError(409, 'not_connected', `这个号现在没连上 WhatsApp，连上后再撤回（${err.message}）`);
+    if (err.status === 422) return new HttpError(409, 'not_connected', `该号码未连接 WhatsApp，请连接后再撤回（${err.message}）`);
     return new HttpError(502, 'waha_error', `撤回失败：${err.message}`);
   }
 
@@ -3394,18 +3394,18 @@ export function createWaService(ctx, opts = {}) {
     if (!conv) throw notFound('会话不存在');
     const row = typeof messageId === 'string' ? db.prepare('SELECT * FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId) : null;
     if (!row) throw notFound('消息不存在');
-    if (row.direction !== 'out') throw badRequest('只能撤回我方发出的消息', 'not_own_message');
-    if (row.revoked_at) throw new HttpError(409, 'already_revoked', '这条消息已经撤回了');
-    if (row.status !== 'sent') throw badRequest('这条消息没有发出去，客户没收到，不用撤回', 'not_sent');
+    if (row.direction !== 'out') throw badRequest('仅可撤回我方发出的消息', 'not_own_message');
+    if (row.revoked_at) throw new HttpError(409, 'already_revoked', '该消息已撤回');
+    if (row.status !== 'sent') throw badRequest('该消息未发送成功，无需撤回', 'not_sent');
     const acc = conv.account_id ? accounts.get(conv.account_id) : null;
-    if (!acc) throw badRequest('这个会话所属的号已删除，不能再撤回', 'account_deleted');
-    if (acc.channel === 'meta') throw badRequest('Meta 官方接口的号不能撤回消息（WhatsApp Cloud API 没有撤回功能）', 'revoke_unsupported');
-    if (acc.channel === 'line') throw badRequest('LINE 官方帐号不能撤回已发出的消息（LINE Messaging API 没有撤回功能）', 'revoke_unsupported');
+    if (!acc) throw badRequest('会话所属号码已删除，无法撤回', 'account_deleted');
+    if (acc.channel === 'meta') throw badRequest('Meta 官方接口号码不支持撤回消息（WhatsApp Cloud API 无撤回功能）', 'revoke_unsupported');
+    if (acc.channel === 'line') throw badRequest('LINE 官方帐号不支持撤回消息（LINE Messaging API 无撤回功能）', 'revoke_unsupported');
     if (isTelegram(acc.channel)) return revokeTelegram(acc, conv, row, user);
-    if (acc.channel !== 'waha') throw badRequest('这个号不能撤回消息', 'revoke_unsupported');
-    if (!row.external_id) throw badRequest('这条消息没有记下 WhatsApp 的消息 id，不能撤回', 'no_message_id');
-    if (!revocableUntil(row, acc)) throw badRequest('已经超过 WhatsApp 允许撤回的时间（发出后约两天半），不能再撤回', 'revoke_expired');
-    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '正在撤回这条消息，请稍等');
+    if (acc.channel !== 'waha') throw badRequest('该号码不支持撤回消息', 'revoke_unsupported');
+    if (!row.external_id) throw badRequest('该消息缺少 WhatsApp 消息 id，无法撤回', 'no_message_id');
+    if (!revocableUntil(row, acc)) throw badRequest('已超过 WhatsApp 撤回时限（发送后约两天半），无法撤回', 'revoke_expired');
+    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '该消息正在撤回，请稍候');
     const chatId = conv.chat_id || conv.id;
     const keyId = messageKeyId(row.external_id);
     // WAHA 要完整的序列化 id：库里存的就是 true_<chat>_<ID> 的直接用，否则按这个会话的 chat id 拼
@@ -3604,11 +3604,11 @@ export function createWaService(ctx, opts = {}) {
   /** 发消息要的：机器人 token，私人号再加连接 id。私人号没连好、没有回复权限时报错，不发 */
   function tgTarget(acc) {
     const token = acc.telegram?.botToken;
-    if (!token) throw new Error('还没有填 Telegram 机器人的 token');
+    if (!token) throw new Error('未填写 Telegram 机器人 token');
     if (acc.channel !== 'tgbiz') return { token, businessConnectionId: undefined };
     const t = tgKv(acc);
-    if (!tgLinked(t)) throw new Error('Telegram 私人号还没有连上机器人（先绑定号主，再在「聊天自动化」里添加机器人），没有发送');
-    if (!t.connection.canReply) throw new Error('机器人没有代你回复消息的权限：请在 Telegram 的「聊天自动化」里打开回复消息的权限');
+    if (!tgLinked(t)) throw new Error('未发送：Telegram 私人号尚未连接机器人，请先绑定号主，再在「聊天自动化」中添加机器人');
+    if (!t.connection.canReply) throw new Error('机器人无回复消息权限，请在 Telegram「聊天自动化」中开启');
     return { token, businessConnectionId: t.connection.id };
   }
 
@@ -3678,13 +3678,13 @@ export function createWaService(ctx, opts = {}) {
     if (!p.ready) return { ...out, state: 'starting' };
     if (!isBiz) return { ...out, state: 'working' };
     if (tgLinked(t)) {
-      return { ...out, state: 'working', error: c.canReply ? null : '机器人没有代你回复消息的权限，墨鸽收得到消息但发不出去：请在 Telegram 的「聊天自动化」里打开回复消息的权限' };
+      return { ...out, state: 'working', error: c.canReply ? null : '机器人无回复消息权限，可接收消息但无法发送，请在 Telegram「聊天自动化」中开启' };
     }
     let error = null;
     if (p.me && p.me.can_connect_to_business === false) {
-      error = '这个机器人还没打开 Business Mode，「聊天自动化」里加不了它：在 @BotFather 里选这个机器人 → Bot Settings → Business Mode，打开';
+      error = '该机器人未开启 Business Mode，无法添加到「聊天自动化」。请在 @BotFather 中选择该机器人 → Bot Settings → Business Mode 开启';
     } else if (t.owner && c && c.enabled && !byOwner) {
-      error = `在「聊天自动化」里连接这个机器人的是「${c.name || '另一个帐号'}」，不是绑定的号主「${t.owner.name || '号主'}」，墨鸽不收它的消息`;
+      error = `在「聊天自动化」中连接该机器人的帐号为「${c.name || '其他帐号'}」，与绑定的号主「${t.owner.name || '号主'}」不一致，墨鸽不接收其消息`;
     }
     return { ...out, state: 'waiting', error };
   }
@@ -3762,7 +3762,7 @@ export function createWaService(ctx, opts = {}) {
         touch();
       },
       onError: (err, fatal) => {
-        const msg = err instanceof TgError ? err.message : `收消息出错：${err?.message || err}`;
+        const msg = err instanceof TgError ? err.message : `接收消息失败：${err?.message || err}`;
         if (entry.error !== msg) log.warn(`[telegram] 号 ${acc.id} 收消息出错${fatal ? '，停下了，改了 token 后重新开始' : '，稍后重试'}：${msg}`);
         entry.error = msg;
         entry.fatal = fatal;
@@ -3838,8 +3838,8 @@ export function createWaService(ctx, opts = {}) {
     const next = tgKvUpdate(acc, { owner, bindCode: '' });
     log.info(`[telegram] 号 ${acc.id} 绑定了号主`);
     const tip = tgLinked(next)
-      ? '「聊天自动化」里已经连好了，客户发给你的私聊消息会出现在墨鸽里。'
-      : `下一步：打开 Telegram 的「设置 → 聊天自动化」（英文界面是 Settings → Chat Automation），添加 @${next.botUsername}，并打开回复消息的权限。`;
+      ? '「聊天自动化」已连接，客户私聊消息将同步至墨鸽。'
+      : `下一步：在 Telegram「设置 → 聊天自动化」（英文界面：Settings → Chat Automation）中添加 @${next.botUsername}，并开启回复消息权限。`;
     try {
       await tgSendText(config.telegramApiUrl, acc.telegram.botToken, msg.chat.id, `已绑定到墨鸽。${tip}`);
     } catch (err) {
@@ -3908,17 +3908,17 @@ export function createWaService(ctx, opts = {}) {
    * 扫码登录的号 messages.deleteMessages（对双方删除，没有时限）
    */
   async function revokeTelegram(acc, conv, row, user) {
-    if (!row.external_id) throw badRequest('这条消息没有记下 Telegram 的消息 id，不能撤回', 'no_message_id');
+    if (!row.external_id) throw badRequest('该消息缺少 Telegram 消息 id，无法撤回', 'no_message_id');
     if (acc.channel === 'tgbiz' && !tgCanDelete(acc, row)) {
       throw badRequest(
         row.via === 'phone'
-          ? '在 Telegram 里自己发的消息，要机器人有「删除所有消息」的权限才能撤回：请在「聊天自动化」里打开'
-          : '机器人没有删除消息的权限：请在 Telegram 的「聊天自动化」里打开',
+          ? '撤回在 Telegram 中发送的消息需机器人具备「删除所有消息」权限，请在「聊天自动化」中开启'
+          : '机器人无删除消息权限，请在 Telegram「聊天自动化」中开启',
         'revoke_no_right',
       );
     }
-    if (!revocableUntil(row, acc)) throw badRequest('已经超过 Telegram 允许撤回的时间（发出后 48 小时），不能再撤回', 'revoke_expired');
-    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '正在撤回这条消息，请稍等');
+    if (!revocableUntil(row, acc)) throw badRequest('已超过 Telegram 撤回时限（发送后 48 小时），无法撤回', 'revoke_expired');
+    if (revoking.has(row.id)) throw new HttpError(409, 'revoking', '该消息正在撤回，请稍候');
     const who = user ? { id: user.id, name: user.name ?? '' } : null;
     const attemptKey = `${acc.id}|${conv.id}|${row.external_id}`;
     pruneRevokeAttempts();
@@ -3946,7 +3946,7 @@ export function createWaService(ctx, opts = {}) {
 
   /** 私人号换号主：清掉绑定，换一个新的绑定链接（连接留着，同一个人重新绑定后直接生效） */
   function telegramRebind(acc) {
-    if (acc.channel !== 'tgbiz') throw badRequest('只有 Telegram 私人号要绑定号主', 'wrong_channel');
+    if (acc.channel !== 'tgbiz') throw badRequest('仅 Telegram 私人号需绑定号主', 'wrong_channel');
     tgKvUpdate(acc, { owner: null, bindCode: crypto.randomBytes(12).toString('base64url') });
     log.info(`[telegram] 号 ${acc.id} 清掉了绑定的号主`);
   }
@@ -3965,7 +3965,7 @@ export function createWaService(ctx, opts = {}) {
   const tgUserHasSession = (accountId) => fs.existsSync(tgUserSessionPath(accountId));
   /** api_id、api_hash 改了就要换客户端 */
   const tgUserKey = (acc) => `${acc.telegram?.apiId}|${acc.telegram?.apiHash}`;
-  const TGU_LOST_TEXT = '墨鸽在这个 Telegram 帐号上的登录已经失效（可能在手机的「设置 → 设备」里结束了墨鸽），请重新扫码登录';
+  const TGU_LOST_TEXT = '墨鸽在该 Telegram 帐号上的登录已失效（可能已在手机「设置 → 设备」中被终止），请重新扫码登录';
   /**
    * @type {Map<string, {
    *   key: string, client: any, state: string, me: {id:string, name:string, username:string}|null, error: string|null,
@@ -3995,7 +3995,7 @@ export function createWaService(ctx, opts = {}) {
   function tgUserClient(acc) {
     const e = tgUsers.get(acc.id);
     if (e?.state === 'working' && e.client) return e.client;
-    throw new TgUserError('这个 Telegram 帐号还没有登录（或者登录已经失效），请先在号的「连接」里扫码登录', { code: 'NOT_LOGGED_IN' });
+    throw new TgUserError('该 Telegram 帐号未登录或登录已失效，请先在号码的「连接」中扫码登录', { code: 'NOT_LOGGED_IN' });
   }
 
   /**
@@ -4131,10 +4131,10 @@ export function createWaService(ctx, opts = {}) {
         // 用登录态重连失败（比如刚启动时代理还没好、连不上 Telegram）：过一会儿自己再试，间隔逐次加倍，最长 10 分钟
         const again = !login && !err?.authLost ? Math.min(tgUserRetryMs * 2 ** retry, 10 * 60_000) : 0;
         const msg = timedOut
-          ? `扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，已经停下：要登录时再点「扫码登录」`
+          ? `扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟内未完成，已停止；如需登录，请重新点击「扫码登录」`
           : err instanceof TgUserError
             ? err.message
-            : `连接 Telegram 出错：${err?.message || err}`;
+            : `连接 Telegram 失败：${err?.message || err}`;
         if (!timedOut) log.warn(`[tguser] 号 ${acc.id} ${login ? '扫码登录' : '连接'}失败：${msg}`);
         set({
           state: login || err?.authLost ? 'logged_out' : 'failed',
@@ -4195,11 +4195,11 @@ export function createWaService(ctx, opts = {}) {
 
   /** 开始扫码登录（管理员点「扫码登录」）。已经在登录的原样返回；已经登录好的不重来 */
   async function tgUserLogin(acc) {
-    if (acc.channel !== 'tguser') throw badRequest('这个号不是 Telegram 扫码登录', 'wrong_channel');
-    if (!tgUserConfigured(acc)) throw badRequest('请先填 api_id 和 api_hash（在 my.telegram.org 申请）', 'not_configured');
+    if (acc.channel !== 'tguser') throw badRequest('该号码不是 Telegram 扫码登录', 'wrong_channel');
+    if (!tgUserConfigured(acc)) throw badRequest('请先填写 api_id 和 api_hash（在 my.telegram.org 申请）', 'not_configured');
     const e = tgUsers.get(acc.id);
     if (e && e.key === tgUserKey(acc) && ['starting', 'scan_qr', 'password'].includes(e.state)) return;
-    if (e?.state === 'working' && e.key === tgUserKey(acc)) throw new HttpError(409, 'already_logged_in', '这个号已经登录了；要换帐号请先退出登录');
+    if (e?.state === 'working' && e.key === tgUserKey(acc)) throw new HttpError(409, 'already_logged_in', '该号码已登录；如需更换帐号，请先退出登录');
     await tgUserStop(acc.id);
     tgUserStart(acc, { login: true });
     log.info(`[tguser] 号 ${acc.id} 开始扫码登录`);
@@ -4208,7 +4208,7 @@ export function createWaService(ctx, opts = {}) {
   /** 扫码登录的二维码（SVG）。现在不在等扫码时 404 */
   function tgUserQr(acc) {
     const e = tgUsers.get(acc.id);
-    if (acc.channel !== 'tguser' || e?.state !== 'scan_qr' || !e.qr) throw new HttpError(404, 'no_qr', '现在没有要扫的二维码');
+    if (acc.channel !== 'tguser' || e?.state !== 'scan_qr' || !e.qr) throw new HttpError(404, 'no_qr', '当前无待扫描的二维码');
     return renderSVG(e.qr.url, { border: 2 });
   }
 
@@ -4218,14 +4218,14 @@ export function createWaService(ctx, opts = {}) {
    */
   async function tgUserPassword(acc, password) {
     if (typeof password !== 'string' || !password) throw badRequest('请输入两步验证密码');
-    if (password.length > 256) throw badRequest('密码太长了');
+    if (password.length > 256) throw badRequest('密码过长');
     let e = tgUsers.get(acc.id);
     // 上一次输错后，客户端要稍等一下才会再来要密码
     for (let i = 0; i < 40 && e?.state === 'password' && !e.password; i++) {
       await sleep(50);
       e = tgUsers.get(acc.id);
     }
-    if (e?.state !== 'password' || !e.password) throw new HttpError(409, 'not_waiting_password', '现在不需要输两步验证密码');
+    if (e?.state !== 'password' || !e.password) throw new HttpError(409, 'not_waiting_password', '当前无需输入两步验证密码');
     const waiter = e.password;
     e.password = null;
     const result = new Promise((resolve) => {
@@ -4233,8 +4233,8 @@ export function createWaService(ctx, opts = {}) {
     });
     waiter.resolve(password);
     const r = await tgUserWithin(result, 60_000, () => 'timeout');
-    if (r === 'invalid') throw new HttpError(400, 'wrong_password', '两步验证密码不对，请再输一次');
-    if (r === 'timeout') throw new HttpError(504, 'telegram_timeout', 'Telegram 没有及时回复，请稍后看看号的状态');
+    if (r === 'invalid') throw new HttpError(400, 'wrong_password', '两步验证密码错误，请重新输入');
+    if (r === 'timeout') throw new HttpError(504, 'telegram_timeout', 'Telegram 响应超时，请稍后查看号码状态');
     if (r === 'failed') throw new HttpError(502, 'telegram_error', tgUsers.get(acc.id)?.error || '登录失败');
   }
 
@@ -4255,7 +4255,7 @@ export function createWaService(ctx, opts = {}) {
           // 本地照样删掉，提示去手机上把这个设备结束掉
           await tgUserStop(acc.id);
           await tgUserWipe(acc.id);
-          throw new HttpError(502, 'telegram_error', `墨鸽这边已经退出，但没能通知 Telegram（${err?.message || err}）：请在手机的「设置 → 设备」里结束墨鸽`);
+          throw new HttpError(502, 'telegram_error', `墨鸽已退出，但未能通知 Telegram（${err?.message || err}），请在手机「设置 → 设备」中终止墨鸽会话`);
         }
       }
     }
@@ -4450,7 +4450,7 @@ export function createWaService(ctx, opts = {}) {
       if (!conv) throw notFound('会话不存在');
       if (typeof text !== 'string' || !text.trim()) throw badRequest('消息不能为空');
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
-      if (!acc) throw badRequest('这个会话所属的号已删除，不能再发送', 'account_deleted');
+      if (!acc) throw badRequest('会话所属号码已删除，无法发送', 'account_deleted');
       // 屏蔽词：命中了不发，400（blockword_hit），会话状态不变
       ctx.blockwords.guard(text.trim(), { source: 'operator', accountId: acc.id, conversationId: id, user });
       return operatorDeliver(acc, id, text.trim(), { via: 'admin', sentBy: user ? { id: user.id, name: user.name } : null });
@@ -4465,9 +4465,9 @@ export function createWaService(ctx, opts = {}) {
       if (typeof caption !== 'string') throw badRequest('caption 必须是字符串');
       const file = ctx.files.get(fileId);
       if (!file) throw notFound('文件不存在');
-      if (file.status !== 'active') throw badRequest('这个文件已停用，启用后才能发送', 'file_disabled');
+      if (file.status !== 'active') throw badRequest('该文件已停用，启用后方可发送', 'file_disabled');
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
-      if (!acc) throw badRequest('这个会话所属的号已删除，不能再发送', 'account_deleted');
+      if (!acc) throw badRequest('会话所属号码已删除，无法发送', 'account_deleted');
       // 屏蔽词：说明文字命中了，文件也不发
       if (caption.trim()) ctx.blockwords.guard(caption.trim(), { source: 'file', accountId: acc.id, conversationId: id, user });
       return operatorDeliverFile(acc, id, file, {
@@ -4486,12 +4486,12 @@ export function createWaService(ctx, opts = {}) {
       if (!conv) throw notFound('会话不存在');
       const msg = db.prepare('SELECT * FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
       if (!msg) throw notFound('消息不存在');
-      if (msg.author !== 'operator') throw badRequest('只能把人工回复存进知识库', 'not_operator_message');
+      if (msg.author !== 'operator') throw badRequest('仅可将人工回复存入知识库', 'not_operator_message');
       // 撤回过的人工回复多半是说错了，不拿去改写（撤回过的消息不进模型）
-      if (msg.revoked_at) throw badRequest('这条消息已经撤回了，不能存进知识库', 'message_revoked');
+      if (msg.revoked_at) throw badRequest('该消息已撤回，无法存入知识库', 'message_revoked');
       const answer = String(msg.text || '').trim();
-      if (!answer) throw badRequest('这条人工消息没有文字', 'empty_message');
-      if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      if (!answer) throw badRequest('该人工消息无文字内容', 'empty_message');
+      if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
       // 它前面的客户提问：往前找，跳过紧挨着的我方消息，取连续的客户消息（最多 3 条）；撤回过的消息当没有
       const before = db
         .prepare('SELECT author, text FROM messages WHERE conversation_id = ? AND seq < ? AND revoked_at IS NULL ORDER BY seq DESC LIMIT 30')
@@ -4542,20 +4542,20 @@ export function createWaService(ctx, opts = {}) {
       const conv = getConvRow(convId);
       if (!conv) throw notFound('会话不存在');
       const acc = conv.account_id ? accounts.get(conv.account_id) : null;
-      if (!acc) throw badRequest('这个会话所属的号已删除', 'account_deleted');
-      if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      if (!acc) throw badRequest('会话所属号码已删除', 'account_deleted');
+      if (!llmConfigured(settings(), config)) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
       const win = suggestWindow(convId);
-      if (!win) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
+      if (!win) throw badRequest('该会话尚无客户消息', 'no_customer_message');
       const today = localDay();
       const usedToday = conv.llm_day === today ? conv.llm_calls : 0;
       if (usedToday + 1 > DAILY_LLM_LIMIT) {
-        throw new HttpError(429, 'llm_daily_limit', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次），明天再试`);
+        throw new HttpError(429, 'llm_daily_limit', `该会话今日模型调用已达上限（${DAILY_LLM_LIMIT} 次），请明日再试`);
       }
       // 识别的模型调用也记到这个号和会话上
       await llmScope({ accountId: acc.id, conversationId: convId }, () => recognizeForSuggest(convId, win.rows, usedToday));
       // 识别期间客户把消息都撤回了之类
       const input = suggestInput(convId);
-      if (!input) throw badRequest('这个会话里还没有客户消息', 'no_customer_message');
+      if (!input) throw badRequest('该会话尚无客户消息', 'no_customer_message');
       const current = parseDraft(conv.draft);
       // 当前草稿是不是跟进推荐：followUp 只在库里，parseDraft 去掉了，读原始 JSON（老数据的推荐没有这一项，当不是跟进）
       const currentFollowUp = current?.kind === 'suggest' && safeJsonParse(conv.draft, null)?.followUp === true;
@@ -4599,7 +4599,7 @@ export function createWaService(ctx, opts = {}) {
     mediaFile(convId, messageId) {
       const row = db.prepare('SELECT id, media FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
       const media = safeJsonParse(row?.media, null);
-      if (!row || !media || media.stored !== 'ok') throw notFound('这条消息没有存下的文件');
+      if (!row || !media || media.stored !== 'ok') throw notFound('该消息无已保存的文件');
       const p = mediaStore.pathOf(media.fileKey);
       if (!p || !fs.existsSync(p)) throw notFound('文件不存在');
       return { path: p, mime: baseMime(media.mime) || 'application/octet-stream', downloadName: downloadName(media, row.id) };
@@ -4611,7 +4611,7 @@ export function createWaService(ctx, opts = {}) {
      */
     docText(convId, messageId) {
       const row = db.prepare('SELECT media, doc_text FROM messages WHERE id = ? AND conversation_id = ?').get(messageId, convId);
-      if (!row || row.doc_text == null) throw notFound('这条消息没有提取到的文字');
+      if (!row || row.doc_text == null) throw notFound('该消息无提取的文字');
       const extract = safeJsonParse(row.media, null)?.extract || {};
       return { text: row.doc_text, chars: row.doc_text.length, truncated: !!extract.truncated };
     },
@@ -4662,14 +4662,14 @@ export function createWaService(ctx, opts = {}) {
      * @returns {Promise<{conversationId:string, messageId:string, externalId:string|null}>}
      */
     async sendCampaignMessage(acc, { chatId, number, text, template = null, createdById = null }) {
-      if (!acc) throw new Error('这个号已删除');
+      if (!acc) throw new Error('该号码已删除');
       const entry = rememberSent(acc.id, chatId, text);
       let externalId;
       if (acc.channel === 'waha') externalId = await waha.sendText(acc.sessionName, chatId, text);
       else if (acc.channel === 'meta') externalId = await metaSendTemplate(config.metaGraphUrl, acc.meta, chatId, template);
       // LINE 只能给加了好友的人发，手里只有手机号找不到人（创建外联时已经拦下，这里兜底）
-      else if (acc.channel === 'line') throw new Error('LINE 官方帐号不能外联群发');
-      else if (isTelegram(acc.channel)) throw new Error('Telegram 号不能外联群发');
+      else if (acc.channel === 'line') throw new Error('LINE 官方帐号不支持外联群发');
+      else if (isTelegram(acc.channel)) throw new Error('Telegram 号码不支持外联群发');
       else throw new Error('未知的接入方式');
       entry.id = externalId || null;
       entry.short = externalId ? shortMessageId(externalId) : null;

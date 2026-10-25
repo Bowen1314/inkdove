@@ -9,7 +9,7 @@ import { convLogId } from './telegram.js';
 // 通知原因的文案和 F12 的 code 标签放在同一个常量文件里（codes.js），这里转出去，老的引用不用改
 export { NOTIFY_REASONS };
 
-export const F3_USAGE_FOOTER = '直接引用这条消息回复，内容会转发给客户。回复 /d 发送上面的草稿，回复 /resume 恢复机器人。';
+export const F3_USAGE_FOOTER = '引用本消息回复，内容将转发给客户。回复 /d 发送上方草稿，回复 /resume 恢复机器人。';
 export const NOTICE_TTL_MS = 7 * 24 * 3600 * 1000;
 
 /** WhatsApp 消息 id 的短形式：WAHA 发出的 id 形如 true_<chat>_<id>，入站引用里的 replyTo.id 可能只有最后的 <id> */
@@ -35,15 +35,15 @@ export function createNotifier(deps) {
   const retryDelayMs = deps.retryDelayMs ?? 2000;
 
   async function sendEmailTo(acc, subject, text) {
-    if (!emailConfigured(getSettings())) throw new Error('管理员还没有在设置里配置发信方式');
+    if (!emailConfigured(getSettings())) throw new Error('未配置发信方式，请在设置页配置');
     const to = acc.notify.email.to;
-    if (!to.length) throw new Error('没有填写收件地址');
+    if (!to.length) throw new Error('未填写收件地址');
     await mailer.sendEmail({ to, subject, text });
   }
 
   async function sendWhatsapp(acc, text) {
     const number = acc.notify.whatsapp.number;
-    if (!number) throw new Error('没有填写接收通知的号码');
+    if (!number) throw new Error('未填写通知号码');
     return sendToNumber(acc, number, text);
   }
 
@@ -119,7 +119,7 @@ export function createNotifier(deps) {
     const last = recent[0] || '';
     const subject = `[待人工] 客户 ${noNumber ? who : num}：${clip(last.replace(/\s+/g, ' '), 30) || label}`;
     const lines = [
-      `号：${acc.name}`,
+      `号码：${acc.name}`,
       `客户：${who}`,
       `原因：${reasonText}`,
       '最近消息：',
@@ -135,9 +135,9 @@ export function createNotifier(deps) {
     if (draftText || draftFiles.length) {
       lines.push('建议回复（草稿，未发送）：');
       if (draftText) lines.push(clip(draftText, 1000));
-      if (draftFiles.length) lines.push(`草稿附带的文件：${draftFiles.join('、')}`);
+      if (draftFiles.length) lines.push(`草稿附件：${draftFiles.join('、')}`);
     }
-    lines.push(`去处理：${link}`);
+    lines.push(`查看会话：${link}`);
     return { subject, text: lines.join('\n') };
   }
 
@@ -172,7 +172,7 @@ export function createNotifier(deps) {
     async test(acc) {
       const n = acc.notify;
       const subject = `[待人工] 墨鸽 测试通知（${acc.name}）`;
-      const text = `这是一条测试通知。机器人拿不准的问题不会回复客户，会这样通知你。\n后台：${config.publicBaseUrl}/whatsapp`;
+      const text = `这是一条测试通知。机器人无法确定的问题不回复客户，并以此方式通知。\n后台：${config.publicBaseUrl}/whatsapp`;
       const run = async (fn) => {
         try {
           await fn();

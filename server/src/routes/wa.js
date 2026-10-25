@@ -49,7 +49,7 @@ export function waRouter(ctx) {
     requireAdmin(req);
     const ids = req.body?.conversationIds;
     if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !x)) throw badRequest('conversationIds 必须是会话 id 的数组');
-    if (ids.length > MAX_BULK_ASSIGN) throw badRequest(`一次最多分配 ${MAX_BULK_ASSIGN} 个会话`);
+    if (ids.length > MAX_BULK_ASSIGN) throw badRequest(`每次最多分配 ${MAX_BULK_ASSIGN} 个会话`);
     const r = assignMany(ctx.db, ids, userIdOf(req.body), req.user);
     ctx.log.info(`[wa] ${req.user.email} 批量分配了 ${r.updated} 个会话，跳过 ${r.skipped.length} 个`);
     res.json(r);

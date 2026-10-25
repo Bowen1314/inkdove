@@ -12,7 +12,7 @@ function validateEntryInput(body, partial) {
   if (!isPlainObject(body)) throw badRequest('请求体必须是对象');
   const out = {};
   if (body.type !== undefined || !partial) {
-    if (!ENTRY_TYPES.includes(body.type)) throw badRequest('type 只能是 faq、product、policy、fact');
+    if (!ENTRY_TYPES.includes(body.type)) throw badRequest('type 须为 faq、product、policy、fact 之一');
     out.type = body.type;
   }
   for (const f of ['title', 'content']) {
@@ -23,7 +23,7 @@ function validateEntryInput(body, partial) {
   }
   if (body.tags !== undefined) out.tags = normalizeTags(body.tags);
   if (body.status !== undefined) {
-    if (!ENTRY_STATUSES.includes(body.status)) throw badRequest('status 只能是 active 或 disabled');
+    if (!ENTRY_STATUSES.includes(body.status)) throw badRequest('status 须为 active 或 disabled');
     out.status = body.status;
   }
   return out;
@@ -63,7 +63,7 @@ export function kbRouter(ctx, auth) {
   router.post('/entries', admin, (req, res) => {
     const input = validateEntryInput(req.body, false);
     const origin = req.body.origin ?? 'manual';
-    if (origin !== 'manual' && origin !== 'conversation') throw badRequest('origin 只能是 manual 或 conversation');
+    if (origin !== 'manual' && origin !== 'conversation') throw badRequest('origin 须为 manual 或 conversation');
     let sourceRefs = [];
     if (origin === 'conversation' && req.body.sourceRefs !== undefined) {
       if (!Array.isArray(req.body.sourceRefs)) throw badRequest('sourceRefs 必须是数组');
@@ -93,12 +93,12 @@ export function kbRouter(ctx, auth) {
   // 向量检索（可选，kb/vectors.js）：进度和状态、全部清掉重算、出错停下后马上再试。只有 admin（和设置页一样）
   router.get('/vectors', admin, (_req, res) => res.json(ctx.vectors.status()));
   router.post('/vectors/rebuild', admin, (_req, res) => {
-    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索没有开启', 'embedding_disabled');
+    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索未开启', 'embedding_disabled');
     ctx.vectors.rebuild();
     res.json(ctx.vectors.status());
   });
   router.post('/vectors/retry', admin, (_req, res) => {
-    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索没有开启', 'embedding_disabled');
+    if (!ctx.getSettings().embedding?.enabled) throw badRequest('向量检索未开启', 'embedding_disabled');
     ctx.vectors.retry();
     res.json(ctx.vectors.status());
   });
@@ -114,7 +114,7 @@ export function kbRouter(ctx, auth) {
     if (!gap) throw notFound('缺口不存在');
     const answer = req.body?.answer;
     if (typeof answer !== 'string' || !answer.trim()) throw badRequest('答案不能为空');
-    if (gap.status !== 'open') throw new HttpError(409, 'gap_closed', '这个缺口已经处理过了');
+    if (gap.status !== 'open') throw new HttpError(409, 'gap_closed', '该缺口已处理');
     const entry = kb.insertEntry({
       type: 'faq',
       title: gap.question.slice(0, 200),
@@ -140,7 +140,7 @@ export function kbRouter(ctx, auth) {
       .filter((h) => isPlainObject(h) && (h.role === 'customer' || h.role === 'bot') && typeof h.text === 'string')
       .map((h) => ({ role: h.role, text: h.text }));
     if (!llmConfigured(ctx.getSettings(), ctx.config)) {
-      throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
     }
     // 与真实回复走同一个引擎（第 4 层的会话计数除外）
     const r = await decideReply(ctx, { message: message.trim(), history: hist });

@@ -46,7 +46,7 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
     modelSays('保温杯 A100 价格 59 元', ['no-such-id']);
     const r = await ask('保温杯多少钱');
     assert.equal(r.decision, 'handoff');
-    assert.match(r.reason, /不存在的条目 id/);
+    assert.match(r.reason, /条目 id 不存在/);
     // 模型连提示词里的 "id:" 前缀或方括号一起抄过来，照样认得
     for (const id of [`id:${cup.id}`, `[id:${cup.id}]`, ` ${cup.id} `]) {
       modelSays('保温杯 A100 价格 59 元', [id]);
@@ -185,7 +185,7 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
         modelSays(reply);
         const r = await ask('保温杯多少钱');
         assert.equal(r.decision, 'blocked', reply);
-        assert.match(r.reason, /价格数字对不上资料/, reply);
+        assert.match(r.reason, /价格与资料不符/, reply);
       }
     });
 
@@ -257,7 +257,7 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
         const r = await ask('保温杯多少钱');
         assert.equal(r.decision, 'blocked', reply);
         assert.equal(r.code, 'identity_leak', reply);
-        assert.match(r.reason, /会暴露是机器人/);
+        assert.match(r.reason, /暴露机器人身份/);
       }
       for (const reply of ['根据合同条款，A100 价格 59 元', '按我们的政策，A100 价格 59 元，7 天内可以退']) {
         modelSays(reply);
@@ -266,7 +266,7 @@ describe('防滥用与红线（/api/kb/ask，同一个引擎）', () => {
       }
     });
 
-    it('客户要折扣、想下单、问是不是机器人 → handoff，原因可读', async () => {
+    it('客户要折扣、想下单、询问是否为机器人 → handoff，原因可读', async () => {
       const cases = [
         ['能便宜点吗？给个折扣', '客户要求打折'],
         ['我要下单 200 个', '客户想下单'],
@@ -410,7 +410,7 @@ describe('防滥用：会话闸门（WhatsApp）', () => {
     const msgs = await waitDecided(t, cid(chat), 2);
     const last = msgs.filter((m) => m.direction === 'in').at(-1);
     assert.equal(last.botDecision, 'skipped');
-    assert.match(last.decisionReason, /模型调用已到上限/);
+    assert.match(last.decisionReason, /模型调用已达上限/);
     assert.equal(hooks.calls.generate, calls);
     assert.equal(fake.sentTo(chat).length, 1);
     // 日期变了就重新计数

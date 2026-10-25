@@ -53,7 +53,7 @@ function parseAccountIds(v) {
       throw badRequest('accountIds 必须是 JSON 数组');
     }
   }
-  if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || !x)) throw badRequest('accountIds 必须是号 id 的数组');
+  if (!Array.isArray(list) || list.some((x) => typeof x !== 'string' || !x)) throw badRequest('accountIds 必须是号码 id 的数组');
   return [...new Set(list)];
 }
 
@@ -61,7 +61,7 @@ const textField = (v, field, max) => {
   if (v === undefined || v === null) return '';
   if (typeof v !== 'string') throw badRequest(`${field} 必须是字符串`);
   const s = v.trim();
-  if (s.length > max) throw badRequest(`${field} 太长，最多 ${max} 个字符`);
+  if (s.length > max) throw badRequest(`${field} 过长，最多 ${max} 个字符`);
   return s;
 };
 
@@ -217,21 +217,21 @@ export function createOutreach(ctx, opts = {}) {
     const mode = b.mode;
     if (!CAMPAIGN_MODES.includes(mode)) throw badRequest('mode 只能是 single 或 pooled');
     const accountIds = parseAccountIds(b.accountIds);
-    if (!accountIds.length) throw badRequest('至少选择一个号', 'accounts_required');
-    if (mode === 'single' && accountIds.length !== 1) throw badRequest('「指定一个号」只能选一个号');
+    if (!accountIds.length) throw badRequest('请至少选择一个号码', 'accounts_required');
+    if (mode === 'single' && accountIds.length !== 1) throw badRequest('「指定号码」仅可选择一个号码');
     // agent 只能选分配给自己的号
     if (accountIds.some((id) => !canAccessAccount(user, id))) throw forbidden();
     const accs = accountIds.map((id) => {
       const a = accounts.get(id);
-      if (!a) throw badRequest('选的号不存在或已删除', 'account_not_found');
+      if (!a) throw badRequest('所选号码不存在或已删除', 'account_not_found');
       // LINE 官方帐号只能给加了好友的人发消息，号码文件里的手机号对不上 LINE 用户
-      if (a.channel === 'line') throw badRequest(`「${a.name}」是 LINE 官方帐号，不能外联群发：LINE 只能给加了好友的人发消息，按手机号找不到人`, 'line_unsupported');
+      if (a.channel === 'line') throw badRequest(`「${a.name}」为 LINE 官方帐号，不支持外联：LINE 仅可向好友发送消息，无法按手机号查找用户`, 'line_unsupported');
       // 扫码登录的是个人帐号：给没聊过的人群发很容易被 Telegram 判成垃圾消息封号
       if (a.channel === 'tguser') {
-        throw badRequest(`「${a.name}」是 Telegram 扫码登录的个人帐号，不能外联群发：用个人帐号给没聊过的人群发很容易被 Telegram 封号，只能回复来找你的人`, 'telegram_unsupported');
+        throw badRequest(`「${a.name}」为 Telegram 扫码登录的个人帐号，不支持外联：个人帐号向陌生用户群发易被 Telegram 封号，仅可回复主动联系的用户`, 'telegram_unsupported');
       }
       // Telegram 按手机号找不到人，机器人也不能先给没说过话的人发消息
-      if (isTelegram(a.channel)) throw badRequest(`「${a.name}」是 Telegram 号，不能外联群发：Telegram 按手机号找不到人，只能回复来找你的人`, 'telegram_unsupported');
+      if (isTelegram(a.channel)) throw badRequest(`「${a.name}」为 Telegram 号码，不支持外联：Telegram 无法按手机号查找用户，仅可回复主动联系的用户`, 'telegram_unsupported');
       return a;
     });
     const defaultCountry = textField(b.defaultCountry, 'defaultCountry', 10).toUpperCase() || 'CN';
@@ -241,7 +241,7 @@ export function createOutreach(ctx, opts = {}) {
     const tplName = hasMeta ? textField(b.metaTemplateName, 'metaTemplateName', 512) : '';
     const tplLang = hasMeta ? textField(b.metaTemplateLanguage, 'metaTemplateLanguage', 20) : '';
     if (hasMeta && (!tplName || !tplLang)) {
-      throw badRequest('选中的号里有 Meta 号：Meta 主动发起会话必须用审核通过的模板消息，请填写模板名和语言', 'template_required');
+      throw badRequest('所选号码包含 Meta 号码：Meta 主动发起会话须使用已审核的模板消息，请填写模板名和语言', 'template_required');
     }
     if (accs.some((a) => a.channel !== 'meta') && !message) throw badRequest('请填写开场消息', 'message_required');
     // 屏蔽词：开场消息里有就不建任务（400），管理员会收到提醒。只选了 Meta 号时发的是模板，这段消息不发出去，不查
@@ -257,12 +257,12 @@ export function createOutreach(ctx, opts = {}) {
 
     // 号码文件：.txt，UTF-8，≤1MB（multer 限制），号码行 ≤10000
     if (!file) throw badRequest('请上传号码文件（字段名 file）', 'file_required');
-    if (!/\.txt$/i.test(String(file.originalname || ''))) throw badRequest('只支持 .txt 文件', 'unsupported_file');
+    if (!/\.txt$/i.test(String(file.originalname || ''))) throw badRequest('仅支持 .txt 文件', 'unsupported_file');
     let text;
     try {
       text = new TextDecoder('utf-8', { fatal: true }).decode(file.buffer);
     } catch {
-      throw badRequest('文件不是 UTF-8 编码，请另存为 UTF-8 后再上传', 'bad_encoding');
+      throw badRequest('文件不是 UTF-8 编码，请转为 UTF-8 后重新上传', 'bad_encoding');
     }
     const items = [];
     text
@@ -272,9 +272,9 @@ export function createOutreach(ctx, opts = {}) {
         const s = raw.trim();
         if (s && !s.startsWith('#')) items.push({ line: i + 1, raw: s });
       });
-    if (!items.length) throw badRequest('文件里没有号码', 'empty_file');
+    if (!items.length) throw badRequest('文件中无号码', 'empty_file');
     if (items.length > MAX_NUMBER_LINES) {
-      throw badRequest(`号码不能超过 ${MAX_NUMBER_LINES} 行，这个文件有 ${items.length} 行`, 'too_many_lines');
+      throw badRequest(`号码不能超过 ${MAX_NUMBER_LINES} 行，当前文件 ${items.length} 行`, 'too_many_lines');
     }
 
     // 预检：格式 → 重复 → 通知号码 → 联系过 → 分配 → 分到的号的黑名单
@@ -335,7 +335,7 @@ export function createOutreach(ctx, opts = {}) {
   }
 
   // ---------------- 状态 ----------------
-  const badStatus = (c, action) => new HttpError(409, 'invalid_status', `任务当前是「${campaignStatusLabel(c.status)}」，不能${action}`);
+  const badStatus = (c, action) => new HttpError(409, 'invalid_status', `任务当前状态为「${campaignStatusLabel(c.status)}」，无法${action}`);
 
   /** 没有待发号码的 running 任务转为 done */
   function checkDone(campaignId) {
@@ -407,7 +407,7 @@ export function createOutreach(ctx, opts = {}) {
    * @returns {{recipients:any[], total:number}}
    */
   function recipients(id, { status = '', page = 1, pageSize = 50 } = {}) {
-    if (status && !RECIPIENT_STATUSES.includes(status)) throw badRequest('status 只能是 pending、sent、failed 或 skipped');
+    if (status && !RECIPIENT_STATUSES.includes(status)) throw badRequest('status 须为 pending、sent、failed 或 skipped');
     const p = Number(page);
     const size = Number(pageSize);
     if (!Number.isInteger(p) || p < 1) throw badRequest('page 必须是从 1 开始的整数');
@@ -462,7 +462,7 @@ export function createOutreach(ctx, opts = {}) {
   function dropDeletedAccount(accountId) {
     const ids = db.prepare(`SELECT DISTINCT r.campaign_id ${PENDING_JOIN}`).all(accountId);
     db.prepare(
-      `UPDATE campaign_recipients SET status = 'failed', error = '发送用的号已删除'
+      `UPDATE campaign_recipients SET status = 'failed', error = '发送号码已删除'
        WHERE account_id = ? AND status = 'pending' AND campaign_id IN (SELECT id FROM campaigns WHERE status = 'running')`,
     ).run(accountId);
     for (const r of ids) checkDone(r.campaign_id);
@@ -501,7 +501,7 @@ export function createOutreach(ctx, opts = {}) {
         user: r.created_by_id ? { id: r.created_by_id, name: r.created_by_name } : null,
       });
       if (hit) {
-        const error = `开场消息里有屏蔽词${quoteWords(hit.words)}，任务已自动暂停，没有发出`;
+        const error = `开场消息含屏蔽词${quoteWords(hit.words)}，任务已自动暂停，未发送`;
         db.prepare("UPDATE campaigns SET status = 'paused', error = ? WHERE id = ? AND status = 'running'").run(error, r.campaign_id);
         log.warn(`[outreach] 外联任务 ${r.campaign_id} 的开场消息命中屏蔽词，已自动暂停`);
         return false;
@@ -541,7 +541,7 @@ export function createOutreach(ctx, opts = {}) {
       log.warn(`[outreach] 号 ${acc.id} 发外联失败（任务 ${r.campaign_id}，连续第 ${n} 次）`);
       if (n >= FAILS_TO_PAUSE) {
         fails.delete(key);
-        const error = `号「${acc.name}」连续 ${n} 次发送失败，任务已自动暂停。最后一次的错误：${msg}`;
+        const error = `号码「${acc.name}」连续 ${n} 次发送失败，任务已自动暂停。最近一次错误：${msg}`;
         const p = db.prepare("UPDATE campaigns SET status = 'paused', error = ? WHERE id = ? AND status = 'running'").run(error, r.campaign_id);
         if (p.changes) log.warn(`[outreach] 外联任务 ${r.campaign_id} 在号 ${acc.id} 上连续失败 ${n} 次，已自动暂停`);
       }

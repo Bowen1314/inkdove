@@ -44,8 +44,8 @@ function headersOf(cfg) {
 function check(cfg) {
   const apiKey = String(cfg.apiKey || '').trim();
   const region = String(cfg.region || '').trim();
-  if (!apiKey) throw new TranslateError('Azure 翻译还没有填 API Key', 'config');
-  if (!visibleAscii(apiKey)) throw new TranslateError('Azure 翻译的 API Key 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+  if (!apiKey) throw new TranslateError('Azure 翻译未填写 API Key', 'config');
+  if (!visibleAscii(apiKey)) throw new TranslateError('Azure 翻译的 API Key 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   return { apiKey, region, endpoint: String(cfg.endpoint || '').trim() };
 }
 
@@ -55,12 +55,12 @@ function azureError(res, redactOpts) {
   const code = Number(err?.code);
   const detail = detailOf(typeof err?.message === 'string' ? err.message : res.text, redactOpts);
   const tail = detail ? `：${detail}` : '';
-  if (code === 403001) throw new TranslateError(`Azure 翻译的免费额度用完了（403001）${tail}`, 'quota', { status: res.status });
+  if (code === 403001) throw new TranslateError(`Azure 翻译免费额度已用尽（403001）${tail}`, 'quota', { status: res.status });
   if (res.status === 400 && /language/i.test(detail)) {
-    throw new TranslateError(`Azure 翻译不支持这个语言（${code || 400}）${tail}`, 'unsupported_language', { status: 400 });
+    throw new TranslateError(`Azure 翻译不支持该语言（${code || 400}）${tail}`, 'unsupported_language', { status: 400 });
   }
   if (res.status === 401) {
-    throw new TranslateError(`Azure 翻译鉴权失败（${code || 401}）${tail}。请检查 API Key 和区域（Global 资源区域留空）`, 'auth', { status: 401 });
+    throw new TranslateError(`Azure 翻译鉴权失败（${code || 401}）${tail}。请检查 API Key 和区域（Global 资源的区域留空）`, 'auth', { status: 401 });
   }
   throw httpError(LABEL, res, redactOpts, detail);
 }
@@ -109,7 +109,7 @@ export default {
       onAttempt: o.onAttempt,
     });
     if (!res.ok) azureError(res, redactOpts);
-    if (!Array.isArray(res.data)) throw badResponse(LABEL, '语言检测返回的不是数组');
+    if (!Array.isArray(res.data)) throw badResponse(LABEL, '语言检测结果非数组');
     return normalizeLang(res.data[0]?.language);
   },
 };

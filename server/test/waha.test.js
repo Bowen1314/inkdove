@@ -500,13 +500,13 @@ describe('手机号配对码', () => {
     assert.equal(fake.state.codeRequests.at(-1).phoneNumber, '447700900123');
   });
 
-  it('号码格式不对：400 bad_phone，不碰 WAHA', async () => {
+  it('号码格式错误：400 bad_phone，不碰 WAHA', async () => {
     const acc = await newAcc();
     for (const bad of ['13800', '+86 138 0000 0000 00000', 'abc12345678', '+0 138 0000 0000', '', null, 8613812345678]) {
       const r = await reqCode(acc, bad);
       assert.equal(r.status, 400, JSON.stringify(bad));
       assert.equal(r.body.code, 'bad_phone');
-      assert.match(r.body.error, /国家码/);
+      assert.match(r.body.error, /国家区号/);
     }
     const noBody = await t.req('POST', `/api/accounts/${acc.id}/waha/request-code`, { body: [] });
     assert.equal(noBody.status, 400);
@@ -539,7 +539,7 @@ describe('手机号配对码', () => {
     const again = await reqCode(acc, PHONE);
     assert.equal(again.status, 429);
     assert.equal(again.body.code, 'too_frequent');
-    assert.match(again.body.error, /\d+ 秒后再试/);
+    assert.match(again.body.error, /\d+ 秒后重试/);
     assert.deepEqual(ops(acc), ['create', 'request-code']);
     assert.equal((await reqCode(await newAcc(), PHONE)).status, 200);
   });
@@ -604,7 +604,7 @@ describe('手机号配对码', () => {
       const r = await reqCode(await newAcc(), PHONE);
       assert.equal(r.status, 409);
       assert.equal(r.body.code, 'not_scan_qr');
-      assert.match(r.body.error, /不能获取配对码.*当前：正在启动/);
+      assert.match(r.body.error, /无法获取配对码.*当前：正在启动/);
       assert.doesNotMatch(r.body.error, /SCAN_QR_CODE|Can request/);
       fake.state.codeError = { status: 500, message: 'pairing failed' };
       const e = await reqCode(await newAcc(), PHONE);
@@ -685,7 +685,7 @@ describe('WAHA 出错时的错误文字', () => {
   });
 
   it('媒体下载 404 给一句人话；其他状态码照旧只写状态码', async () => {
-    await failsWith(client.fetchMedia('http://waha:3000/api/files/s/gone.jpg'), 'WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', 404);
+    await failsWith(client.fetchMedia('http://waha:3000/api/files/s/gone.jpg'), 'WAHA 返回 404：文件已过期或不存在', 404);
     await failsWith(client.fetchMedia('http://waha:3000/api/files/s/boom.jpg'), 'WAHA 返回 500', 500);
   });
 });

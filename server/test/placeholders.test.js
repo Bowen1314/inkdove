@@ -190,7 +190,7 @@ describe('【待你确认：…】：起草后译成中文（AI 翻译，mock）
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.ok(Date.now() - started < FIX_TIMEOUT_MS * 4, `最多多等 ${FIX_TIMEOUT_MS}ms`);
     assert.equal(r.body.draft.text, 'We can ship on 【待你确认：shipping date】.', '标签换回不用调接口');
-    assert.ok(warns.some((w) => w.includes('没有返回')), warns.join('\n'));
+    assert.ok(warns.some((w) => w.includes('未返回')), warns.join('\n'));
   });
 
   it('译文行数对不上：当失败，草稿照原样', async () => {
@@ -202,7 +202,7 @@ describe('【待你确认：…】：起草后译成中文（AI 翻译，mock）
     const r = await manual(convId);
     assert.equal(r.status, 200, JSON.stringify(r.body));
     assert.equal(r.body.draft.text, text);
-    assert.ok(warns.some((w) => w.includes('行数对不上')), warns.join('\n'));
+    assert.ok(warns.some((w) => w.includes('行数不一致')), warns.join('\n'));
   });
 
   it('「换一条」和跟进也改：上一条推荐带的是改好的；跟进起草后同样译成中文', async () => {

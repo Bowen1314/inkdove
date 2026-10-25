@@ -55,7 +55,7 @@ export async function httpGet(url, { headers = {}, timeoutMs = 60_000, signal, m
     const status = res.statusCode || 0;
     if (REDIRECTS.has(status) && res.headers.location) {
       res.resume(); // 正文不要，读掉放掉连接
-      if (hop >= maxRedirects) throw new HttpGetError('重定向次数太多');
+      if (hop >= maxRedirects) throw new HttpGetError('重定向次数过多');
       const next = new URL(res.headers.location, current);
       if (next.origin !== current.origin) {
         reqHeaders = Object.fromEntries(Object.entries(reqHeaders).filter(([k]) => !SECRET_HEADERS.has(k)));

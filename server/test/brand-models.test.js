@@ -192,18 +192,18 @@ describe('获取模型列表：listModels（假服务）', () => {
     f.state.handler = () => [403, { error: { message: `${'x'.repeat(190)}${KEY}${'y'.repeat(300)}` } }];
     const err = await listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }).catch((e) => e);
     assert.equal(err.message, `接口返回 403：${'x'.repeat(190)}***${'y'.repeat(7)}`);
-    // 不是 JSON 的错误页
+    // 非 JSON 的错误页
     f.state.handler = () => [502, '<html><body>Bad Gateway</body></html>'];
     assert.match((await listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }).catch((e) => e)).message, /^接口返回 502：/);
   });
 
-  it('返回的不是 JSON 或格式不对时说清楚', async () => {
+  it('返回的非 JSON 或格式错误时说清楚', async () => {
     f.state.handler = () => [200, '<!doctype html><title>首页</title>'];
-    await assert.rejects(listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }), /不是 JSON/);
+    await assert.rejects(listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }), /非 JSON/);
     f.state.handler = () => [200, { object: 'list' }];
-    await assert.rejects(listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }), /格式不对/);
+    await assert.rejects(listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY }), /格式错误/);
     f.state.handler = () => [200, { models: 'nope' }];
-    await assert.rejects(listModels({ format: 'gemini', baseUrl: f.url, apiKey: KEY }), /格式不对/);
+    await assert.rejects(listModels({ format: 'gemini', baseUrl: f.url, apiKey: KEY }), /格式错误/);
   });
 
   it('超时和连不上都给出看得懂的说明', async () => {
@@ -212,7 +212,7 @@ describe('获取模型列表：listModels（假服务）', () => {
     await assert.rejects(listModels({ format: 'openai', baseUrl: f.url, apiKey: KEY, timeoutMs: 80 }), /请求超时（0\.1 秒）/);
     assert.ok(Date.now() - started < 450, '没有等到服务端回复');
     const err = await listModels({ format: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: KEY }).catch((e) => e);
-    assert.match(err.message, /^连不上接口地址：/);
+    assert.match(err.message, /^无法连接接口地址：/);
     assert.ok(!err.message.includes(KEY));
   });
 
@@ -352,7 +352,7 @@ describe('品牌：网站名称和 Logo', () => {
   it('名称：去掉首尾空白、最多 40 个字符、不能有换行和控制字符；错误以 branding.title 开头', async () => {
     const long = await t.req('PUT', '/api/settings', { body: { branding: { title: '字'.repeat(41) } } });
     assert.equal(long.status, 400);
-    assert.match(long.body.error, /^branding\.title 太长/);
+    assert.match(long.body.error, /^branding\.title 最多 40 个字符/);
     for (const title of ['第一行\n第二行', 'a\rb', 'tab\there', 'x\u0000y', 'a b']) {
       const r = await t.req('PUT', '/api/settings', { body: { branding: { title } } });
       assert.equal(r.status, 400, JSON.stringify(title));
@@ -429,7 +429,7 @@ describe('品牌：网站名称和 Logo', () => {
     ]) {
       const r = await t.req('POST', '/api/settings/branding/logo', { body: logoForm(buf, name, type) });
       assert.equal(r.status, 400, name);
-      assert.equal(r.body.error, '只支持 PNG、JPG、WebP 或 SVG 图片', name);
+      assert.equal(r.body.error, '仅支持 PNG、JPG、WebP 或 SVG 图片', name);
     }
     assert.deepEqual(t.ctx.getSettings().branding.logo, before, '被拒时 logo 不变');
   });

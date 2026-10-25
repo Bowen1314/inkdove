@@ -28,8 +28,8 @@ export function redactUrl(text, url) {
 
 /** 内容不对时给人看的说明；不是 Clash 配置时，订阅的后面带上「请换成机场给的 Clash 订阅链接」 */
 export function clashErrorMessage(err, { pasted = false } = {}) {
-  if (pasted) return `粘贴的配置不对：${err.message}${err.notClash ? '。请粘贴 Clash 格式的配置（YAML，里面要有 proxies）' : ''}`;
-  return `订阅的内容不对：${err.message}${err.notClash ? `。${NOT_CLASH_HINT}` : ''}`;
+  if (pasted) return `粘贴的配置无效：${err.message}${err.notClash ? '。请粘贴 Clash 格式的配置（YAML，需包含 proxies）' : ''}`;
+  return `订阅内容无效：${err.message}${err.notClash ? `。${NOT_CLASH_HINT}` : ''}`;
 }
 
 /**
@@ -52,7 +52,7 @@ export async function fetchSubscription(url, { timeoutMs = SUBSCRIPTION_TIMEOUT_
     const declared = Number(headers['content-length']);
     if (Number.isFinite(declared) && declared > maxBytes) {
       stream.destroy();
-      throw new SubscriptionError(`订阅内容太大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB）`);
+      throw new SubscriptionError(`订阅内容过大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB）`);
     }
     const chunks = [];
     let n = 0;
@@ -60,7 +60,7 @@ export async function fetchSubscription(url, { timeoutMs = SUBSCRIPTION_TIMEOUT_
       n += c.length;
       if (n > maxBytes) {
         stream.destroy();
-        throw new SubscriptionError(`订阅内容太大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB）`);
+        throw new SubscriptionError(`订阅内容过大（超过 ${Math.round(maxBytes / 1024 / 1024)}MB）`);
       }
       chunks.push(c);
     }
@@ -71,7 +71,7 @@ export async function fetchSubscription(url, { timeoutMs = SUBSCRIPTION_TIMEOUT_
       const why = err.status ? `机场返回 HTTP ${err.status}` : /超时/.test(err.message) ? `超时（${Math.round(timeoutMs / 1000)} 秒）` : err.message;
       throw new SubscriptionError(redactUrl(`下载订阅失败：${why}`, url));
     }
-    if (signal?.aborted) throw new SubscriptionError('下载订阅被中止');
+    if (signal?.aborted) throw new SubscriptionError('下载订阅已中止');
     throw new SubscriptionError(redactUrl(`下载订阅失败：${err?.code || err?.message || err}`, url));
   }
   try {

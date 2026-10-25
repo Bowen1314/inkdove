@@ -92,7 +92,7 @@ export async function assertPublicUrl(raw) {
   if (u.protocol !== 'http:' && u.protocol !== 'https:') {
     throw new HttpError(400, 'invalid_url', '只支持 http 和 https 网址');
   }
-  if (u.username || u.password) throw new HttpError(400, 'invalid_url', '网址里不能带用户名密码');
+  if (u.username || u.password) throw new HttpError(400, 'invalid_url', '网址不能包含用户名和密码');
   const host = u.hostname.replace(/^\[|\]$/g, '');
   if (!host || host === 'localhost' || host.endsWith('.localhost')) {
     throw new HttpError(400, 'url_not_allowed', '不允许访问内网或本机地址');

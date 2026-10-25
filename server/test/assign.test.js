@@ -99,7 +99,7 @@ describe('按客户分配：权限和接口', () => {
     ]) {
       const r = await as(x, method, p, body);
       assert.equal(r.status, 403, `${method} ${p}`);
-      assert.deepEqual(r.body, { error: '没有权限', code: 'forbidden' });
+      assert.deepEqual(r.body, { error: '无权限', code: 'forbidden' });
     }
     assert.equal(fake.sentTo(chatOf(c)).length, 0);
     assert.equal((await getConv(t, c)).botPaused, false);

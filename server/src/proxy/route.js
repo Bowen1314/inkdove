@@ -45,13 +45,13 @@ export class ProxyConnectError extends Error {}
  */
 export async function connectViaProxy(t) {
   const a = active;
-  if (!a) throw new ProxyConnectError('全局代理没有开启');
+  if (!a) throw new ProxyConnectError('全局代理未开启');
   await a.waitReady();
   const host = unbracket(t.host);
   const target = `${hostPart(host)}:${t.port}`;
   const sock = await new Promise((resolve, reject) => {
     const s = net.connect({ host: '127.0.0.1', port: a.port });
-    const timer = setTimeout(() => fail(new ProxyConnectError(`经全局代理连 ${target} 超时`)), t.timeoutMs ?? CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(() => fail(new ProxyConnectError(`经全局代理连接 ${target} 超时`)), t.timeoutMs ?? CONNECT_TIMEOUT_MS);
     let buf = Buffer.alloc(0);
     function fail(err) {
       clearTimeout(timer);
@@ -76,8 +76,8 @@ export async function connectViaProxy(t) {
       if (rest.length) s.unshift(rest);
       resolve(s);
     }
-    const onError = (err) => fail(new ProxyConnectError(`连不上全局代理（mihomo）：${err?.code || err?.message || err}`));
-    const onClose = () => fail(new ProxyConnectError(`全局代理在建立到 ${target} 的连接前断开了`));
+    const onError = (err) => fail(new ProxyConnectError(`无法连接全局代理（mihomo）：${err?.code || err?.message || err}`));
+    const onClose = () => fail(new ProxyConnectError(`全局代理在连接 ${target} 前断开`));
     s.once('connect', () => {
       s.setNoDelay(true);
       s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n\r\n`);
@@ -91,7 +91,7 @@ export async function connectViaProxy(t) {
   return new Promise((resolve, reject) => {
     const servername = t.servername || (net.isIP(host) ? undefined : host);
     const ts = tls.connect({ socket: sock, servername, ALPNProtocols: t.alpn || ['http/1.1'] });
-    const timer = setTimeout(() => ts.destroy(new ProxyConnectError(`经全局代理和 ${target} 握手超时`)), t.timeoutMs ?? CONNECT_TIMEOUT_MS);
+    const timer = setTimeout(() => ts.destroy(new ProxyConnectError(`经全局代理与 ${target} 握手超时`)), t.timeoutMs ?? CONNECT_TIMEOUT_MS);
     ts.once('secureConnect', () => {
       clearTimeout(timer);
       ts.off('error', onError);
@@ -103,7 +103,7 @@ export async function connectViaProxy(t) {
       reject(
         err instanceof ProxyConnectError || err?.code?.startsWith?.('ERR_TLS') || /certificate|self.signed/i.test(err?.message || '')
           ? err
-          : new ProxyConnectError(`经全局代理连 ${target} 失败（节点连不上目标，或者节点不可用）：${err?.code || err?.message || err}`),
+          : new ProxyConnectError(`经全局代理连接 ${target} 失败（节点无法连接目标或不可用）：${err?.code || err?.message || err}`),
       );
     };
     ts.once('error', onError);
@@ -183,7 +183,7 @@ export function enableRouting(o) {
           return await Promise.race([
             o.waitReady(),
             new Promise((_, reject) => {
-              timer = setTimeout(() => reject(new ProxyConnectError('全局代理还没启动好，请稍后再试')), READY_WAIT_MS);
+              timer = setTimeout(() => reject(new ProxyConnectError('全局代理正在启动，请稍后重试')), READY_WAIT_MS);
             }),
           ]);
         } finally {

@@ -18,17 +18,17 @@ export const CONNECT_ERRORS = {
   ECONNREFUSED: '连接被拒绝',
   ENOTFOUND: '域名解析失败',
   EAI_AGAIN: '域名解析失败',
-  ECONNRESET: '连接被对方断开',
+  ECONNRESET: '连接被对端重置',
   EHOSTUNREACH: '主机不可达',
   ENETUNREACH: '网络不可达',
   ETIMEDOUT: '连接超时',
   UND_ERR_CONNECT_TIMEOUT: '连接超时',
-  UND_ERR_SOCKET: '连接被对方断开',
+  UND_ERR_SOCKET: '连接被对端关闭',
   CERT_HAS_EXPIRED: 'HTTPS 证书已过期',
-  DEPTH_ZERO_SELF_SIGNED_CERT: 'HTTPS 证书是自签名的',
-  SELF_SIGNED_CERT_IN_CHAIN: 'HTTPS 证书是自签名的',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'HTTPS 证书为自签名证书',
+  SELF_SIGNED_CERT_IN_CHAIN: 'HTTPS 证书为自签名证书',
   UNABLE_TO_VERIFY_LEAF_SIGNATURE: 'HTTPS 证书校验失败',
-  ERR_TLS_CERT_ALTNAME_INVALID: 'HTTPS 证书和域名不匹配',
+  ERR_TLS_CERT_ALTNAME_INVALID: 'HTTPS 证书与域名不匹配',
 };
 
 /** 把密钥原文（含 URL 编码后的样子）从任意文本里抹掉 */
@@ -82,7 +82,7 @@ async function getJson(url, headers, apiKey, signal) {
     if (err?.name === 'TimeoutError' || signal.aborted) throw err;
     const code = err?.cause?.code || err?.code || '';
     const reason = CONNECT_ERRORS[code] ? `${CONNECT_ERRORS[code]}（${code}）` : code || err?.cause?.message || err?.message || String(err);
-    throw new LlmError(`连不上接口地址：${redactKey(reason, apiKey)}`);
+    throw new LlmError(`无法连接接口地址：${redactKey(reason, apiKey)}`);
   }
   if (!res.ok) {
     // 先抹密钥再截断，免得截出半截密钥
@@ -92,7 +92,7 @@ async function getJson(url, headers, apiKey, signal) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new LlmError('接口返回的不是 JSON，请检查接口地址是否正确');
+    throw new LlmError('接口返回的内容非 JSON，请检查接口地址');
   }
 }
 
@@ -107,18 +107,18 @@ async function getJson(url, headers, apiKey, signal) {
  */
 export async function listModels({ format, baseUrl, apiKey = '', timeoutMs = 15000 }) {
   if (!LLM_FORMATS.includes(format)) throw new LlmError(`不支持的接口格式：${format}`);
-  if (!String(baseUrl || '').trim()) throw new LlmError('还没有填写接口地址');
+  if (!String(baseUrl || '').trim()) throw new LlmError('未填写接口地址');
   const key = String(apiKey || '');
   // 密钥只能是可见 ASCII，否则 fetch 拼请求头时会报错，而且报错信息里带着密钥
-  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new LlmError('API 密钥里有空格、中文或其他特殊字符，请检查后重新填写');
+  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new LlmError('API 密钥包含空格、中文或其他非法字符，请检查后重新输入');
 
   let modelsUrl;
   try {
     modelsUrl = new URL(`${llmRoot(format, baseUrl)}/models`);
   } catch {
-    throw new LlmError('接口地址格式不对');
+    throw new LlmError('接口地址格式错误');
   }
-  if (!/^https?:$/.test(modelsUrl.protocol)) throw new LlmError('接口地址必须以 http:// 或 https:// 开头');
+  if (!/^https?:$/.test(modelsUrl.protocol)) throw new LlmError('接口地址需以 http:// 或 https:// 开头');
 
   const headers = { accept: 'application/json' };
   if (format === 'anthropic') {
@@ -141,8 +141,8 @@ export async function listModels({ format, baseUrl, apiKey = '', timeoutMs = 150
         const u = new URL(modelsUrl);
         if (pageToken) u.searchParams.set('pageToken', pageToken);
         const data = await getJson(u.href, headers, key, signal);
-        if (data?.models !== undefined && !Array.isArray(data.models)) throw new LlmError('接口返回格式不对（models 不是数组）');
-        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('接口返回格式不对（缺少 models）');
+        if (data?.models !== undefined && !Array.isArray(data.models)) throw new LlmError('接口返回格式错误（models 非数组）');
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new LlmError('接口返回格式错误（缺少 models）');
         for (const m of data.models || []) {
           const methods = Array.isArray(m?.supportedGenerationMethods) ? m.supportedGenerationMethods : [];
           if (typeof m?.name !== 'string' || !methods.includes('generateContent')) continue;
@@ -155,7 +155,7 @@ export async function listModels({ format, baseUrl, apiKey = '', timeoutMs = 150
     }
     const data = await getJson(modelsUrl.href, headers, key, signal);
     const list = Array.isArray(data) ? data : data?.data;
-    if (!Array.isArray(list)) throw new LlmError('接口返回格式不对（缺少 data 数组）');
+    if (!Array.isArray(list)) throw new LlmError('接口返回格式错误（缺少 data 数组）');
     return normalizeModels(list.map((m) => ({ id: m?.id, label: format === 'anthropic' ? m?.display_name : undefined })));
   } catch (err) {
     if (err instanceof LlmError) throw err;

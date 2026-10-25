@@ -107,7 +107,7 @@ export function selfUser(r) {
   return { ...rowToUser(r), stylePrompt: r.style_prompt ?? '', profile: profileOfRow(r) };
 }
 
-export const forbidden = () => new HttpError(403, 'forbidden', '没有权限');
+export const forbidden = () => new HttpError(403, 'forbidden', '无权限');
 
 /** 这个用户能不能操作这个号：admin 能看所有号，agent 只能看分配给自己的 */
 export function canAccessAccount(user, accountId) {
@@ -259,7 +259,7 @@ export function createAuth(ctx) {
     if (typeof pw !== 'string' || pw.length < MIN_NEW_PASSWORD) {
       throw badRequest(`新密码至少 ${MIN_NEW_PASSWORD} 个字符`, 'weak_password');
     }
-    if (pw.length > 200) throw badRequest('密码太长', 'weak_password');
+    if (pw.length > 200) throw badRequest('密码超出长度限制', 'weak_password');
   };
 
   return {
@@ -278,7 +278,7 @@ export function createAuth(ctx) {
       const password = req.body?.password;
       const emailKey = `email:${email}`;
       if (recentFailures(ip).length >= FAIL_LIMIT || (email && recentFailures(emailKey).length >= FAIL_LIMIT)) {
-        throw new HttpError(429, 'rate_limited', '尝试次数过多，请一分钟后再试');
+        throw new HttpError(429, 'rate_limited', '尝试次数过多，请 1 分钟后重试');
       }
       const row = email ? getUserByEmail(email) : null;
       const ok = typeof password === 'string' && password.length <= 200 && (await verifyPassword(password, row?.password_hash));
@@ -287,7 +287,7 @@ export function createAuth(ctx) {
         if (email) addFailure(emailKey);
         throw new HttpError(401, 'bad_credentials', '邮箱或密码错误');
       }
-      if (row.disabled) throw new HttpError(403, 'account_disabled', '这个账号已被停用，请联系管理员');
+      if (row.disabled) throw new HttpError(403, 'account_disabled', '该帐号已停用，请联系管理员');
       failures.delete(ip);
       failures.delete(emailKey);
       startSession(res, row.id);
@@ -325,15 +325,15 @@ export function createAuth(ctx) {
       const b = req.body;
       if (!b || typeof b !== 'object' || Array.isArray(b)) throw badRequest('请求体必须是 JSON 对象');
       const keys = Object.keys(PROFILE_FIELDS).filter((k) => b[k] !== undefined);
-      if (!keys.length) throw badRequest(`至少要给一个字段：${Object.keys(PROFILE_FIELDS).join('、')}`);
+      if (!keys.length) throw badRequest(`至少需提供一个字段：${Object.keys(PROFILE_FIELDS).join('、')}`);
       const sets = [];
       const values = [];
       for (const k of keys) {
         const f = PROFILE_FIELDS[k];
         if (typeof b[k] !== 'string') throw badRequest(`${k} 必须是字符串`);
         const v = f.multiline ? b[k].trim() : b[k].replace(/\s+/g, ' ').trim();
-        if (v.length > f.max) throw badRequest(`${f.label}太长，最多 ${f.max} 个字符`);
-        if (k === 'contactEmail' && v && !EMAIL_RE.test(v)) throw badRequest('联系邮箱格式不对');
+        if (v.length > f.max) throw badRequest(`${f.label}最多 ${f.max} 个字符`);
+        if (k === 'contactEmail' && v && !EMAIL_RE.test(v)) throw badRequest('联系邮箱格式错误');
         sets.push(`${f.column} = ?`);
         values.push(v);
       }
@@ -345,7 +345,7 @@ export function createAuth(ctx) {
     setStylePrompt(req, res) {
       const v = req.body?.stylePrompt;
       if (typeof v !== 'string') throw badRequest('stylePrompt 必须是字符串');
-      if (v.length > MAX_STYLE_PROMPT) throw badRequest(`stylePrompt 太长，最多 ${MAX_STYLE_PROMPT} 个字符`);
+      if (v.length > MAX_STYLE_PROMPT) throw badRequest(`stylePrompt 最多 ${MAX_STYLE_PROMPT} 个字符`);
       db.prepare('UPDATE users SET style_prompt = ? WHERE id = ?').run(v, req.user.id);
       res.json({ user: selfUser(getUserRow(req.user.id)) });
     },
@@ -361,7 +361,7 @@ export function createAuth(ctx) {
       const { currentPassword, newPassword } = req.body || {};
       const row = getUserRow(req.user.id);
       if (typeof currentPassword !== 'string' || !(await verifyPassword(currentPassword, row.password_hash))) {
-        throw new HttpError(400, 'wrong_password', '当前密码不对');
+        throw new HttpError(400, 'wrong_password', '当前密码错误');
       }
       checkNewPassword(newPassword);
       db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(await hashPassword(newPassword), row.id);
@@ -397,7 +397,7 @@ export function createAuth(ctx) {
 
     validateEmail(email) {
       const e = normalizeEmail(email);
-      if (!EMAIL_RE.test(e) || e.length > 200) throw badRequest('邮箱格式不对');
+      if (!EMAIL_RE.test(e) || e.length > 200) throw badRequest('邮箱格式错误');
       return e;
     },
   };

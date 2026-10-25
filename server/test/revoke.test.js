@@ -250,7 +250,7 @@ describe('消息撤回', () => {
       r = await revoke(convId, sent.id);
       assert.equal(r.status, 409);
       assert.equal(r.body.code, 'not_connected');
-      assert.match(r.body.error, /没连上 WhatsApp/);
+      assert.match(r.body.error, /未连接 WhatsApp/);
     } finally {
       fake.state.revokeError = null;
     }

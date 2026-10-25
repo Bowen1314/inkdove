@@ -109,7 +109,7 @@ export function createReranker(ctx, { now = Date.now } = {}) {
         let r;
         try {
           r = await ctx.ai.rerank({ query: q, documents: head.map(rerankDocText) });
-          if (!Array.isArray(r?.results)) throw Object.assign(new Error('重排接口没有返回结果'), { kind: 'bad_response' });
+          if (!Array.isArray(r?.results)) throw Object.assign(new Error('重排接口未返回结果'), { kind: 'bad_response' });
         } catch (err) {
           const kind = typeof err?.kind === 'string' ? err.kind : 'error';
           warnThrottled(kind, `[rerank] 重排没成功，这次按原来的顺序：${err?.message || err}`);

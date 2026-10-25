@@ -425,7 +425,7 @@ describe('推荐回复的结果', () => {
     let item = list.body.items[0];
     assert.equal(item.conversationId, convId);
     assert.equal(item.outcome, 'edited');
-    assert.equal(item.outcomeLabel, '改了再发');
+    assert.equal(item.outcomeLabel, '修改后发送');
     assert.equal(item.question, 'lead time?');
     assert.equal(item.text, DRAFT_EN);
     assert.match(item.sentText, /about 2 weeks/);

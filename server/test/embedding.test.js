@@ -182,7 +182,7 @@ describe('向量接口客户端：OpenAI 兼容和 Gemini（本地假服务）',
     assert.equal(parseRetryAfter('999999'), 3_600_000, '最多信 1 小时');
   });
 
-  it('返回格式不对：不是 JSON、缺 data、条数不对、不是数字、维度不一致都是 bad_response', async () => {
+  it('返回格式错误：非 JSON、缺 data、条数不对、不是数字、维度不一致都是 bad_response', async () => {
     const cfg = { format: 'openai', baseUrl: f.url, apiKey: KEY, model: 'm' };
     const kindOf = async (body) => {
       f.state.handler = () => [200, body];
@@ -200,7 +200,7 @@ describe('向量接口客户端：OpenAI 兼容和 Gemini（本地假服务）',
   it('连不上、超时、配置不对（密钥里有中文、地址不是 http）：分别是 network、timeout、config；config 不发请求', async () => {
     const e = await embedTexts({ format: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: KEY, model: 'm' }, ['x']).catch((x) => x);
     assert.equal(e.kind, 'network');
-    assert.match(e.message, /^连不上向量接口/);
+    assert.match(e.message, /^无法连接向量接口/);
     assert.ok(!e.message.includes(KEY));
     f.state.handler = () => [200, openaiReply(['x']), {}, 2000];
     const slow = await embedTexts({ format: 'openai', baseUrl: f.url, apiKey: KEY, model: 'm' }, ['x'], { timeoutMs: 50 }).catch((x) => x);
@@ -579,7 +579,7 @@ describe('后台计算', () => {
     clock += BACKOFF_BASE_MS * 2 + 1;
     hooks.embed = () => {
       n++;
-      throw new EmbedError('连不上向量接口：拒绝连接', 'network');
+      throw new EmbedError('无法连接向量接口：拒绝连接', 'network');
     };
     await vectors().run();
     assert.equal(n, 3);
@@ -609,7 +609,7 @@ describe('后台计算', () => {
     let s = vectors().status();
     assert.equal(s.state, 'idle');
     assert.equal(s.skippedEntries, 1);
-    assert.match(s.lastError.message, /1 条条目算不了向量/);
+    assert.match(s.lastError.message, /1 条条目无法计算向量/);
     assert.ok(good.every((e) => vectors().index().has(e.id)));
     assert.equal(vectors().index().has(bad.id), false);
 
@@ -774,7 +774,7 @@ describe('后台计算：一条都没算出来时放慢重试', () => {
     assert.equal(r.wait, COLD_RETRY_MS, '第 5 次失败后等 30 分钟');
     assert.equal(
       r.s.hint,
-      '一条都没算出来，连续失败 5 次，多半是模型名或服务地址不对（有的中转站的分组里没有向量模型）。已改成每 30 分钟重试一次；改好设置或点「重试」会马上再试。',
+      '所有条目均计算失败，已连续失败 5 次，可能是模型名或服务地址有误（部分中转站分组不含向量模型）。已改为每 30 分钟重试一次；修改设置或点击「重试」将立即重试。',
     );
     assert.equal((await t.req('GET', '/api/kb/vectors')).body.hint, r.s.hint);
     assert.ok(t.log.lines.some((l) => l.includes('一条向量都没算出来，连续失败 5 次')));

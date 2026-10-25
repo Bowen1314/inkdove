@@ -243,7 +243,7 @@ describe('LINE 官方帐号', () => {
     const rv = await t.req('POST', `${convPath(cid(u))}/messages/${out.id}/revoke`, { body: {} });
     assert.equal(rv.status, 400);
     assert.equal(rv.body.code, 'revoke_unsupported');
-    assert.match(JSON.stringify(rv.body), /LINE 官方帐号不能撤回/);
+    assert.match(JSON.stringify(rv.body), /LINE 官方帐号不支持撤回/);
   });
 
   it('重发的事件（webhookEventId 相同）只存一次；不同事件 id、相同消息 id 也只存一次', async () => {
@@ -391,7 +391,7 @@ describe('LINE 官方帐号', () => {
     assert.match(n.text, /客户：山田花子（LINE）/);
     // userId 只在「去处理」的会话链接里出现
     assert.ok(!n.subject.includes(u));
-    assert.ok(!n.text.split('\n').filter((l) => !l.startsWith('去处理：')).some((l) => l.includes(u)));
+    assert.ok(!n.text.split('\n').filter((l) => !l.startsWith('查看会话：')).some((l) => l.includes(u)));
   });
 
   it('外联群发不能选 LINE 官方帐号', async () => {
@@ -423,18 +423,18 @@ describe('LINE 官方帐号', () => {
     const dup = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([item])) });
     assert.equal(dup.status, 200, JSON.stringify(dup.body));
     assert.equal(dup.body.created.length, 0);
-    assert.match(dup.body.skipped[0].reason, new RegExp(`Channel ID ${CHANNEL_ID} 已经被号「LINE 号」使用`));
+    assert.match(dup.body.skipped[0].reason, new RegExp(`Channel ID ${CHANNEL_ID} 已被号码「LINE 号」使用`));
     const other = { ...item, name: 'LINE 二号', line: { ...item.line, channelId: '1650000002' } };
     const ok = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([other, { ...other, name: 'LINE 三号' }])) });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal(ok.body.created.length, 1);
-    assert.match(ok.body.skipped[0].reason, /和文件里前面的号「LINE 二号」重复/);
+    assert.match(ok.body.skipped[0].reason, /与文件中靠前的号码「LINE 二号」重复/);
     const created = t.ctx.accounts.get(ok.body.created[0].id);
     assert.equal(created.channel, 'line');
     assert.deepEqual(created.line, { ...LINE_CONFIG, channelId: '1650000002' });
     const bad = await t.req('POST', '/api/accounts/import', { body: fileOf(doc([{ ...item, channel: 'waha' }])) });
     assert.equal(bad.status, 400);
-    assert.match(bad.body.message || JSON.stringify(bad.body), /line 只有 LINE 官方帐号才有/);
+    assert.match(bad.body.message || JSON.stringify(bad.body), /line 仅适用于 LINE 官方帐号/);
   });
 
   it('操作日志：Channel ID 照记，secret 和 token 只记已设置；密钥不出现在接口和日志里', async () => {

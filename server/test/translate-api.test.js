@@ -86,8 +86,8 @@ describe('翻译 API：设置', () => {
       [{ providers: { deeplx: { url: 'ftp://deeplx.example.com/SECRET-1' } } }, /^translation\.providers\.deeplx\.url .*http/],
       [{ providers: { libretranslate: { url: 'javascript:alert(1)' } } }, /^translation\.providers\.libretranslate\.url /],
       [{ providers: { deepl: { apiKey: '密钥 secret-zzzz' } } }, /^translation\.providers\.deepl\.apiKey .*特殊字符/],
-      [{ providers: { tencent: { region: 'Guangzhou!' } } }, /^translation\.providers\.tencent\.region 格式不对/],
-      [{ providers: { azure: { region: 'east asia' } } }, /^translation\.providers\.azure\.region 格式不对/],
+      [{ providers: { tencent: { region: 'Guangzhou!' } } }, /^translation\.providers\.tencent\.region 格式错误/],
+      [{ providers: { azure: { region: 'east asia' } } }, /^translation\.providers\.azure\.region 格式错误/],
       [{ providers: { azure: { endpoint: 'myres.cognitiveservices.azure.com' } } }, /^translation\.providers\.azure\.endpoint /],
       [{ providers: { deepl: 'k' } }, /^translation\.providers\.deepl 必须是对象/],
       [{ providers: { deepl: { apiKey: 'a'.repeat(201) } } }, /^translation\.providers\.deepl\.apiKey /],
@@ -233,7 +233,7 @@ describe('翻译 API：测试接口', () => {
   it('密钥没填时用已保存的；都没有时不发请求，返回 {ok:false, kind:config, field}', async () => {
     fake.state.requests.length = 0;
     const none = await test({ provider: 'deepl', config: { apiKey: '' } });
-    assert.deepEqual(none.body, { ok: false, error: '还没有填 DeepL 的 API Key', kind: 'config', field: 'apiKey' });
+    assert.deepEqual(none.body, { ok: false, error: '未填写 DeepL 的 API Key', kind: 'config', field: 'apiKey' });
     assert.equal(fake.state.requests.length, 0);
     await t.req('PUT', '/api/settings', { body: { translation: { providers: { deepl: { apiKey: DEEPL_KEY } } } } });
     const r = await test({ provider: 'deepl', config: {} });
@@ -527,6 +527,6 @@ describe('翻译 API：没配回复模型时', () => {
     t.ctx.translationLanguages.clear();
     const bad = await t.req('POST', `${convPath(id)}/translate`, { body: { text: '运费 10 欧元' } });
     assert.equal(bad.status, 502);
-    assert.match(bad.body.error, /DeepL.*回复模型还没配好/);
+    assert.match(bad.body.error, /DeepL.*回复模型未配置/);
   });
 });

@@ -112,8 +112,8 @@ export function redactOptsOf(id, cfg) {
  */
 export async function callTranslationProvider(ctx, meta, op, id, cfg, arg) {
   const p = getTranslationProvider(id);
-  if (!p) throw new TranslateError(`不认识的翻译服务：${id}`, 'config');
-  if (typeof p[op] !== 'function') throw new TranslateError(`${p.label} 没有这个功能`, 'config');
+  if (!p) throw new TranslateError(`未知的翻译服务：${id}`, 'config');
+  if (typeof p[op] !== 'function') throw new TranslateError(`${p.label} 不支持该功能`, 'config');
   let attempted = false;
   const started = Date.now();
   let ok = false;

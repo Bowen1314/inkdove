@@ -43,7 +43,7 @@ export function webhooksRouter(ctx) {
   // Meta：每个号一个回调地址，各自用自己号的 verifyToken 和 appSecret（F7）
   const metaAccount = (req) => {
     const acc = ctx.accounts.get(String(req.params.accountId));
-    if (!acc || acc.channel !== 'meta') throw new HttpError(404, 'not_found', '号不存在');
+    if (!acc || acc.channel !== 'meta') throw new HttpError(404, 'not_found', '号码不存在');
     return acc;
   };
 
@@ -70,7 +70,7 @@ export function webhooksRouter(ctx) {
   router.post('/meta/:accountId', raw, (req, res) => {
     const acc = metaAccount(req);
     const secret = acc.meta.appSecret;
-    if (!secret) throw new HttpError(403, 'meta_not_configured', '这个号还没有配置 Meta app secret，拒绝接收');
+    if (!secret) throw new HttpError(403, 'meta_not_configured', '该号码未配置 Meta app secret，已拒绝接收');
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const got = String(req.get('x-hub-signature-256') || '').trim().toLowerCase();
     const expected = `sha256=${crypto.createHmac('sha256', secret).update(body).digest('hex')}`;
@@ -85,9 +85,9 @@ export function webhooksRouter(ctx) {
   // https://developers.line.biz/en/reference/messaging-api/#signature-validation
   router.post('/line/:accountId', raw, (req, res) => {
     const acc = ctx.accounts.get(String(req.params.accountId));
-    if (!acc || acc.channel !== 'line') throw new HttpError(404, 'not_found', '号不存在');
+    if (!acc || acc.channel !== 'line') throw new HttpError(404, 'not_found', '号码不存在');
     const secret = acc.line.channelSecret;
-    if (!secret) throw new HttpError(403, 'line_not_configured', '这个号还没有配置 LINE 的 Channel secret，拒绝接收');
+    if (!secret) throw new HttpError(403, 'line_not_configured', '该号码未配置 LINE 的 Channel secret，已拒绝接收');
     const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const got = Buffer.from(String(req.get('x-line-signature') || '').trim(), 'base64');
     const expected = crypto.createHmac('sha256', secret).update(body).digest();

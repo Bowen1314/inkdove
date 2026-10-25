@@ -24,7 +24,7 @@ function decodeCursor(s) {
   } catch {
     /* 下面报错 */
   }
-  throw badRequest('cursor 不对，请从第一页重新查', 'invalid_cursor');
+  throw badRequest('cursor 无效，请从第一页重新查询', 'invalid_cursor');
 }
 
 /** LIKE 的通配符转义（用 \ 作转义符） */
@@ -201,27 +201,27 @@ export function parseAuditQuery(q) {
   const one = (name) => {
     const v = q[name];
     if (v === undefined || v === '') return '';
-    if (typeof v !== 'string') throw badRequest(`${name} 只能给一个`, 'invalid_input');
+    if (typeof v !== 'string') throw badRequest(`${name} 仅允许一个值`, 'invalid_input');
     return v;
   };
   const time = (name) => {
     const v = one(name);
     if (!v) return '';
     const t = Date.parse(v);
-    if (!Number.isFinite(t)) throw badRequest(`${name} 不是合法的时间`, 'invalid_time');
+    if (!Number.isFinite(t)) throw badRequest(`${name} 不是有效的时间`, 'invalid_time');
     return new Date(t).toISOString();
   };
   const type = one('type');
-  if (type && !/^[a-z_]+(\.[a-z_]+)?$/.test(type)) throw badRequest('type 不对', 'invalid_input');
+  if (type && !/^[a-z_]+(\.[a-z_]+)?$/.test(type)) throw badRequest('type 无效', 'invalid_input');
   const actorId = one('actorId');
-  if (actorId.length > 100) throw badRequest('actorId 太长', 'invalid_input');
+  if (actorId.length > 100) throw badRequest('actorId 过长', 'invalid_input');
   const qText = one('q').trim();
-  if (qText.length > 200) throw badRequest('关键字太长，最多 200 个字', 'invalid_input');
+  if (qText.length > 200) throw badRequest('关键字过长，最多 200 字', 'invalid_input');
   const limitRaw = one('limit');
   let limit = DEFAULT_PAGE_SIZE;
   if (limitRaw) {
     limit = Number(limitRaw);
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) throw badRequest(`limit 必须是 1–${MAX_PAGE_SIZE} 的整数`, 'invalid_input');
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) throw badRequest(`limit 须为 1–${MAX_PAGE_SIZE} 的整数`, 'invalid_input');
   }
   return { actorId, type, from: time('from'), to: time('to'), q: qText, cursor: one('cursor'), limit };
 }

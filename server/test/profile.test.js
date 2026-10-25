@@ -75,7 +75,7 @@ describe('我的资料：PUT /api/auth/me/profile', () => {
     for (const k of Object.keys(ok)) {
       const e = await put({ [k]: tooLong[k] }, agent.cookie);
       assert.equal(e.status, 400, k);
-      assert.match(e.body.error, /太长，最多 \d+ 个字符/, k);
+      assert.match(e.body.error, /最多 \d+ 个字符/, k);
     }
     assert.deepEqual((await me(agent.cookie)).profile, before);
     assert.equal((await put({ bio: `  ${'z'.repeat(1000)}  ` }, agent.cookie)).status, 200, '首尾空白不算长度');
@@ -88,7 +88,7 @@ describe('我的资料：PUT /api/auth/me/profile', () => {
     for (const bad of ['lina', 'lina@', '@example.com', 'lina@example', 'li na@example.com', 'a@b@c.com']) {
       const e = await put({ contactEmail: bad }, agent.cookie);
       assert.equal(e.status, 400, bad);
-      assert.equal(e.body.error, '联系邮箱格式不对');
+      assert.equal(e.body.error, '联系邮箱格式错误');
     }
     assert.equal((await put({ contactEmail: ' lina.li+sales@example.co.uk ' }, agent.cookie)).body.user.profile.contactEmail, 'lina.li+sales@example.co.uk');
     assert.equal((await put({ contactEmail: '' }, agent.cookie)).body.user.profile.contactEmail, '');

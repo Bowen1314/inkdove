@@ -48,7 +48,7 @@ export function filesRouter(ctx, auth) {
 
   router.get('/', (req, res) => {
     const status = req.query.status ? String(req.query.status) : '';
-    if (status && !STATUSES.includes(status)) throw badRequest('status 只能是 active 或 disabled');
+    if (status && !STATUSES.includes(status)) throw badRequest('status 须为 active 或 disabled');
     res.json(ctx.files.list({ q: req.query.q ? String(req.query.q) : '', status }));
   });
 
@@ -60,8 +60,8 @@ export function filesRouter(ctx, auth) {
         if (!err) return next();
         if (err instanceof multer.MulterError) {
           if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '单个文件不能超过 50MB'));
-          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 files', 'upload_error'));
-          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('一次最多上传 20 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名须为 files', 'upload_error'));
+          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('每次最多上传 20 个文件', 'upload_error'));
           return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
         }
         next(err);
@@ -72,11 +72,11 @@ export function filesRouter(ctx, auth) {
       const cleanup = () => {
         for (const f of files) fs.rm(f.path, { force: true }, () => {});
       };
-      if (!files.length) throw badRequest('没有收到文件（字段名 files）');
+      if (!files.length) throw badRequest('未收到文件（字段名 files）');
       const raw = String(req.body?.addToKb ?? 'true').trim().toLowerCase();
       if (!['true', 'false', '1', '0', 'on', 'off', ''].includes(raw)) {
         cleanup();
-        throw badRequest('addToKb 只能是 true 或 false');
+        throw badRequest('addToKb 须为 true 或 false');
       }
       const addToKb = !['false', '0', 'off'].includes(raw);
       const detected = files.map((f) => detectSendable(f.originalname, f.mimetype));
@@ -120,7 +120,7 @@ export function filesRouter(ctx, auth) {
     }
     if (b.tags !== undefined) patch.tags = normalizeTags(b.tags);
     if (b.status !== undefined) {
-      if (!STATUSES.includes(b.status)) throw badRequest('status 只能是 active 或 disabled');
+      if (!STATUSES.includes(b.status)) throw badRequest('status 须为 active 或 disabled');
       patch.status = b.status;
     }
     res.json(ctx.files.update(req.params.id, patch));
@@ -136,8 +136,8 @@ export function filesRouter(ctx, auth) {
   router.post('/:id/describe', admin, (req, res) => {
     const f = load(req.params.id);
     const s = ctx.getSettings();
-    if (!llmConfigured(s, ctx.config)) throw badRequest('还没有配置模型，请先到设置页填写', 'llm_not_configured');
-    if (isImageMime(f.mime) && !s.media.image) throw badRequest('图片要先在设置里开启图片识别才能自动生成描述', 'image_disabled');
+    if (!llmConfigured(s, ctx.config)) throw badRequest('未配置模型，请前往设置页配置', 'llm_not_configured');
+    if (isImageMime(f.mime) && !s.media.image) throw badRequest('需先在设置中开启图片识别，才可自动生成图片描述', 'image_disabled');
     res.json(ctx.files.redescribe(f.id));
   });
 

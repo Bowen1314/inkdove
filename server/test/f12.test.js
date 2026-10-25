@@ -665,7 +665,7 @@ describe('F12 记录的数据和 F11 拒绝（mock）', () => {
   });
 });
 
-/** 假 LLM 服务：按 handler 回复；请求体不是 JSON（转写的 multipart）时 body 为原文 */
+/** 假 LLM 服务：按 handler 回复；请求体非 JSON（转写的 multipart）时 body 为原文 */
 async function startFakeLlm() {
   const state = { requests: [], handler: null };
   const server = http.createServer(async (req, res) => {

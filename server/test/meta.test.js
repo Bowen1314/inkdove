@@ -227,12 +227,12 @@ describe('Meta Cloud API 号', () => {
     await waitDecided(t, cid('8613700000008'), 1);
     const notice = await waitFor(() => graph.texts('8613900001111').at(-1));
     assert.match(notice.body.text.body, /李四/);
-    assert.match(notice.body.text.body, /直接引用这条消息回复/);
+    assert.match(notice.body.text.body, /引用本消息回复/);
     const noticeId = `wamid.SENT${graph.state.requests.indexOf(notice) + 1}`;
     await postMeta(t, acc, metaPayload('8613900001111', '您好，我是店长小王', { context: { from: '15550000000', id: noticeId } }));
     await waitFor(() => graph.texts('8613700000008').length === 1);
     assert.equal(graph.texts('8613700000008')[0].body.text.body, '您好，我是店长小王');
-    await waitFor(() => graph.texts('8613900001111').some((q) => q.body.text.body === '✅ 已发给 李四'));
+    await waitFor(() => graph.texts('8613900001111').some((q) => q.body.text.body === '✅ 已发送给 李四'));
     const out = (await getMessages(t, cid('8613700000008'))).filter((m) => m.direction === 'out');
     assert.equal(out.at(-1).via, 'whatsapp');
     assert.equal(out.at(-1).author, 'operator');

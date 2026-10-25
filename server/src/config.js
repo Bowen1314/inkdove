@@ -71,7 +71,7 @@ export function loadConfig(env = process.env) {
 
   const errors = [];
   if (!config.adminEmail) errors.push('缺少 INKDOVE_ADMIN_EMAIL');
-  else if (!/^[^\s@]+@[^\s@]+$/.test(config.adminEmail)) errors.push('INKDOVE_ADMIN_EMAIL 不是合法的邮箱');
+  else if (!/^[^\s@]+@[^\s@]+$/.test(config.adminEmail)) errors.push('INKDOVE_ADMIN_EMAIL 不是有效的邮箱');
   if (!config.adminPassword) errors.push('缺少 INKDOVE_ADMIN_PASSWORD');
   else if (config.adminPassword.length < 12) errors.push('INKDOVE_ADMIN_PASSWORD 至少 12 个字符');
   if (!config.sessionSecret) errors.push('缺少 INKDOVE_SESSION_SECRET');
@@ -82,8 +82,8 @@ export function loadConfig(env = process.env) {
   if (!Number.isInteger(config.globalProxyPort) || config.globalProxyPort < 1024 || config.globalProxyPort > 65535) {
     errors.push('INKDOVE_GLOBAL_PROXY_PORT 必须是 1024–65535 的整数');
   }
-  if (!/^[\w.-]+\/[\w.-]+$/.test(config.updateRepo)) errors.push('INKDOVE_UPDATE_REPO 要写成 owner/repo');
-  if (!/^[\w][\w.-]{0,127}$/.test(config.imageTag)) errors.push('INKDOVE_IMAGE_TAG 不是合法的镜像标签');
+  if (!/^[\w.-]+\/[\w.-]+$/.test(config.updateRepo)) errors.push('INKDOVE_UPDATE_REPO 格式应为 owner/repo');
+  if (!/^[\w][\w.-]{0,127}$/.test(config.imageTag)) errors.push('INKDOVE_IMAGE_TAG 不是有效的镜像标签');
   if (!Number.isInteger(config.auditRetentionDays) || config.auditRetentionDays < 1 || config.auditRetentionDays > 36500) {
     errors.push('INKDOVE_AUDIT_RETENTION_DAYS 必须是 1–36500 的整数（天）');
   }

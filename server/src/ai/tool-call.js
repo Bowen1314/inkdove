@@ -23,7 +23,7 @@
 import { ANTHROPIC_VERSION, LLM_FORMATS, LlmError, llmUrl, parseLlmUsage, requestJson } from './llm.js';
 
 /** 不支持工具调用时给用户看的话（原样显示） */
-export const TOOLS_UNSUPPORTED_MESSAGE = '当前模型或中转站不支持工具调用，助手用不了，请换一个支持的模型';
+export const TOOLS_UNSUPPORTED_MESSAGE = '当前模型或中转服务不支持工具调用，助手不可用，请更换支持工具调用的模型';
 
 export class ToolsUnsupportedError extends LlmError {
   /** @param {string} [detail] 对方原始的错误信息（只写日志） */
@@ -242,7 +242,7 @@ function parseArgs(raw) {
 export function parseToolResponse(format, data) {
   if (format === 'anthropic') {
     const blocks = Array.isArray(data?.content) ? data.content : null;
-    if (!blocks) throw new LlmError('Anthropic 返回格式不对（缺少 content）');
+    if (!blocks) throw new LlmError('Anthropic 返回格式错误（缺少 content）');
     const text = blocks
       .filter((b) => b?.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text)
@@ -256,10 +256,10 @@ export function parseToolResponse(format, data) {
     const cand = Array.isArray(data?.candidates) ? data.candidates[0] : undefined;
     if (!cand) {
       const block = data?.promptFeedback?.blockReason;
-      throw new LlmError(block ? `Gemini 拦截了请求（blockReason: ${block}）` : 'Gemini 没有返回候选结果');
+      throw new LlmError(block ? `Gemini 拦截请求（blockReason: ${block}）` : 'Gemini 未返回候选结果');
     }
     if (cand.finishReason === 'MALFORMED_FUNCTION_CALL' || cand.finishReason === 'UNEXPECTED_TOOL_CALL') {
-      throw new LlmError(`Gemini 生成的工具调用不对（finishReason: ${cand.finishReason}）`);
+      throw new LlmError(`Gemini 生成的工具调用无效（finishReason: ${cand.finishReason}）`);
     }
     const parts = Array.isArray(cand.content?.parts) ? cand.content.parts : [];
     const text = parts
@@ -277,7 +277,7 @@ export function parseToolResponse(format, data) {
     return { text, toolCalls, raw: { format, content: { role: 'model', parts } } };
   }
   const msg = data?.choices?.[0]?.message;
-  if (!msg || typeof msg !== 'object') throw new LlmError('LLM 返回格式不对（缺少 choices[0].message）');
+  if (!msg || typeof msg !== 'object') throw new LlmError('LLM 返回格式错误（缺少 choices[0].message）');
   const text =
     typeof msg.content === 'string'
       ? msg.content
@@ -349,7 +349,7 @@ export async function chatWithTools(opts) {
       opts.tools.map((t) => t.name),
     )
   ) {
-    throw new ToolsUnsupportedError('回答里把工具调用写成了文字');
+    throw new ToolsUnsupportedError('模型以文本形式输出了工具调用');
   }
   return { ...parsed, model: data?.model || data?.modelVersion || opts.model, usage: parseLlmUsage(format, data) };
 }
@@ -374,7 +374,7 @@ export async function probeToolSupport(opts) {
     });
     return r.toolCalls.some((c) => c.name === PROBE_TOOL.name)
       ? { supported: true, usage: r.usage, model: r.model }
-      : { supported: false, detail: '检查时模型没有调用工具', usage: r.usage, model: r.model };
+      : { supported: false, detail: '检查时模型未调用工具', usage: r.usage, model: r.model };
   } catch (err) {
     if (err instanceof ToolsUnsupportedError) return { supported: false, detail: err.detail };
     throw err;

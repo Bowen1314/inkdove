@@ -114,7 +114,7 @@ export function createRealAi(getSettings, opts = {}) {
   const callJson = async (purpose, system, user, signal) => {
     const { text } = await call(purpose, system, user, { signal });
     const data = extractJson(text);
-    if (data === null) throw new LlmError('模型没有返回可解析的 JSON');
+    if (data === null) throw new LlmError('模型未返回可解析的 JSON');
     return data;
   };
 

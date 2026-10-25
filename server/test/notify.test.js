@@ -130,7 +130,7 @@ describe('转人工通知（按号；邮件走全局 SMTP）', () => {
     const wa = notice.text;
     const link = `https://kb.example.com/whatsapp?chat=${encodeURIComponent(cid(chat))}`;
     assert.match(wa, new RegExp(`^\\[待人工\\] 客户 \\+${number}：`));
-    assert.ok(wa.includes('号：销售一号'), wa);
+    assert.ok(wa.includes('号码：销售一号'), wa);
     assert.ok(wa.includes(`客户：李女士（+${number}）`), wa);
     assert.ok(wa.includes('原因：客户要求人工'), wa);
     assert.ok(wa.includes('- 你好') && wa.includes('- 我要找人工客服'), wa);
@@ -190,12 +190,12 @@ describe('转人工通知（按号；邮件走全局 SMTP）', () => {
       await send(chat, '保温杯多少钱');
       const msgs = await waitDecided(t, cid(chat), 1);
       assert.equal(msgs[0].botDecision, 'blocked');
-      assert.match(msgs[0].decisionReason, /^价格数字对不上资料：回复里的「49 元」/);
+      assert.match(msgs[0].decisionReason, /^价格与资料不符：回复中的「49 元」/);
       await waitFor(() => notices().length === before + 1);
     } finally {
       hooks.generate = null;
     }
-    assert.ok(notices().at(-1).text.includes('原因：价格数字对不上资料'));
+    assert.ok(notices().at(-1).text.includes('原因：价格与资料不符'));
     assert.equal(fake.sentTo(chat).length, 0);
     assert.equal((await getConv(t, cid(chat))).botPaused, true);
   });
@@ -374,7 +374,7 @@ describe('发信方式（F10）', () => {
         assert.equal(d.body.ok, false);
         assert.match(d.body.error, /Resend 返回 403 validation_error/);
         assert.match(d.body.error, /domain is not verified/);
-        assert.match(d.body.error, /Domains 里验证/);
+        assert.match(d.body.error, /Domains 中完成验证/);
       } finally {
         resend.state.mode = 'ok';
       }
@@ -411,12 +411,12 @@ describe('发信方式（F10）', () => {
       await waitFor(() => resend.state.requests.length === 1);
       assert.deepEqual(resend.state.requests[0].body.to, ['one@example.com']);
       assert.match(resend.state.requests[0].body.subject, /^\[待人工\]/);
-      assert.ok(resend.state.requests[0].body.text.includes('号：一号'));
+      assert.ok(resend.state.requests[0].body.text.includes('号码：一号'));
       await wahaSend(t, acc2, chat, '我要人工');
       await waitDecided(t, convIdOf(acc2, chat), 1);
       await waitFor(() => resend.state.requests.length === 2);
       assert.deepEqual(resend.state.requests[1].body.to, ['two@example.com', 'boss@example.com']);
-      assert.ok(resend.state.requests[1].body.text.includes('号：二号'));
+      assert.ok(resend.state.requests[1].body.text.includes('号码：二号'));
     });
 
     it('API key 不回传（只有 apiKeySet 和末 4 位），也不进日志', async () => {

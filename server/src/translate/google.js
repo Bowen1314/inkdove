@@ -24,8 +24,8 @@ const googleCode = (lang) => TARGET_CODE[lang] || lang;
 
 function check(cfg) {
   const apiKey = String(cfg.apiKey || '').trim();
-  if (!apiKey) throw new TranslateError('谷歌翻译还没有填 API Key', 'config');
-  if (!visibleAscii(apiKey)) throw new TranslateError('谷歌翻译的 API Key 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+  if (!apiKey) throw new TranslateError('谷歌翻译未填写 API Key', 'config');
+  if (!visibleAscii(apiKey)) throw new TranslateError('谷歌翻译的 API Key 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   return apiKey;
 }
 
@@ -36,13 +36,13 @@ function googleError(res, redactOpts) {
   const detail = detailOf(typeof e?.message === 'string' ? e.message : res.text, redactOpts);
   const all = `${detail} ${reasons}`;
   const tail = detail ? `：${detail}` : '';
-  if (/daily ?limit|quota|billing/i.test(all)) throw new TranslateError(`谷歌翻译额度用完或没开结算（${res.status}）${tail}`, 'quota', { status: res.status });
-  if (/rate ?limit/i.test(all) || res.status === 429) throw new TranslateError(`谷歌翻译请求太频繁，被限流了（${res.status}）${tail}`, 'rate_limit', { status: res.status });
+  if (/daily ?limit|quota|billing/i.test(all)) throw new TranslateError(`谷歌翻译额度已用尽或未开通结算（${res.status}）${tail}`, 'quota', { status: res.status });
+  if (/rate ?limit/i.test(all) || res.status === 429) throw new TranslateError(`谷歌翻译请求过于频繁，已限流（${res.status}）${tail}`, 'rate_limit', { status: res.status });
   if (res.status === 400 && /api key|keyInvalid/i.test(all)) {
     throw new TranslateError(`谷歌翻译鉴权失败（400）${tail}。请检查 API Key`, 'auth', { status: 400 });
   }
   if (res.status === 400 && /language|target|invalid value/i.test(all)) {
-    throw new TranslateError(`谷歌翻译不支持这个语言（400）${tail}`, 'unsupported_language', { status: 400 });
+    throw new TranslateError(`谷歌翻译不支持该语言（400）${tail}`, 'unsupported_language', { status: 400 });
   }
   throw httpError(LABEL, res, redactOpts, detail);
 }

@@ -65,18 +65,18 @@ function tencentError(code, message, redactOpts) {
   const detail = detailOf(message, redactOpts);
   const what = `${code}${detail ? `：${detail}` : ''}`;
   if (code === 'ActionOffline' || code === 'UnauthorizedOperation.ActionNotFound') {
-    return new TranslateError(`腾讯云文本翻译接口已下线（${what}），请换一家翻译服务`, 'config');
+    return new TranslateError(`腾讯云文本翻译接口已下线（${what}），请更换翻译服务`, 'config');
   }
   if (code === 'FailedOperation.UserNotRegistered') {
-    return new TranslateError(`腾讯云机器翻译没开通（${what}）。官方已不再接受文本翻译的新用户，请换一家翻译服务`, 'auth');
+    return new TranslateError(`腾讯云机器翻译未开通（${what}）。官方已停止受理文本翻译新用户，请更换翻译服务`, 'auth');
   }
   if (code.startsWith('AuthFailure')) return new TranslateError(`腾讯云翻译鉴权失败（${what}）。请检查 SecretId 和 SecretKey`, 'auth');
-  if (code.startsWith('RequestLimitExceeded')) return new TranslateError(`腾讯云翻译请求太频繁，被限流了（${what}）`, 'rate_limit');
+  if (code.startsWith('RequestLimitExceeded')) return new TranslateError(`腾讯云翻译请求过于频繁，已限流（${what}）`, 'rate_limit');
   if (/^FailedOperation\.(NoFreeAmount|ServiceIsolate|StopUsing)$/.test(code) || code === 'LimitExceeded') {
-    return new TranslateError(`腾讯云翻译额度用完或已停服（${what}）`, 'quota');
+    return new TranslateError(`腾讯云翻译额度已用尽或服务已停用（${what}）`, 'quota');
   }
-  if (/^UnsupportedOperation\.Unsupported/i.test(code)) return new TranslateError(`腾讯云翻译不支持这个语言（${what}）`, 'unsupported_language');
-  if (code.startsWith('InternalError')) return new TranslateError(`腾讯云翻译出错了（${what}）`, 'server');
+  if (/^UnsupportedOperation\.Unsupported/i.test(code)) return new TranslateError(`腾讯云翻译不支持该语言（${what}）`, 'unsupported_language');
+  if (code.startsWith('InternalError')) return new TranslateError(`腾讯云翻译服务异常（${what}）`, 'server');
   return new TranslateError(`腾讯云翻译返回错误（${what}）`, 'bad_request');
 }
 
@@ -94,18 +94,18 @@ export default {
     const secretId = String(cfg.secretId || '').trim();
     const secretKey = String(cfg.secretKey || '').trim();
     const region = String(cfg.region || '').trim();
-    if (!secretId || !secretKey) throw new TranslateError('腾讯云翻译还没有填 SecretId 和 SecretKey', 'config');
+    if (!secretId || !secretKey) throw new TranslateError('腾讯云翻译未填写 SecretId 和 SecretKey', 'config');
     if (!visibleAscii(secretId) || !visibleAscii(secretKey)) {
-      throw new TranslateError('腾讯云翻译的 SecretId 或 SecretKey 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+      throw new TranslateError('腾讯云翻译的 SecretId 或 SecretKey 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
     }
-    if (!region) throw new TranslateError('腾讯云翻译还没有填区域', 'config');
+    if (!region) throw new TranslateError('腾讯云翻译未填写区域', 'config');
     const redactOpts = { secrets: [secretId, secretKey] };
     const base = trimSlash(o.endpoint || BASE);
     let host;
     try {
       host = new URL(base).host;
     } catch {
-      throw new TranslateError('腾讯云翻译的地址格式不对', 'config');
+      throw new TranslateError('腾讯云翻译地址格式错误', 'config');
     }
     const payload = JSON.stringify({
       SourceText: text,

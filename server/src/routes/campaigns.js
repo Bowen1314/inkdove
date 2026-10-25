@@ -34,8 +34,8 @@ export function campaignsRouter(ctx) {
         if (!err) return next();
         if (err instanceof multer.MulterError) {
           if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '号码文件不能超过 1MB'));
-          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('一次只能上传 1 个文件', 'upload_error'));
-          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 file，且只能有 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('每次仅可上传 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名须为 file，且仅限 1 个文件', 'upload_error'));
           return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
         }
         next(err);

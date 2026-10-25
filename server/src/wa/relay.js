@@ -45,7 +45,7 @@ function connectViaHttps(up, target) {
         buf = Buffer.concat([buf, chunk]);
         const end = buf.indexOf('\r\n\r\n');
         if (end < 0) {
-          if (buf.length > 16_384) fail(new Error('上游代理的响应头过长'));
+          if (buf.length > 16_384) fail(new Error('上游代理响应头过长'));
           return;
         }
         sock.off('data', onData);
@@ -188,7 +188,7 @@ export function createRelayManager(o) {
         o.log.info(`[relay] 号 ${acc.id} 的代理中继已${cur ? '重启' : '启动'}，端口 ${relay.port}，上游 ${px.protocol}`);
         return cur ? 'restarted' : 'started';
       } catch (err) {
-        const msg = err?.code === 'EADDRINUSE' ? `端口 ${acc.relay.port} 被占用` : String(err?.message || err);
+        const msg = err?.code === 'EADDRINUSE' ? `端口 ${acc.relay.port} 已被占用` : String(err?.message || err);
         errors.set(acc.id, `代理中继启动失败：${msg}`);
         o.log.error(`[relay] 号 ${acc.id} 的代理中继启动失败：${msg}`);
         return 'failed';

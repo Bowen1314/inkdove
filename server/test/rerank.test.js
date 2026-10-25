@@ -112,7 +112,7 @@ describe('重排接口客户端（本地假服务）', () => {
     assert.deepEqual(r.results.map((x) => x.index), [1, 0], '分数一样按返回的先后');
   });
 
-  it('序号不对（超出范围、重复、不是整数）、分数不是数的跳过；一个能用的都没有、缺 results、不是 JSON 都是 bad_response', async () => {
+  it('序号不对（超出范围、重复、不是整数）、分数不是数的跳过；一个能用的都没有、缺 results、非 JSON 都是 bad_response', async () => {
     const p = parseRerankResponse(
       {
         results: [
@@ -135,7 +135,7 @@ describe('重排接口客户端（本地假服务）', () => {
     f.state.handler = () => [200, '<!doctype html><title>首页</title>'];
     const e = await rerankDocuments({ baseUrl: f.url, model: 'm' }, { query: 'q', documents: ['x'] }).catch((x) => x);
     assert.equal(e.kind, 'bad_response');
-    assert.match(e.message, /不是 JSON/);
+    assert.match(e.message, /非 JSON/);
   });
 
   it('HTTP 错误分类：401/403 鉴权、404 地址或模型（提示 /rerank）、429、5xx、其他 4xx；连不上、超时、配置不对（config 不发请求）；信息里没有密钥', async () => {
@@ -161,7 +161,7 @@ describe('重排接口客户端（本地假服务）', () => {
 
     e = await rerankDocuments({ ...cfg, baseUrl: 'http://127.0.0.1:9' }, { query: 'q', documents: ['x'] }).catch((x) => x);
     assert.equal(e.kind, 'network');
-    assert.match(e.message, /^连不上重排接口/);
+    assert.match(e.message, /^无法连接重排接口/);
     f.state.handler = () => [200, { results: [] }, {}, 1000];
     e = await rerankDocuments(cfg, { query: 'q', documents: ['x'], timeoutMs: 50 }).catch((x) => x);
     assert.equal(e.kind, 'timeout');
@@ -446,7 +446,7 @@ describe('检索时重排（真实模式，本地假服务）', () => {
     assert.deepEqual(ids(r.entries), ids([ranked[5], ranked[9], ranked[2], ...rest]).slice(0, 20));
   });
 
-  it('出错（500、不是 JSON、超时、配置被清掉）：照原来的顺序，回复照常；同一类问题 5 分钟只记一行 warn，失败的调用也记 llm_calls', async () => {
+  it('出错（500、非 JSON、超时、配置被清掉）：照原来的顺序，回复照常；同一类问题 5 分钟只记一行 warn，失败的调用也记 llm_calls', async () => {
     const texts = ['thermos failure'];
     const plain = ids(merged(texts)).slice(0, 20);
     const w0 = rerankWarns().length;
@@ -595,7 +595,7 @@ describe('重排的操作日志', () => {
     r = await t.req('POST', '/api/settings/rerank/test', { body: { apiKey: 'typed-key-2222' } });
     assert.equal(r.body.ok, true);
     const row = last('settings.rerank_test');
-    assert.equal(row.summary, '测试了重排服务的连接（结果：通过）');
+    assert.equal(row.summary, '测试了重排服务连接（结果：通过）');
     assert.ok(!dump().includes('typed-key-2222'));
   });
 });

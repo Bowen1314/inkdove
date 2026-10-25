@@ -214,7 +214,7 @@ describe('推荐回复（只能手动要）', () => {
       fd2.append('file', new Blob([JSON.stringify(bad)], { type: 'application/json' }), 'inkdove-accounts.json');
       const e = await t.req('POST', '/api/accounts/import', { body: fd2 });
       assert.equal(e.status, 400);
-      assert.match(e.body.error, /^第 1 个号（坏值）：replyMode/);
+      assert.match(e.body.error, /^第 1 个号码（坏值）：replyMode/);
     });
   });
 
@@ -983,7 +983,7 @@ describe('推荐回复（只能手动要）', () => {
         [voice, image] = msgs;
         assert.equal(voice.text, '[语音]');
         assert.match(image.text, /^\[图片\] /);
-        assert.deepEqual(msgs[2].media.recognize, { status: 'unsupported', error: '格式 image/gif 不支持，只支持 jpeg、png、webp' });
+        assert.deepEqual(msgs[2].media.recognize, { status: 'unsupported', error: '格式 image/gif 不受支持，仅支持 jpeg、png、webp' });
         assert.equal(msgs[2].text, '[图片]');
         assert.equal(convRow(convId).llm_calls, 4, '识别一张 + 起草一次');
       } finally {
@@ -1164,7 +1164,7 @@ describe('推荐回复：模型没配置', () => {
   let acc;
   before(async () => {
     fake = await startFakeWaha();
-    // 不用 mock：设置里没填模型，就是"还没有配置模型"（不会真的去调）
+    // 不用 mock：设置里没填模型，就是"未配置模型"（不会真的去调）
     t = await startApp({ env: { INKDOVE_WAHA_URL: fake.url, INKDOVE_LLM_MOCK: '0' } });
     await t.login();
     await t.req('PUT', '/api/settings', { body: { reply: { debounceSeconds: 0.05 } } });

@@ -11,7 +11,7 @@ export const DELETED_MEMBER_NAME = '已删除成员';
 export const MAX_BULK_ASSIGN = 500;
 
 const assigneeInvalid = () => new HttpError(400, 'assignee_invalid', '负责人不存在或已停用');
-const noAccountAccess = () => new HttpError(400, 'assignee_no_account_access', '这个成员没有这个会话所属号的权限，先在成员页给他分配这个号');
+const noAccountAccess = () => new HttpError(400, 'assignee_no_account_access', '该成员无此会话所属号码的权限，请先在成员页为其分配该号码');
 
 /**
  * 分配目标：null 表示取消分配（返回 null）；成员不存在或已停用 → 400 assignee_invalid。

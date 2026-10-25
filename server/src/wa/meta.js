@@ -39,7 +39,7 @@ async function metaFetch(url, init, timeoutMs = 20_000) {
   try {
     return await fetch(url, { ...rest, signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
   } catch (err) {
-    throw new MetaError(`连不上 Meta Graph API：${err?.cause?.code || err?.message || err}`);
+    throw new MetaError(`无法连接 Meta Graph API：${err?.cause?.code || err?.message || err}`);
   }
 }
 
@@ -55,7 +55,7 @@ async function post(graphBase, meta, body) {
       signal: AbortSignal.timeout(20_000),
     });
   } catch (err) {
-    throw new MetaError(`连不上 Meta Graph API：${err?.cause?.code || err?.message || err}`);
+    throw new MetaError(`无法连接 Meta Graph API：${err?.cause?.code || err?.message || err}`);
   }
   const text = await res.text();
   let data = null;
@@ -93,7 +93,7 @@ export async function metaSendText(graphBase, meta, to, text) {
  * @returns {Promise<string|null>} 消息 id（wamid）
  */
 export async function metaSendTemplate(graphBase, meta, to, template) {
-  if (!template?.name || !template?.languageCode) throw new MetaError('没有填 Meta 模板名或语言');
+  if (!template?.name || !template?.languageCode) throw new MetaError('未填写 Meta 模板名称或语言');
   const data = await post(graphBase, meta, {
     messaging_product: 'whatsapp',
     recipient_type: 'individual',
@@ -130,7 +130,7 @@ export async function metaUploadMedia(graphBase, meta, file) {
     120_000,
   );
   const data = await readJson(res);
-  if (!data?.id) throw new MetaError('Meta 上传媒体没有返回 id');
+  if (!data?.id) throw new MetaError('Meta 媒体上传未返回 id');
   return String(data.id);
 }
 
@@ -162,7 +162,7 @@ export async function metaOpenMedia(graphBase, meta, mediaId, { maxBytes, timeou
   if (!meta.accessToken) throw new MetaError('Meta 通道未配置 accessToken');
   const auth = { authorization: `Bearer ${meta.accessToken}` };
   const info = await readJson(await metaFetch(graphUrl(graphBase, meta, mediaId), { headers: auth, signal }));
-  if (!info?.url) throw new MetaError('Meta 没有返回媒体下载地址');
+  if (!info?.url) throw new MetaError('Meta 未返回媒体下载地址');
   const size = Number(info.file_size);
   const known = info.file_size != null && Number.isFinite(size) && size >= 0;
   if (maxBytes && known && size > maxBytes) throw new TooLargeError(size, maxBytes);
@@ -172,7 +172,7 @@ export async function metaOpenMedia(graphBase, meta, mediaId, { maxBytes, timeou
   } catch (err) {
     if (!(err instanceof HttpGetError)) throw err; // 被中止（服务关闭）
     if (err.status) throw new MetaError(`下载媒体失败：Meta 返回 ${err.status}`);
-    throw new MetaError(`连不上 Meta Graph API：${err.message}`);
+    throw new MetaError(`无法连接 Meta Graph API：${err.message}`);
   }
   const mime = String(info.mime_type || res.headers['content-type'] || '').split(';')[0].trim();
   return { res, mime, size: known ? size : null };

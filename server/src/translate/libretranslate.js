@@ -16,8 +16,8 @@ export const libreRoot = (url) => trimSlash(url).replace(/\/translate$/i, '');
 function check(cfg) {
   const url = String(cfg.url || '').trim();
   const apiKey = String(cfg.apiKey || '').trim();
-  if (!url) throw new TranslateError('LibreTranslate 还没有填服务地址', 'config');
-  if (apiKey && !visibleAscii(apiKey)) throw new TranslateError('LibreTranslate 的 API Key 里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+  if (!url) throw new TranslateError('LibreTranslate 未填写服务地址', 'config');
+  if (apiKey && !visibleAscii(apiKey)) throw new TranslateError('LibreTranslate 的 API Key 包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   return { url, apiKey };
 }
 
@@ -25,10 +25,10 @@ function libreError(res, redactOpts) {
   const detail = detailOf(typeof res.data?.error === 'string' ? res.data.error : res.text, redactOpts);
   const tail = detail ? `：${detail}` : '';
   if (res.status === 400 && /not supported|not available as a target/i.test(detail)) {
-    throw new TranslateError(`LibreTranslate 不支持这个语言（400）${tail}`, 'unsupported_language', { status: 400 });
+    throw new TranslateError(`LibreTranslate 不支持该语言（400）${tail}`, 'unsupported_language', { status: 400 });
   }
-  if (res.status === 400 && /api key/i.test(detail)) throw new TranslateError(`LibreTranslate 要 API Key（400）${tail}`, 'auth', { status: 400 });
-  if (res.status === 403 && /too many/i.test(detail)) throw new TranslateError(`LibreTranslate 请求太频繁，被暂时封了（403）${tail}`, 'rate_limit', { status: 403 });
+  if (res.status === 400 && /api key/i.test(detail)) throw new TranslateError(`LibreTranslate 需要 API Key（400）${tail}`, 'auth', { status: 400 });
+  if (res.status === 403 && /too many/i.test(detail)) throw new TranslateError(`LibreTranslate 请求过于频繁，已临时封禁（403）${tail}`, 'rate_limit', { status: 403 });
   throw httpError(LABEL, res, redactOpts, detail);
 }
 
@@ -76,7 +76,7 @@ export default {
       onAttempt: o.onAttempt,
     });
     if (!res.ok) libreError(res, redactOpts);
-    if (!Array.isArray(res.data)) throw badResponse(LABEL, '语言检测返回的不是数组');
+    if (!Array.isArray(res.data)) throw badResponse(LABEL, '语言检测结果非数组');
     return normalizeLang(res.data[0]?.language);
   },
 };

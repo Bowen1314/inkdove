@@ -109,7 +109,7 @@ export async function request({ label, url, method = 'POST', headers = {}, body,
   try {
     if (!/^https?:$/.test(new URL(url).protocol)) throw new Error('protocol');
   } catch {
-    throw new TranslateError(`${label} 的地址格式不对，要以 http:// 或 https:// 开头`, 'config');
+    throw new TranslateError(`${label} 地址格式错误，需以 http:// 或 https:// 开头`, 'config');
   }
   onAttempt?.();
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -125,10 +125,10 @@ export async function request({ label, url, method = 'POST', headers = {}, body,
     }
     const code = err?.cause?.code || err?.code || '';
     const reason = CONNECT_ERRORS[code] ? `${CONNECT_ERRORS[code]}（${code}）` : code || err?.cause?.message || err?.message || String(err);
-    throw new TranslateError(`连不上 ${label}：${redact(reason, redactOpts)}`, 'network');
+    throw new TranslateError(`无法连接 ${label}：${redact(reason, redactOpts)}`, 'network');
   }
   if (res.status >= 300 && res.status < 400) {
-    throw new TranslateError(`${label} 的地址被重定向到别处了（${res.status}），请直接填写最终的地址（比如 https:// 开头的）`, 'config', {
+    throw new TranslateError(`${label} 地址发生重定向（${res.status}），请填写重定向后的最终地址（如 https:// 开头）`, 'config', {
       status: res.status,
     });
   }
@@ -162,15 +162,15 @@ export function httpError(label, res, redactOpts, message) {
   const { status } = res;
   const detail = detailOf(message ?? providerMessage(res.text, res.statusText), redactOpts);
   const tail = detail ? `：${detail}` : '';
-  if (status === 401 || status === 403) return new TranslateError(`${label} 鉴权失败（${status}）${tail}。请检查密钥，或这个服务有没有开通`, 'auth', { status });
+  if (status === 401 || status === 403) return new TranslateError(`${label} 鉴权失败（${status}）${tail}。请检查密钥及服务开通状态`, 'auth', { status });
   if (status === 404) return new TranslateError(`${label} 返回 404${tail}。请检查接口地址`, 'config', { status });
-  if (status === 429) return new TranslateError(`${label} 请求太频繁，被限流了（429）${tail}`, 'rate_limit', { status });
-  if (status === 408 || status >= 500) return new TranslateError(`${label} 出错了（${status}）${tail}`, 'server', { status });
+  if (status === 429) return new TranslateError(`${label} 请求过于频繁，已限流（429）${tail}`, 'rate_limit', { status });
+  if (status === 408 || status >= 500) return new TranslateError(`${label} 服务异常（${status}）${tail}`, 'server', { status });
   return new TranslateError(`${label} 返回 ${status}${tail}`, 'bad_request', { status });
 }
 
 /** 返回格式不对 */
-export const badResponse = (label, what) => new TranslateError(`${label} 返回的结果格式不对（${what}）`, 'bad_response');
+export const badResponse = (label, what) => new TranslateError(`${label} 返回格式错误（${what}）`, 'bad_response');
 
 /** 地址末尾去掉斜杠 */
 export const trimSlash = (s) => String(s || '').trim().replace(/\/+$/, '');

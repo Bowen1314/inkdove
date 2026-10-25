@@ -110,14 +110,14 @@ function csvTime(iso) {
 
 /** 导出的列：中文表头 → 取值 */
 const CSV_COLUMNS = [
-  ['名字', (l) => l.name],
+  ['姓名', (l) => l.name],
   ['公司', (l) => l.company],
   ['国家', (l) => l.country],
   ['邮箱', (l) => l.email],
   // LINE 官方帐号的客户没有号码，这一列是空的；昵称是 WhatsApp 或 LINE 上的名字
   ['号码', (l) => (l.contactNumber ? `+${l.contactNumber}` : '')],
   ['昵称', (l) => l.contactName],
-  ['所属号', (l) => l.accountName],
+  ['所属号码', (l) => l.accountName],
   ['意向产品', (l) => l.interest],
   ['数量', (l) => l.quantity],
   ['阶段', (l) => leadStageLabel(l.stage)],
@@ -241,7 +241,7 @@ export function createLeadStore(ctx) {
     const today = localDay();
     const used = conv.llm_day === today ? conv.llm_calls : 0;
     if (used + 1 > DAILY_LLM_LIMIT) {
-      throw new HttpError(429, 'llm_daily_limit', `这个会话今天的模型调用已到上限（${DAILY_LLM_LIMIT} 次），明天再试`);
+      throw new HttpError(429, 'llm_daily_limit', `该会话今日模型调用已达上限（${DAILY_LLM_LIMIT} 次），请明日再试`);
     }
     const { messages, maxSeq } = readMessages(convId);
     db.prepare(
@@ -351,7 +351,7 @@ export function createLeadStore(ctx) {
      *   而且有号权限的会话的线索，和会话的权限判断一致。按 lastContactAt 倒序
      */
     list({ accountIds = null, assigneeId = null, accountId = null, stage = '', q = '' } = {}) {
-      if (stage && !LEAD_STAGE_KEYS.includes(stage)) throw badRequest(`stage 只能是 ${LEAD_STAGE_KEYS.join('、')} 之一`);
+      if (stage && !LEAD_STAGE_KEYS.includes(stage)) throw badRequest(`stage 须为 ${LEAD_STAGE_KEYS.join('、')} 之一`);
       const where = [];
       const params = [];
       if (accountId) {
@@ -394,17 +394,17 @@ export function createLeadStore(ctx) {
         if (v === undefined) continue;
         if (typeof v !== 'string') throw badRequest(`${k} 必须是字符串`);
         if (k === 'stage') {
-          if (!LEAD_STAGE_KEYS.includes(v)) throw badRequest(`stage 只能是 ${LEAD_STAGE_KEYS.join('、')} 之一`);
+          if (!LEAD_STAGE_KEYS.includes(v)) throw badRequest(`stage 须为 ${LEAD_STAGE_KEYS.join('、')} 之一`);
           patch.stage = v;
           continue;
         }
         const s = v.trim();
         if (s.length > LEAD_TEXT_FIELDS[k]) throw badRequest(`${k} 不能超过 ${LEAD_TEXT_FIELDS[k]} 个字`);
-        if (k === 'email' && s && !/^[^\s@]+@[^\s@]+$/.test(s)) throw badRequest('邮箱格式不对');
+        if (k === 'email' && s && !/^[^\s@]+@[^\s@]+$/.test(s)) throw badRequest('邮箱格式错误');
         patch[k] = s;
       }
       const keys = Object.keys(patch);
-      if (!keys.length) throw badRequest(`没有可修改的字段（只能改 ${LEAD_EDITABLE_FIELDS.join('、')}）`);
+      if (!keys.length) throw badRequest(`无可修改的字段（仅可修改 ${LEAD_EDITABLE_FIELDS.join('、')}）`);
       db.transaction(() => {
         const cur = db.prepare('SELECT * FROM leads WHERE id = ?').get(id);
         if (!cur) throw notFound('线索不存在');
@@ -438,7 +438,7 @@ export function createLeadStore(ctx) {
     async refresh(id) {
       const cur = db.prepare('SELECT id, conversation_id FROM leads WHERE id = ?').get(id);
       if (!cur) throw notFound('线索不存在');
-      if (!llmConfigured(ctx.getSettings(), ctx.config)) throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      if (!llmConfigured(ctx.getSettings(), ctx.config)) throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
       return runExtraction(cur.conversation_id, cur.id);
     },
   };

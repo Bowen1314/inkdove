@@ -61,7 +61,7 @@ function fakeTgUser() {
         call('restore');
         if (state.restoreFails > 0) {
           state.restoreFails--;
-          throw new TgUserError('连不上 Telegram：timeout');
+          throw new TgUserError('无法连接 Telegram：timeout');
         }
         return state.sessions.get(o.storagePath) ?? null;
       },
@@ -126,7 +126,7 @@ function fakeTgUser() {
       },
       async logOut() {
         call('logOut');
-        if (state.logOutFail) throw new TgUserError('连不上 Telegram：timeout');
+        if (state.logOutFail) throw new TgUserError('无法连接 Telegram：timeout');
         state.sessions.delete(o.storagePath);
       },
       async close() {
@@ -224,7 +224,7 @@ describe('Telegram 扫码登录', () => {
     await t.close();
   });
 
-  it('没填 api_id / api_hash：not_configured，不能扫码；格式不对 400；页面上只说 api_hash 设没设', async () => {
+  it('没填 api_id / api_hash：not_configured，不能扫码；格式错误 400；页面上只说 api_hash 设没设', async () => {
     assert.equal((await status()).state, 'not_configured');
     const no = await t.req('POST', api('login'));
     assert.equal(no.status, 400);
@@ -465,11 +465,11 @@ describe('Telegram 扫码登录', () => {
     fake.state.twoFa = '';
   });
 
-  it('用登录态重连时连不上 Telegram：failed，说明会自动重试，登录态留着；过一会儿自己连上', async () => {
+  it('用登录态重连时无法连接 Telegram：failed，说明会自动重试，登录态留着；过一会儿自己连上', async () => {
     fake.state.restoreFails = 2;
     await t.ctx.wa.tgUserProxyChanged();
     const st = await waitState('failed');
-    assert.match(st.error, /连不上 Telegram.*秒后自动重试/);
+    assert.match(st.error, /无法连接 Telegram.*秒后自动重试/);
     assert.ok(fs.existsSync(sessionPath()), '登录态留着');
     await waitState('working');
     client = fake.of(acc);
@@ -480,12 +480,12 @@ describe('Telegram 扫码登录', () => {
   it('登录失效（比如在手机上结束了墨鸽）：logged_out、说明原因，删掉登录态；发消息失败', async () => {
     client.o.onAuthLost(new TgUserError('登录失效', { code: 'AUTH_KEY_UNREGISTERED', authLost: true }));
     const st = await waitState('logged_out');
-    assert.match(st.error, /登录已经失效/);
+    assert.match(st.error, /登录已失效/);
     await waitFor(sessionGone, { message: '登录态没删掉' });
     assert.ok(client.closed);
     const r = await t.req('POST', `${convPath(cid(MARIA))}/send`, { body: { text: '还在吗' } });
     assert.equal(r.body.status, 'failed');
-    assert.match(r.body.error, /还没有登录/);
+    assert.match(r.body.error, /未登录/);
     // 没有登录态：改号时不会自己连
     await t.req('PUT', `/api/accounts/${acc.id}`, { body: { name: 'TG 扫码号' } });
     assert.equal(fake.of(acc), client);
@@ -610,7 +610,7 @@ describe('Telegram 扫码登录：太久没完成', () => {
         );
       await t.req('POST', `/api/accounts/${acc.id}/telegram/login`);
       const st = await timedOut();
-      assert.match(st.error, /没有完成/);
+      assert.match(st.error, /未完成/);
       assert.ok(fake.of(acc).closed);
       assert.ok(!fs.existsSync(sessionPath));
       assert.equal((await t.req('GET', `/api/accounts/${acc.id}/telegram/qr`)).status, 404);
@@ -621,7 +621,7 @@ describe('Telegram 扫码登录：太久没完成', () => {
       await waitFor(async () => (await status()).state === 'scan_qr');
       fake.of(acc).login.scan();
       await waitFor(async () => (await status()).state === 'password');
-      assert.match((await timedOut()).error, /没有完成/);
+      assert.match((await timedOut()).error, /未完成/);
       assert.ok(fake.of(acc).closed);
       assert.ok(!fs.existsSync(sessionPath));
       const late = await t.req('POST', `/api/accounts/${acc.id}/telegram/password`, { body: { password: 'never-typed-1' } });

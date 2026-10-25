@@ -53,7 +53,7 @@ const usageNum = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ?
  */
 export function parseRerankResponse(data, n) {
   const list = Array.isArray(data?.results) ? data.results : Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : null;
-  if (!list) throw new RerankError('重排接口返回格式不对（缺少 results 数组）', 'bad_response');
+  if (!list) throw new RerankError('重排接口返回格式错误（缺少 results 数组）', 'bad_response');
   const seen = new Set();
   const results = [];
   list.forEach((r, order) => {
@@ -64,7 +64,7 @@ export function parseRerankResponse(data, n) {
     seen.add(index);
     results.push({ index, score, order });
   });
-  if (n && !results.length) throw new RerankError('重排接口返回格式不对（结果里没有能用的序号和分数）', 'bad_response');
+  if (n && !results.length) throw new RerankError('重排接口返回格式错误（结果中无有效的序号和分数）', 'bad_response');
   results.sort((a, b) => b.score - a.score || a.order - b.order);
   const inputTokens =
     usageNum(data?.usage?.prompt_tokens) ??
@@ -83,7 +83,7 @@ function httpError(status, text, statusText, apiKey) {
   if (status === 401 || status === 403) return new RerankError(`重排接口鉴权失败（${status}）${detail}。请检查 API 密钥`, 'auth', { status });
   if (status === 404) {
     return new RerankError(
-      `重排接口返回 404${detail}。模型名不对或这个服务没有这个模型，也可能是接口地址不对（地址通常以 /v1 结尾，Cohere 是 /v2，系统会在后面加上 /rerank）`,
+      `重排接口返回 404${detail}。模型名称错误、服务不提供该模型，或接口地址错误（地址通常以 /v1 结尾，Cohere 为 /v2，系统自动追加 /rerank）`,
       'not_found',
       { status },
     );
@@ -101,17 +101,17 @@ function httpError(status, text, statusText, apiKey) {
  *   results 按分数从高到低，index 是 documents 里的序号；接口没返回的条目不在里面
  */
 export async function rerankDocuments(cfg, { query, documents, timeoutMs = 8_000, signal }) {
-  if (!rerankRoot(cfg?.baseUrl)) throw new RerankError('还没有填写重排接口地址', 'config');
-  if (!String(cfg.model || '').trim()) throw new RerankError('还没有填写重排模型', 'config');
+  if (!rerankRoot(cfg?.baseUrl)) throw new RerankError('未填写重排接口地址', 'config');
+  if (!String(cfg.model || '').trim()) throw new RerankError('未填写重排模型', 'config');
   const key = String(cfg.apiKey || '');
   // 密钥只能是可见 ASCII，否则 fetch 拼请求头时会报错，而且报错信息里带着密钥
-  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new RerankError('API 密钥里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+  if (key && !/^[\x21-\x7e]+$/.test(key)) throw new RerankError('API 密钥包含空格、中文或其他非法字符，请检查后重新输入', 'config');
   if (!documents.length) return { results: [], inputTokens: null, outputTokens: null, model: cfg.model };
   const { url, headers, body } = buildRerankRequest(cfg, query, documents);
   try {
     if (!/^https?:$/.test(new URL(url).protocol)) throw new Error('protocol');
   } catch {
-    throw new RerankError('重排接口地址格式不对，要以 http:// 或 https:// 开头', 'config');
+    throw new RerankError('重排接口地址格式错误，需以 http:// 或 https:// 开头', 'config');
   }
 
   const timeout = AbortSignal.timeout(timeoutMs);
@@ -128,14 +128,14 @@ export async function rerankDocuments(cfg, { query, documents, timeoutMs = 8_000
     }
     const code = err?.cause?.code || err?.code || '';
     const reason = CONNECT_ERRORS[code] ? `${CONNECT_ERRORS[code]}（${code}）` : code || err?.cause?.message || err?.message || String(err);
-    throw new RerankError(`连不上重排接口：${redactKey(reason, key)}`, 'network');
+    throw new RerankError(`无法连接重排接口：${redactKey(reason, key)}`, 'network');
   }
   if (!res.ok) throw httpError(res.status, text, res.statusText, key);
   let data;
   try {
     data = JSON.parse(text);
   } catch {
-    throw new RerankError('重排接口返回的不是 JSON，请检查接口地址是否正确', 'bad_response');
+    throw new RerankError('重排接口返回的内容非 JSON，请检查接口地址', 'bad_response');
   }
   return { ...parseRerankResponse(data, documents.length), model: cfg.model };
 }

@@ -30,7 +30,7 @@ export function createWahaClient(config) {
       });
     } catch (err) {
       const why = err?.name === 'TimeoutError' ? '超时' : err?.cause?.code || err?.message || String(err);
-      throw new WahaError(`WAHA 连不上（${base}）：${why}`);
+      throw new WahaError(`无法连接 WAHA（${base}）：${why}`);
     }
     if (raw && res.ok) return res;
     const text = await res.text();
@@ -60,9 +60,9 @@ export function createWahaClient(config) {
     try {
       u = new URL(String(mediaUrl), base);
     } catch {
-      throw new WahaError('媒体地址不合法');
+      throw new WahaError('媒体地址无效');
     }
-    if (!u.pathname.startsWith('/api/files/')) throw new WahaError(`媒体地址不是 WAHA 的 /api/files/ 路径：${u.pathname}`);
+    if (!u.pathname.startsWith('/api/files/')) throw new WahaError(`媒体地址不属于 WAHA /api/files/ 路径：${u.pathname}`);
     const headers = { accept: '*/*' };
     if (config.wahaApiKey) headers['x-api-key'] = config.wahaApiKey;
     try {
@@ -71,10 +71,10 @@ export function createWahaClient(config) {
     } catch (err) {
       if (!(err instanceof HttpGetError)) throw err; // 被中止（服务关闭）
       // WAHA 只把收到的文件留一段时间（默认 180 秒），过了就 404；给一句人话，存进 media.error 显示
-      if (err.status === 404) throw new WahaError('WAHA 返回 404：文件在 WAHA 那边已经过期或不存在', 404);
+      if (err.status === 404) throw new WahaError('WAHA 返回 404：文件已过期或不存在', 404);
       // 文案和 request() 一致：只有 JSON 里取得到 message / error 才带上
       if (err.status) throw new WahaError(`WAHA 返回 ${err.status}${err.detail ? `：${err.detail}` : ''}`, err.status);
-      throw new WahaError(`WAHA 连不上（${base}）：${err.message}`);
+      throw new WahaError(`无法连接 WAHA（${base}）：${err.message}`);
     }
   }
 
@@ -139,7 +139,7 @@ export function createWahaClient(config) {
      */
     async requestCode(name, phoneNumber) {
       const data = await request('POST', `/api/${enc(name)}/auth/request-code`, { body: { phoneNumber }, timeoutMs: 15_000 });
-      if (typeof data?.code !== 'string' || !data.code) throw new WahaError('WAHA 没有返回配对码');
+      if (typeof data?.code !== 'string' || !data.code) throw new WahaError('WAHA 未返回配对码');
       return data.code;
     },
     /** POST /api/sendText {session, chatId, text}，返回消息 id（拿不到为 null） */
@@ -201,7 +201,7 @@ export function createWahaClient(config) {
       const q = `phone=${enc(phone)}&session=${enc(session)}`;
       const data = await request('GET', `/api/contacts/check-exists?${q}`, { timeoutMs: 15_000 });
       if (!data || typeof data !== 'object' || typeof data.numberExists !== 'boolean') {
-        throw new WahaError('WAHA 查号接口的返回里没有 numberExists');
+        throw new WahaError('WAHA 号码查询接口未返回 numberExists');
       }
       const chatId = typeof data.chatId === 'string' && data.chatId ? data.chatId.replace(/@s\.whatsapp\.net$/i, '@c.us') : null;
       return { exists: data.numberExists, chatId: data.numberExists ? chatId : null };
@@ -243,7 +243,7 @@ export async function readLimited(res, maxBytes) {
 
 export class TooLargeError extends Error {
   constructor(size, limit) {
-    super(`文件太大（超过 ${Math.round(limit / 1024 / 1024)}MB）`);
+    super(`文件过大（超过 ${Math.round(limit / 1024 / 1024)}MB）`);
     this.size = size;
     this.limit = limit;
   }
@@ -270,10 +270,10 @@ export function mapWahaStatus(status) {
     case 'WORKING':
       return { state: 'working', error: null };
     case 'FAILED':
-      return { state: 'failed', error: 'WAHA 会话失败（FAILED），请重新连接' };
+      return { state: 'failed', error: 'WAHA 会话异常（FAILED），请重新连接' };
     case 'PASSKEY_REQUIRED':
     case 'PASSKEY_CONFIRMATION_REQUIRED':
-      return { state: 'failed', error: `WAHA 状态 ${status}：需要在手机上确认通行密钥后再重新连接` };
+      return { state: 'failed', error: `WAHA 状态 ${status}：请在手机上确认通行密钥后重新连接` };
     default:
       return { state: 'failed', error: `未知的 WAHA 状态：${status}` };
   }

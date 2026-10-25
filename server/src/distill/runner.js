@@ -133,7 +133,7 @@ export function createDistillRunner(ctx) {
     }
     if (current) throw new HttpError(409, 'job_running', '已有蒸馏任务在运行');
     if (!llmConfigured(ctx.getSettings(), ctx.config)) {
-      throw new HttpError(400, 'llm_not_configured', '还没有配置模型，请先到设置页填写');
+      throw new HttpError(400, 'llm_not_configured', '未配置模型，请前往设置页配置');
     }
     const sources = selectSources(mode, sourceIds);
     if (!sources.length) throw new HttpError(400, 'nothing_to_distill', '没有可处理的资料');
@@ -180,7 +180,7 @@ export function createDistillRunner(ctx) {
         const e = kb.deleteDistillEntries();
         // F2c：会话里客户问出来的缺口不是蒸馏产物，重建时保留
         const g = db.prepare("DELETE FROM gaps WHERE status = 'open' AND origin = 'distill'").run().changes;
-        log(job, 'info', `已清空 ${e} 条蒸馏条目和 ${g} 个蒸馏发现的待处理缺口（手动、缺口、会话来源的条目和会话里问出的缺口保留）`);
+        log(job, 'info', `已清空 ${e} 条蒸馏条目和 ${g} 个蒸馏产生的待处理缺口（保留手动、缺口、会话来源的条目及会话缺口）`);
       }
 
       // 1. parse
@@ -190,7 +190,7 @@ export function createDistillRunner(ctx) {
         check();
         const parts = chunkText(s.text);
         parts.forEach((text) => chunks.push({ sourceId: s.id, sourceName: s.name, text }));
-        log(job, 'info', `【解析】${s.name}：${s.chars} 字，切成 ${parts.length} 块`);
+        log(job, 'info', `【解析】${s.name}：${s.chars} 字，分为 ${parts.length} 块`);
         tick(job);
       }
 
@@ -292,7 +292,7 @@ export function createDistillRunner(ctx) {
       // 5. gaps
       check();
       setPhase(job, 'gaps', 2);
-      log(job, 'info', '【缺口】列出客户最可能问的 25 个问题');
+      log(job, 'info', '【缺口】生成客户最可能提出的 25 个问题');
       try {
         const profile = kb.getProfile();
         const entryTitles = kb.sampleTitles(PROMPT_TITLES, PROMPT_TITLE_CHARS);
@@ -305,7 +305,7 @@ export function createDistillRunner(ctx) {
         let n = 0;
         for (const r of results) {
           if (r?.answerable !== false || typeof r.question !== 'string') continue;
-          if (kb.addGapDedup(r.question, r.reason || '知识库里没有足够信息回答')) n++;
+          if (kb.addGapDedup(r.question, r.reason || '知识库信息不足，无法回答')) n++;
         }
         job.stats.gapsFound += n;
         log(job, 'info', `【缺口】新增 ${n} 个缺口`);
@@ -421,7 +421,7 @@ export function createDistillRunner(ctx) {
     cancel(id) {
       const exists = db.prepare('SELECT status FROM jobs WHERE id = ?').get(id);
       if (!exists) throw new HttpError(404, 'not_found', '任务不存在');
-      if (!current || current.job.id !== id) throw new HttpError(409, 'job_not_running', '任务已经结束');
+      if (!current || current.job.id !== id) throw new HttpError(409, 'job_not_running', '任务已结束');
       current.controller.abort(new CancelledError('cancelled'));
     },
     get(id) {

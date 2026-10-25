@@ -46,7 +46,7 @@ function contentFor(format, m) {
   if (!atts.length) return null;
   for (const a of atts) {
     const isImage = /^image\//.test(a.mime);
-    if (!isImage && format !== 'gemini') throw new LlmError(`${format} 格式不支持在对话里直接传 ${a.mime}`);
+    if (!isImage && format !== 'gemini') throw new LlmError(`${format} 格式不支持在对话中直接传入 ${a.mime}`);
   }
   if (format === 'anthropic') {
     return [
@@ -119,30 +119,30 @@ export function buildLlmRequest(o) {
 export function parseLlmResponse(format, data) {
   if (format === 'anthropic') {
     const blocks = Array.isArray(data?.content) ? data.content : null;
-    if (!blocks) throw new LlmError('Anthropic 返回格式不对（缺少 content）');
+    if (!blocks) throw new LlmError('Anthropic 返回格式错误（缺少 content）');
     const text = blocks
       .filter((b) => b?.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text)
       .join('');
-    if (!text) throw new LlmError(`Anthropic 没有返回文本（stop_reason: ${data?.stop_reason ?? '未知'}）`);
+    if (!text) throw new LlmError(`Anthropic 未返回文本（stop_reason: ${data?.stop_reason ?? '未知'}）`);
     return text;
   }
   if (format === 'gemini') {
     const cand = Array.isArray(data?.candidates) ? data.candidates[0] : undefined;
     if (!cand) {
       const block = data?.promptFeedback?.blockReason;
-      throw new LlmError(block ? `Gemini 拦截了请求（blockReason: ${block}）` : 'Gemini 没有返回候选结果');
+      throw new LlmError(block ? `Gemini 拦截请求（blockReason: ${block}）` : 'Gemini 未返回候选结果');
     }
     const parts = Array.isArray(cand.content?.parts) ? cand.content.parts : [];
     const text = parts
       .filter((p) => p && !p.thought && typeof p.text === 'string')
       .map((p) => p.text)
       .join('');
-    if (!text) throw new LlmError(`Gemini 没有返回文本（finishReason: ${cand.finishReason ?? '未知'}）`);
+    if (!text) throw new LlmError(`Gemini 未返回文本（finishReason: ${cand.finishReason ?? '未知'}）`);
     return text;
   }
   const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string' || !content) throw new LlmError('LLM 返回格式不对（缺少 choices[0].message.content）');
+  if (typeof content !== 'string' || !content) throw new LlmError('LLM 返回格式错误（缺少 choices[0].message.content）');
   return content;
 }
 
@@ -220,7 +220,7 @@ export async function requestJson(o) {
       try {
         return JSON.parse(text);
       } catch {
-        throw new LlmError('LLM 返回的不是 JSON');
+        throw new LlmError('LLM 返回的内容非 JSON');
       }
     } catch (err) {
       if (signal?.aborted) throw signal.reason ?? new LlmError('已取消');
@@ -285,7 +285,7 @@ export async function transcribe(opts) {
   const headers = {};
   if (opts.apiKey) headers.authorization = `Bearer ${opts.apiKey}`;
   const data = await requestJson({ ...opts, url: transcriptionUrl(opts.baseUrl), headers, body: form });
-  if (typeof data?.text !== 'string') throw new LlmError('转写接口返回格式不对（缺少 text）');
+  if (typeof data?.text !== 'string') throw new LlmError('转写接口返回格式错误（缺少 text）');
   return { text: data.text };
 }
 

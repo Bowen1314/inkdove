@@ -202,7 +202,7 @@ export class QuantizedIndex {
   set(id, hash, vectors) {
     const len = (v) => (v instanceof Float32Array ? v.length : v.q.length);
     if (!this.dims && vectors.length) this.dims = len(vectors[0]);
-    if (vectors.some((v) => len(v) !== this.dims)) throw new Error(`向量维度不对：要 ${this.dims} 维`);
+    if (vectors.some((v) => len(v) !== this.dims)) throw new Error(`向量维度不正确：应为 ${this.dims} 维`);
     this.remove(id);
     let num = this.freeNums.pop();
     if (num === undefined) {
@@ -575,7 +575,7 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
       const it = items[0];
       failed.set(it.id, it.hash);
       singleFailStreak++;
-      lastError = { message: `有 ${failed.size} 条条目算不了向量，已跳过（文字改了会再试）。最近一条：${message}`, kind, at };
+      lastError = { message: `${failed.size} 条条目无法计算向量，已跳过（内容修改后将重试）。最近一次错误：${message}`, kind, at };
       log.warn(`[vectors] 条目 ${it.id} 算不了向量，先跳过：${message}`);
       return 'ok';
     }
@@ -642,17 +642,17 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
     if (closed || k !== key || idx !== mem) return CANCELLED;
     const raw = Array.isArray(r?.vectors) ? r.vectors : null;
     if (!raw || raw.length !== texts.length) {
-      return onError(new EmbedError(`向量接口返回了 ${raw?.length ?? 0} 个向量，发过去的是 ${texts.length} 段`, 'bad_response'), items, k);
+      return onError(new EmbedError(`向量接口返回 ${raw?.length ?? 0} 个向量，与提交的 ${texts.length} 段不符`, 'bad_response'), items, k);
     }
     const vectors = raw.map((v) => normalizeVector(v instanceof Float32Array ? v : Float32Array.from(v)));
     const dims = vectors[0].length;
     if (!dims || vectors.some((v) => v.length !== dims)) {
-      return onError(new EmbedError('向量接口这次返回的几个向量维度不一样', 'bad_response'), items, k);
+      return onError(new EmbedError('向量接口返回的向量维度不一致', 'bad_response'), items, k);
     }
     const want = idx.dims || stmt.dimsOf.get(k) || 0;
     if (want && want !== dims) {
       return onError(
-        new EmbedError(`向量维度和之前算的不一样（之前 ${want} 维，这次 ${dims} 维），可能是服务那边换了模型。点「重新计算」清掉旧向量重算`, 'dims'),
+        new EmbedError(`向量维度与已有向量不一致（原 ${want} 维，现 ${dims} 维），可能已更换模型。请点击「重新计算」清除旧向量并重算`, 'dims'),
         items,
         k,
       );
@@ -767,7 +767,7 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
         }
       } catch (err) {
         log.error(`[vectors] 后台计算出错：${err?.stack || err}`);
-        res = onError(Object.assign(new Error(`后台计算出错：${err?.message || err}`), { kind: 'internal' }), [], key);
+        res = onError(Object.assign(new Error(`后台计算失败：${err?.message || err}`), { kind: 'internal' }), [], key);
       } finally {
         running = null;
       }
@@ -883,7 +883,7 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
         try {
           const r = await ctx.ai.embed({ texts: [q], task: 'query' });
           const v = r?.vectors?.[0];
-          if (!v?.length) throw new EmbedError('向量接口没有返回查询向量', 'bad_response');
+          if (!v?.length) throw new EmbedError('向量接口未返回查询向量', 'bad_response');
           qv = normalizeVector(v instanceof Float32Array ? v : Float32Array.from(v));
         } catch (err) {
           const kind = typeof err?.kind === 'string' ? err.kind : 'error';
@@ -914,7 +914,7 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
       else if (loading && state !== 'running') shown = 'loading';
       return {
         enabled,
-        configError: enabled && !key ? cfg?.error || '向量检索没配好' : null,
+        configError: enabled && !key ? cfg?.error || '向量检索配置不完整' : null,
         format: cfg?.ok ? cfg.format : null,
         model: cfg?.ok ? cfg.model : null,
         state: shown,
@@ -929,7 +929,7 @@ export function createVectorIndexer(ctx, { debounceMs = VECTOR_DEBOUNCE_MS, now 
         // 一条都没算出来、已经放慢到 30 分钟一次时给管理员的说明（设置页显示在错误下面）
         hint:
           enabled && key && state === 'waiting' && attempt >= COLD_FAIL_STREAK && embedded === 0
-            ? `一条都没算出来，连续失败 ${attempt} 次，多半是模型名或服务地址不对（有的中转站的分组里没有向量模型）。已改成每 ${COLD_RETRY_MS / 60_000} 分钟重试一次；改好设置或点「重试」会马上再试。`
+            ? `所有条目均计算失败，已连续失败 ${attempt} 次，可能是模型名或服务地址有误（部分中转站分组不含向量模型）。已改为每 ${COLD_RETRY_MS / 60_000} 分钟重试一次；修改设置或点击「重试」将立即重试。`
             : null,
         retryAt: state === 'waiting' && retryAt ? new Date(retryAt).toISOString() : null,
         lastDoneAt,

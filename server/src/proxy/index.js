@@ -22,7 +22,7 @@ import {
 import { disableRouting, enableRouting, proxiedDispatcher } from './route.js';
 import { clashErrorMessage, fetchSubscription, SubscriptionError } from './subscription.js';
 
-export const MIHOMO_MISSING = '这台机器没有 mihomo，Docker 镜像里自带；本地开发可以用 INKDOVE_MIHOMO_PATH 指定';
+export const MIHOMO_MISSING = '未找到 mihomo。Docker 镜像已内置；本地开发可通过 INKDOVE_MIHOMO_PATH 指定';
 /** 订阅多久自动更新一次；失败后多久再试 */
 export const REFRESH_EVERY_MS = 24 * 60 * 60 * 1000;
 export const REFRESH_RETRY_MS = 60 * 60 * 1000;
@@ -153,7 +153,7 @@ export function createGlobalProxy(ctx, options = {}) {
       const users = usedBy();
       if (users.length) {
         throw badRequest(
-          `proxy.enabled 这些号在用全局代理：${users.map((a) => a.name).join('、')}。先在号的设置里把代理改掉，再关全局代理`,
+          `proxy.enabled 以下号码正在使用全局代理：${users.map((a) => a.name).join('、')}。请先在号码设置中更改代理，再关闭全局代理`,
           'global_proxy_in_use',
         );
       }
@@ -194,15 +194,15 @@ export function createGlobalProxy(ctx, options = {}) {
     const list = nodesOf(out.source, nodes);
     if (out.enabled && !list.length) {
       throw badRequest(
-        out.source === 'subscription' ? 'proxy.subscriptionUrl 还没有填订阅地址' : 'proxy.config 还没有粘贴 Clash 配置',
+        out.source === 'subscription' ? 'proxy.subscriptionUrl 未填写订阅地址' : 'proxy.config 未粘贴 Clash 配置',
         'proxy_no_nodes',
       );
     }
     let notice = null;
     if (out.node && !list.some((p) => p.name === out.node)) {
       // 这次明确选的节点不存在：报错；原来选的节点在换了来源 / 订阅之后没了：改回自动并说明
-      if (patch?.node !== undefined && patch.node === out.node) throw badRequest('proxy.node 没有这个节点，请重新选择', 'proxy_node_not_found');
-      notice = `之前选的节点「${out.node}」现在的节点列表里没有了，已改成自动选最快的`;
+      if (patch?.node !== undefined && patch.node === out.node) throw badRequest('proxy.node 节点不存在，请重新选择', 'proxy_node_not_found');
+      notice = `原节点「${out.node}」已不在节点列表中，已改为自动选择最快节点`;
       out.node = '';
     }
     return {
@@ -250,7 +250,7 @@ export function createGlobalProxy(ctx, options = {}) {
     // 开着：先换出口（起不来时请求失败，不退回直连）
     ensureRouting(s);
     const proxies = nodesOf(s.source);
-    blocked = !available() ? MIHOMO_MISSING : !proxies.length ? '还没有节点：请填订阅地址或粘贴 Clash 配置' : null;
+    blocked = !available() ? MIHOMO_MISSING : !proxies.length ? '无可用节点：请填写订阅地址或粘贴 Clash 配置' : null;
     if (blocked) {
       await runner.stop();
       return;
@@ -298,7 +298,7 @@ export function createGlobalProxy(ctx, options = {}) {
   /** 走代理的连接等 mihomo 就绪；关着、起不来时抛出原因 */
   async function waitReady() {
     await applying;
-    if (blocked) throw new Error(`全局代理没有在运行：${blocked}`);
+    if (blocked) throw new Error(`全局代理未运行：${blocked}`);
     await runner.waitReady();
   }
 
@@ -310,18 +310,18 @@ export function createGlobalProxy(ctx, options = {}) {
     if (refreshing) return refreshing;
     refreshing = (async () => {
       const url = settings().subscriptionUrl;
-      if (!url) return { ok: false, error: '还没有填订阅地址' };
+      if (!url) return { ok: false, error: '未填写订阅地址' };
       const at = new Date(now()).toISOString();
       try {
         const r = await checkedNodes(await fetchSubscription(url, { timeoutMs: options.subscriptionTimeoutMs }));
-        if (closed || settings().subscriptionUrl !== url) return { ok: false, error: '订阅地址在更新期间改了，这次结果不用' };
+        if (closed || settings().subscriptionUrl !== url) return { ok: false, error: '订阅地址在更新期间已变更，本次结果已丢弃' };
         const store = loadNodes();
         store.subscription = { ...r, updatedAt: at };
         saveNodes(store);
         const s = settings();
         let notice = null;
         if (s.source === 'subscription' && s.node && !r.proxies.some((p) => p.name === s.node)) {
-          notice = `订阅更新后没有之前选的节点「${s.node}」了，已改成自动选最快的`;
+          notice = `订阅更新后原节点「${s.node}」已不存在，已改为自动选择最快节点`;
           ctx.updateSettings((x) => {
             x.proxy.node = '';
           });
@@ -424,12 +424,12 @@ export function createGlobalProxy(ctx, options = {}) {
 
   /** 经全局代理请求 PROXY_TEST_URL，返回出口 IP 和耗时（只看代理本身，不管直连名单） */
   async function test() {
-    if (!settings().enabled) return { ok: false, error: '全局代理没有开启' };
+    if (!settings().enabled) return { ok: false, error: '全局代理未开启' };
     const started = now();
     try {
       await waitReady();
       const dispatcher = proxiedDispatcher();
-      if (!dispatcher) throw new Error('全局代理没有在运行');
+      if (!dispatcher) throw new Error('全局代理未运行');
       const res = await fetch(ctx.proxyTestUrl, { dispatcher, signal: AbortSignal.timeout(TEST_TIMEOUT_MS) });
       const body = await res.text();
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -439,7 +439,7 @@ export function createGlobalProxy(ctx, options = {}) {
       } catch {
         /* 下面统一报错 */
       }
-      if (typeof ip !== 'string' || !ip) throw new Error('返回内容里没有 ip');
+      if (typeof ip !== 'string' || !ip) throw new Error('返回内容中无 ip');
       return { ok: true, ip, latencyMs: now() - started };
     } catch (err) {
       const msg = err?.name === 'TimeoutError' ? `超时（${TEST_TIMEOUT_MS / 1000} 秒）` : err?.cause?.message || err?.message || String(err);
@@ -450,7 +450,7 @@ export function createGlobalProxy(ctx, options = {}) {
   /** 给所有节点测一次延迟（经 mihomo 访问 DELAY_TEST_URL）。{ok, delays: {节点名: 毫秒或 null（超时、连不上）}} */
   async function delays() {
     const s = settings();
-    if (!s.enabled) return { ok: false, error: '全局代理没有开启，开启后才能测速' };
+    if (!s.enabled) return { ok: false, error: '全局代理未开启，开启后方可测速' };
     try {
       await waitReady();
     } catch (err) {

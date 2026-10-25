@@ -48,15 +48,15 @@ export const botIdOf = (token) => (TG_TOKEN_RE.test(String(token || '')) ? Strin
 /** Telegram 原因 → 中文说明（常见的几种），其余原样带上 */
 function explain(status, description) {
   const d = String(description || '');
-  if (status === 401 || status === 404) return '机器人的 token 不对或已经失效，请到 @BotFather 重新复制';
-  if (status === 409 && /webhook/i.test(d)) return '这个机器人设了 webhook，墨鸽收不到消息（墨鸽开始收消息时会自动删掉 webhook）';
-  if (status === 409) return '这个机器人的 token 在别的地方也在收消息（同一个机器人只能给一个程序用）';
-  if (status === 403 && /blocked/i.test(d)) return '客户把机器人拉黑了，发不过去';
+  if (status === 401 || status === 404) return '机器人 token 错误或已失效，请从 @BotFather 重新复制';
+  if (status === 409 && /webhook/i.test(d)) return '该机器人已设置 webhook，无法接收消息（开始接收时自动删除 webhook）';
+  if (status === 409) return '该机器人 token 正被其他程序使用（同一机器人仅限一个程序接收消息）';
+  if (status === 403 && /blocked/i.test(d)) return '客户已拉黑机器人，无法发送';
   if (status === 403 && /deactivated/i.test(d)) return '客户的 Telegram 帐号已注销';
-  if (/BUSINESS_PEER_USAGE_MISSING|BUSINESS_PEER_INVALID/i.test(d)) return '这个客户 24 小时内没有发过消息，Telegram 不让机器人代你回复，请在手机上回';
-  if (/BUSINESS_CONNECTION_INVALID|business connection not found/i.test(d)) return '机器人和这个私人号的连接已经断开，请在 Telegram 的「设置 → 聊天自动化」里重新连接';
-  if (/message can't be deleted|message to delete not found/i.test(d)) return '这条消息删不了（超过 48 小时，或者已经删了）';
-  if (/chat not found/i.test(d)) return '找不到这个聊天（客户还没和机器人说过话）';
+  if (/BUSINESS_PEER_USAGE_MISSING|BUSINESS_PEER_INVALID/i.test(d)) return '客户 24 小时内未发送消息，Telegram 不允许机器人代为回复，请在手机上回复';
+  if (/BUSINESS_CONNECTION_INVALID|business connection not found/i.test(d)) return '机器人与该私人帐号的连接已断开，请在 Telegram「设置 → 聊天自动化」中重新连接';
+  if (/message can't be deleted|message to delete not found/i.test(d)) return '无法删除该消息（超过 48 小时或已删除）';
+  if (/chat not found/i.test(d)) return '会话不存在（客户尚未与机器人对话）';
   return `Telegram 返回 ${status}：${d.slice(0, 200)}`;
 }
 
@@ -83,7 +83,7 @@ function parseResponse(status, text) {
  * @param {{timeoutMs?: number, signal?: AbortSignal}} [o]
  */
 export async function tgCall(apiBase, token, method, params = {}, { timeoutMs = 20_000, signal } = {}) {
-  if (!token) throw new TgError('还没有填机器人的 token');
+  if (!token) throw new TgError('未填写机器人 token');
   const timeout = AbortSignal.timeout(timeoutMs);
   let res;
   try {
@@ -95,14 +95,14 @@ export async function tgCall(apiBase, token, method, params = {}, { timeoutMs = 
     });
   } catch (err) {
     if (signal?.aborted) throw signal.reason ?? err;
-    throw new TgError(`连不上 Telegram：${timeout.aborted ? '超时' : err?.cause?.code || err?.message || err}`);
+    throw new TgError(`无法连接 Telegram：${timeout.aborted ? '超时' : err?.cause?.code || err?.message || err}`);
   }
   return parseResponse(res.status, await res.text());
 }
 
 /** 上传一个文件（multipart）。fields 里的值转成字符串，对象转 JSON */
 async function tgUpload(apiBase, token, method, fields, file, { timeoutMs = 120_000 } = {}) {
-  if (!token) throw new TgError('还没有填机器人的 token');
+  if (!token) throw new TgError('未填写机器人 token');
   const form = new FormData();
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined || v === null || v === '') continue;
@@ -114,7 +114,7 @@ async function tgUpload(apiBase, token, method, fields, file, { timeoutMs = 120_
   try {
     res = await fetch(`${apiBase}/bot${token}/${method}`, { method: 'POST', body: form, signal: timeout });
   } catch (err) {
-    throw new TgError(`连不上 Telegram：${timeout.aborted ? '超时' : err?.cause?.code || err?.message || err}`);
+    throw new TgError(`无法连接 Telegram：${timeout.aborted ? '超时' : err?.cause?.code || err?.message || err}`);
   }
   return parseResponse(res.status, await res.text());
 }
@@ -185,7 +185,7 @@ export const tgReadBusinessMessage = (apiBase, token, businessConnectionId, chat
 function downloadFail(err) {
   if (!(err instanceof HttpGetError)) return err;
   if (err.status) return new TgError(`下载文件失败：Telegram 返回 ${err.status}`, { status: err.status });
-  return new TgError(`连不上 Telegram：${err.message}`);
+  return new TgError(`无法连接 Telegram：${err.message}`);
 }
 
 /**
@@ -204,7 +204,7 @@ export async function tgOpenFile(apiBase, token, fileId, { maxBytes, knownSize =
     if (err instanceof TgError && /file is too big/i.test(err.description)) throw new TooLargeError(knownSize ?? NaN, TG_DOWNLOAD_MAX_BYTES);
     throw err;
   }
-  if (!info?.file_path) throw new TgError('Telegram 没给这个文件的下载地址');
+  if (!info?.file_path) throw new TgError('Telegram 未返回该文件的下载地址');
   let got;
   try {
     got = await httpGet(`${apiBase}/file/bot${token}/${info.file_path}`, { timeoutMs, signal });

@@ -172,7 +172,7 @@ export async function dropInvalidNodes({ binPath, dir, proxies, spawn }) {
     const m = /^proxy (\d+):/.exec(r.error);
     const i = m ? Number(m[1]) : -1;
     if (i < 0 || i >= list.length || dropped.length >= MAX_DROPS || list.length <= 1) {
-      throw new Error(`mihomo 不接受这些节点：${r.error}`);
+      throw new Error(`mihomo 无法加载节点：${r.error}`);
     }
     dropped.push(list[i].name);
     list = list.filter((_, j) => j !== i);
@@ -226,7 +226,7 @@ export function createMihomoRunner(o) {
   /** 调控制接口（只连 127.0.0.1，不走任何代理） */
   function api(pathname, { timeoutMs = 5000 } = {}) {
     const cfg = current?.config;
-    if (!cfg) return Promise.reject(new Error('mihomo 没在运行'));
+    if (!cfg) return Promise.reject(new Error('mihomo 未运行'));
     const [, port] = cfg['external-controller'].split(':');
     return new Promise((resolve, reject) => {
       const req = http.get(
@@ -287,7 +287,7 @@ export function createMihomoRunner(o) {
       writePrivate(configPath, JSON.stringify(run.config, null, 1));
     } catch (err) {
       state = 'error';
-      error = `写配置文件失败：${err?.code || err?.message || err}`;
+      error = `写入配置文件失败：${err?.code || err?.message || err}`;
       settleWaiters(new Error(error));
       return;
     }
@@ -336,7 +336,7 @@ export function createMihomoRunner(o) {
         settleWaiters(null);
       } else {
         // 控制接口一直不通：当成启动失败，杀掉重来
-        failReason = lastError() || 'mihomo 启动后控制接口一直连不上';
+        failReason = lastError() || 'mihomo 已启动，但控制接口无法连接';
         error = failReason;
         try {
           p.kill('SIGKILL');
@@ -359,7 +359,7 @@ export function createMihomoRunner(o) {
     if (Date.now() - startedAt >= backoff.stableMs) failures = 0;
     failures++;
     const delay = Math.min(backoff.maxMs, backoff.minMs * 2 ** (failures - 1));
-    const why = reason || lastError() || (signal ? `被信号 ${signal} 结束` : `退出码 ${code}`);
+    const why = reason || lastError() || (signal ? `被信号 ${signal} 终止` : `退出码 ${code}`);
     state = 'error';
     error = why;
     o.log.warn(`[proxy] mihomo 退出了（${signal || `退出码 ${code}`}）：${why}；${Math.round(delay / 1000)} 秒后重启`);
@@ -438,13 +438,13 @@ export function createMihomoRunner(o) {
     /** 等到 running；出错、超时或停了时抛错（信息可以直接给用户看） */
     waitReady(timeoutMs = READY_TIMEOUT_MS) {
       if (state === 'running') return Promise.resolve();
-      if (!desired) return Promise.reject(new Error('全局代理没有在运行'));
+      if (!desired) return Promise.reject(new Error('全局代理未运行'));
       if (state === 'error' && error) return Promise.reject(new Error(error));
       return new Promise((resolve, reject) => {
         const w = { resolve, reject };
         const t = setTimeout(() => {
           waiters = waiters.filter((x) => x !== w);
-          reject(new Error('全局代理还没启动好，请稍后再试'));
+          reject(new Error('全局代理正在启动，请稍后重试'));
         }, timeoutMs);
         t.unref?.();
         w.resolve = () => {

@@ -127,18 +127,18 @@ export const baiduSign = (appId, q, salt, appKey) => crypto.createHash('md5').up
 function baiduError(code, msg, redactOpts) {
   const detail = detailOf(msg, redactOpts);
   const what = `${code}${detail ? `：${detail}` : ''}`;
-  if (code === '54001' || code === '52003') return new TranslateError(`百度翻译鉴权失败（${what}）。请检查 APP ID 和密钥，或通用翻译有没有开通`, 'auth');
-  if (code === '58000') return new TranslateError(`百度翻译拒绝了这台服务器的 IP（${what}）。请在开发者信息里改 IP 白名单或留空`, 'auth');
-  if (code === '58002') return new TranslateError(`百度翻译的服务被关掉了（${what}）。请到管理控制台开启`, 'auth');
-  if (code === '58003') return new TranslateError(`百度翻译封了这个 IP 一天（${what}）`, 'auth');
-  if (code === '90107') return new TranslateError(`百度翻译的认证没通过或还没生效（${what}）`, 'auth');
+  if (code === '54001' || code === '52003') return new TranslateError(`百度翻译鉴权失败（${what}）。请检查 APP ID、密钥及通用翻译服务开通状态`, 'auth');
+  if (code === '58000') return new TranslateError(`百度翻译拒绝本服务器 IP（${what}）。请在开发者信息中修改 IP 白名单或留空`, 'auth');
+  if (code === '58002') return new TranslateError(`百度翻译服务已关闭（${what}）。请在管理控制台开启`, 'auth');
+  if (code === '58003') return new TranslateError(`百度翻译已封禁本服务器 IP 24 小时（${what}）`, 'auth');
+  if (code === '90107') return new TranslateError(`百度翻译认证未通过或未生效（${what}）`, 'auth');
   if (code === '54004') return new TranslateError(`百度翻译账户余额不足（${what}）`, 'quota');
-  if (code === '54003' || code === '54005' || code === '59004') return new TranslateError(`百度翻译请求太频繁，被限流了（${what}）`, 'rate_limit');
+  if (code === '54003' || code === '54005' || code === '59004') return new TranslateError(`百度翻译请求过于频繁，已限流（${what}）`, 'rate_limit');
   if (code === '58001') {
-    return new TranslateError(`百度翻译不支持这个语言（${what}）。个人版只能用 28 个常见语种`, 'unsupported_language');
+    return new TranslateError(`百度翻译不支持该语言（${what}）。个人版仅支持 28 个常用语种`, 'unsupported_language');
   }
   if (code === '52001') return new TranslateError(`百度翻译处理超时（${what}）`, 'timeout');
-  if (code === '52002') return new TranslateError(`百度翻译出错了（${what}）`, 'server');
+  if (code === '52002') return new TranslateError(`百度翻译服务异常（${what}）`, 'server');
   return new TranslateError(`百度翻译返回错误（${what}）`, 'bad_request');
 }
 
@@ -154,10 +154,10 @@ export default {
   async translate(cfg, { text, source, target }, o = {}) {
     const appId = String(cfg.appId || '').trim();
     const appKey = String(cfg.appKey || '').trim();
-    if (!appId || !appKey) throw new TranslateError('百度翻译还没有填 APP ID 和密钥', 'config');
-    if (!visibleAscii(appId) || !visibleAscii(appKey)) throw new TranslateError('百度翻译的 APP ID 或密钥里有空格、中文或其他特殊字符，请检查后重新填写', 'config');
+    if (!appId || !appKey) throw new TranslateError('百度翻译未填写 APP ID 和密钥', 'config');
+    if (!visibleAscii(appId) || !visibleAscii(appKey)) throw new TranslateError('百度翻译的 APP ID 或密钥包含空格、中文或其他非法字符，请检查后重新输入', 'config');
     const to = TO_BAIDU[target];
-    if (!to) throw new TranslateError('百度翻译（个人版）不支持译成这个语言', 'unsupported_language');
+    if (!to) throw new TranslateError('百度翻译（个人版）不支持译为该语言', 'unsupported_language');
     const from = source && source !== 'auto' ? TO_BAIDU[source] || 'auto' : 'auto';
     const redactOpts = { secrets: [appId, appKey] };
     const salt = String(crypto.randomInt(1e9, 1e10));

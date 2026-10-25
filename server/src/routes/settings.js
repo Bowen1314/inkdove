@@ -39,7 +39,7 @@ const RERANK_TEST_DOCS = [
 ];
 /** 测试重排接口最多等多久 */
 const RERANK_TEST_TIMEOUT_MS = 20_000;
-const LOGO_TYPE_MESSAGE = '只支持 PNG、JPG、WebP 或 SVG 图片';
+const LOGO_TYPE_MESSAGE = '仅支持 PNG、JPG、WebP 或 SVG 图片';
 /** 测试翻译接口时译成英语的那段话 */
 const TRANSLATION_TEST_TEXT = '你好，很高兴认识你。请问这款产品的价格和交货期是多少？';
 
@@ -83,7 +83,7 @@ export function sniffLogo(buf) {
  */
 export function sendBrandLogo(res, next, ctx) {
   const meta = logoMeta(ctx.getSettings());
-  if (!meta) throw notFound('还没有设置 Logo');
+  if (!meta) throw notFound('未设置 Logo');
   const p = path.join(brandingDir(ctx.config), meta.filename);
   if (!fs.existsSync(p)) throw notFound('Logo 文件不存在');
   res.type(meta.mime);
@@ -138,7 +138,7 @@ export function settingsRouter(ctx) {
     let next = applySettingsPatch(ctx.getSettings(), req.body);
     // AI 发言检查要用回复模型：没配好不让打开（已经开着的不管，模型没配好时它什么都不做）
     if (next.blockwords.aiCheck && !ctx.getSettings().blockwords.aiCheck && !llmConfigured(next, ctx.config)) {
-      throw new HttpError(400, 'llm_not_configured', 'blockwords.aiCheck 要先配好回复模型：请先到「设置 → AI 模型」填写');
+      throw new HttpError(400, 'llm_not_configured', 'blockwords.aiCheck 开启前需配置回复模型，请前往「设置 → AI 模型」填写');
     }
     if (req.body.proxy === undefined) {
       ctx.setSettings(next);
@@ -174,7 +174,7 @@ export function settingsRouter(ctx) {
   router.post('/llm/test', async (_req, res) => {
     const s = ctx.getSettings();
     if (!llmConfigured(s, ctx.config)) {
-      res.json({ ok: false, error: '还没有填写 baseUrl 和回复模型' });
+      res.json({ ok: false, error: '未填写 baseUrl 和回复模型' });
       return;
     }
     const started = Date.now();
@@ -203,7 +203,7 @@ export function settingsRouter(ctx) {
       return;
     }
     if (!baseUrl) {
-      res.json({ ok: false, error: '还没有填写接口地址' });
+      res.json({ ok: false, error: '未填写接口地址' });
       return;
     }
     try {
@@ -240,7 +240,7 @@ export function settingsRouter(ctx) {
         ctx.ai.embed({ texts: [EMBED_TEST_TEXT], task: 'query', config: cfg, timeoutMs: EMBED_TEST_TIMEOUT_MS }),
       );
       const dims = r?.vectors?.[0]?.length || r?.dims || 0;
-      if (!dims) throw Object.assign(new Error('向量接口没有返回向量'), { kind: 'bad_response' });
+      if (!dims) throw Object.assign(new Error('向量接口未返回向量'), { kind: 'bad_response' });
       res.json({ ok: true, dims, model: cfg.model, latencyMs: Date.now() - started });
     } catch (err) {
       // embed.js 已经抹过密钥，这里再兜一次底
@@ -274,7 +274,7 @@ export function settingsRouter(ctx) {
         ctx.ai.rerank({ query: RERANK_TEST_QUERY, documents: RERANK_TEST_DOCS, config: cfg, timeoutMs: RERANK_TEST_TIMEOUT_MS }),
       );
       const top = r?.results?.[0];
-      if (!top) throw Object.assign(new Error('重排接口没有返回结果'), { kind: 'bad_response' });
+      if (!top) throw Object.assign(new Error('重排接口未返回结果'), { kind: 'bad_response' });
       res.json({ ok: true, model: cfg.model, latencyMs: Date.now() - started, results: r.results.length, topMatches: top.index === 1 });
     } catch (err) {
       // rerank.js 已经抹过密钥，这里再兜一次底
@@ -287,12 +287,12 @@ export function settingsRouter(ctx) {
   router.post('/translation/test', async (req, res) => {
     const b = isPlainObject(req.body) ? req.body : {};
     const provider = getTranslationProvider(b.provider);
-    if (!provider) throw badRequest('translation.provider 不认识，请先选一家翻译服务');
+    if (!provider) throw badRequest('translation.provider 无效，请选择翻译服务');
     const saved = ctx.getSettings().translation.providers[provider.id];
     const cfg = checkTranslationProviderPatch(provider.id, saved, b.config === undefined ? {} : b.config);
     const missing = missingField(provider.id, cfg);
     if (missing) {
-      res.json({ ok: false, error: `还没有填 ${provider.label} 的 ${FIELD_LABELS[missing] || missing}`, kind: 'config', field: missing });
+      res.json({ ok: false, error: `未填写 ${provider.label} 的 ${FIELD_LABELS[missing] || missing}`, kind: 'config', field: missing });
       return;
     }
     const started = Date.now();
@@ -321,8 +321,8 @@ export function settingsRouter(ctx) {
         if (!err) return next();
         if (err instanceof multer.MulterError) {
           if (err.code === 'LIMIT_FILE_SIZE') return next(new HttpError(413, 'file_too_large', '图片不能超过 512 KB'));
-          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('一次只能上传 1 个文件', 'upload_error'));
-          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名应为 file，且只能有 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_FILE_COUNT') return next(badRequest('每次仅可上传 1 个文件', 'upload_error'));
+          if (err.code === 'LIMIT_UNEXPECTED_FILE') return next(badRequest('上传字段名须为 file，且仅限 1 个文件', 'upload_error'));
           return next(badRequest(`上传失败：${err.message}`, 'upload_error'));
         }
         next(err);
@@ -330,7 +330,7 @@ export function settingsRouter(ctx) {
     },
     (req, res) => {
       const f = /** @type {Express.Multer.File|undefined} */ (req.file);
-      if (!f) throw badRequest('没有收到文件（字段名 file）');
+      if (!f) throw badRequest('未收到文件（字段名 file）');
       const kind = sniffLogo(f.buffer);
       if (!kind) throw badRequest(LOGO_TYPE_MESSAGE, 'unsupported_image');
 
@@ -368,18 +368,18 @@ export function settingsRouter(ctx) {
   router.post('/email/test', async (req, res) => {
     const to = typeof req.body?.to === 'string' ? req.body.to.trim() : '';
     if (!/^[^\s@]+@[^\s@]+$/.test(to) || to.length > 200) {
-      res.json({ ok: false, error: '收件地址格式不对' });
+      res.json({ ok: false, error: '收件地址格式不正确' });
       return;
     }
     if (!emailConfigured(ctx.getSettings())) {
-      res.json({ ok: false, error: '还没有配置发信方式' });
+      res.json({ ok: false, error: '未配置发信方式' });
       return;
     }
     try {
       await ctx.mailer.sendEmail({
         to: [to],
         subject: '墨鸽 测试邮件',
-        text: `这是一封测试邮件。收到说明发信方式配置正确，转人工通知会用同样的方式发出。\n后台：${ctx.config.publicBaseUrl}`,
+        text: `这是一封测试邮件。收到此邮件表示发信配置正确，转人工通知将以相同方式发送。\n后台：${ctx.config.publicBaseUrl}`,
       });
       res.json({ ok: true });
     } catch (err) {

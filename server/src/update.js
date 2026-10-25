@@ -198,17 +198,17 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       });
     } catch (err) {
       if (err?.name === 'TimeoutError') throw new Error('连接 GitHub 超时');
-      throw new Error(`连不上 GitHub：${err?.cause?.code || err?.message || err}`);
+      throw new Error(`无法连接 GitHub：${err?.cause?.code || err?.message || err}`);
     }
-    if (res.status === 404) throw new Error(`没找到 ${config.updateRepo} 的正式发布（仓库名不对，或者还没发布过版本）`);
+    if (res.status === 404) throw new Error(`未找到 ${config.updateRepo} 的正式发布（仓库名错误或尚未发布版本）`);
     if ((res.status === 403 || res.status === 429) && res.headers.get('x-ratelimit-remaining') === '0') {
-      throw new Error('GitHub 接口限流了（每个 IP 每小时 60 次），稍后会自动再查');
+      throw new Error('GitHub 接口已限流（每个 IP 每小时 60 次），稍后自动重试');
     }
     if (!res.ok) throw new Error(`GitHub 返回 HTTP ${res.status}`);
     const body = await res.json().catch(() => null);
     const tag = String(body?.tag_name || '');
     const v = parseVersion(tag);
-    if (!v) throw new Error(`最新发布的标签「${tag.slice(0, 40)}」不是版本号`);
+    if (!v) throw new Error(`最新发布的标签「${tag.slice(0, 40)}」不是有效的版本号`);
     // /releases/latest 本来就不含预发布和草稿，这里再兜一层：预发布不提示
     if (v.pre || body.prerelease || body.draft) return null;
     const published = body.published_at ? new Date(body.published_at) : null;
@@ -290,12 +290,12 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
         log.warn(`[update] 更新助手 ${UPDATER_API.timeoutMs / 1000} 秒没有回应，按已经开始更新处理（可能正在下载新版本），等新版本启动`);
         return;
       }
-      throw updaterFailed(`连不上更新助手（${config.updaterUrl}），请检查 compose 里的 updater 服务有没有在运行`);
+      throw updaterFailed(`无法连接更新助手（${config.updaterUrl}），请检查 compose 中的 updater 服务是否在运行`);
     }
     const text = await res.text().catch(() => '');
     if (UPDATER_API.okStatus.includes(res.status)) return;
     if (res.status === 401 || res.status === 403) {
-      throw updaterFailed('更新助手拒绝了请求：口令不对，请检查两边用的是不是同一个 INKDOVE_UPDATER_TOKEN');
+      throw updaterFailed('更新助手拒绝请求：口令错误，请确认两端使用相同的 INKDOVE_UPDATER_TOKEN');
     }
     const detail = text.trim().slice(0, 200);
     throw updaterFailed(`更新助手返回 HTTP ${res.status}${detail ? `：${detail}` : ''}`);
@@ -306,14 +306,14 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
   /** 能不能一键更新到 target：装了更新助手、确实比当前新、镜像标签没钉死。不能时抛和 /apply 一样的错 */
   function assertCanUpdate(target) {
     if (!config.updaterToken) {
-      throw new HttpError(400, 'updater_not_configured', '没有装更新助手（没设 INKDOVE_UPDATER_TOKEN），请在服务器上用命令更新');
+      throw new HttpError(400, 'updater_not_configured', '未安装更新助手（未设置 INKDOVE_UPDATER_TOKEN），请在服务器上通过命令更新');
     }
-    if (!target || compareVersions(target, version) <= 0) throw new HttpError(400, 'no_update', '已经是最新版本');
+    if (!target || compareVersions(target, version) <= 0) throw new HttpError(400, 'no_update', '已是最新版本');
     if (isPinned(config.imageTag, target)) {
       throw new HttpError(
         400,
         'image_pinned',
-        `镜像标签钉在了 ${config.imageTag}，一键更新升不到 v${target}，请在服务器上改镜像标签后用命令更新`,
+        `镜像标签已固定为 ${config.imageTag}，一键更新无法升级到 v${target}，请在服务器上修改镜像标签后通过命令更新`,
       );
     }
   }
@@ -323,7 +323,7 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
 
   /** 先备份数据库，备份成功才让更新助手更新。同一时间只允许一个 → {ok, from, to, backup} */
   async function runUpdate(to) {
-    if (busy()) throw new HttpError(409, 'update_in_progress', '已经在更新了，请稍候');
+    if (busy()) throw new HttpError(409, 'update_in_progress', '正在更新，请稍候');
     state.applying = { until: null };
     try {
       let backup;
@@ -331,7 +331,7 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
         backup = await backupDb(db, config.dataDir, version, { now, log });
       } catch (err) {
         log.error(`[update] 备份数据库失败：${err?.message || err}`);
-        throw new HttpError(500, 'backup_failed', `备份数据库失败，没有更新：${err?.message || err}`);
+        throw new HttpError(500, 'backup_failed', `数据库备份失败，未执行更新：${err?.message || err}`);
       }
       await callUpdater();
       state.applying.until = now() + UPDATE_LOCK_MS;
@@ -471,13 +471,13 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       const firedHere = state.firedStartedAt === s.startedAt;
       // 这个进程刚让更新助手更新：等它重建容器
       if (firedHere && t - Date.parse(s.startedAt) < UPDATE_LOCK_MS) return;
-      const why = firedHere ? `过了 ${UPDATE_LOCK_MS / 60_000} 分钟还是` : '服务重启后还是';
+      const why = firedHere ? ` ${UPDATE_LOCK_MS / 60_000} 分钟后仍为` : '服务重启后仍为';
       // 更新助手没回话时也会走到这里，所以不说它「收到了请求」
       finish(s, {
         outcome: 'failed',
         from: s.from,
         to: s.to,
-        error: `已经让更新助手更新，但${why} v${version}，没有更新到 v${s.to}。可以在服务器上用 docker compose logs updater 看看更新助手的日志`,
+        error: `已通知更新助手更新，但${why} v${version}，未更新到 v${s.to}。请在服务器上执行 docker compose logs updater 查看更新助手日志`,
         updaterCalled: true,
       });
       return;
@@ -485,7 +485,7 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
     const at = Date.parse(s.at);
     if (t < at) return;
     if (t - at > SCHEDULE_MISS_MS) {
-      finish(s, { outcome: 'missed', to: s.targetVersion, error: '错过了预约时间，没有更新' });
+      finish(s, { outcome: 'missed', to: s.targetVersion, error: '已错过预约时间，未更新' });
       return;
     }
     // 有人正在点「立即更新」：它成功会清掉预约；失败的话下一分钟再看
@@ -536,7 +536,7 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
     tick,
     /** POST /api/update/check：60 秒内查过就直接给上次的结果，不再请求 GitHub */
     async checkNow() {
-      if (!config.updateCheck) throw new HttpError(400, 'update_check_disabled', '已用 INKDOVE_UPDATE_CHECK=0 关闭了检查更新');
+      if (!config.updateCheck) throw new HttpError(400, 'update_check_disabled', '已通过 INKDOVE_UPDATE_CHECK=0 关闭检查更新');
       if (state.inflight || !state.lastAttemptAt || now() - state.lastAttemptAt >= UPDATE_CHECK_MIN_GAP_MS) await check();
       return status();
     },
@@ -560,16 +560,16 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       const raw = typeof atInput === 'string' ? atInput.trim() : '';
       const at = ISO_WITH_ZONE.test(raw) ? Date.parse(raw) : NaN;
       if (!Number.isFinite(at)) {
-        throw new HttpError(400, 'bad_time', '预约时间要写成带时区的 ISO 时间，比如 2026-10-14T03:00:00+08:00');
+        throw new HttpError(400, 'bad_time', '预约时间须为带时区的 ISO 时间，如 2026-10-14T03:00:00+08:00');
       }
       const ahead = at - now();
       if (ahead < SCHEDULE_MIN_AHEAD_MS || ahead > SCHEDULE_MAX_AHEAD_MS) {
-        throw new HttpError(400, 'bad_time', '预约时间要在 1 分钟之后、7 天之内');
+        throw new HttpError(400, 'bad_time', '预约时间须在 1 分钟后、7 天内');
       }
       const target = knownLatest();
       assertCanUpdate(target);
       const prev = readSchedule();
-      if (busy() || state.scheduleRunning || prev?.startedAt) throw new HttpError(409, 'update_in_progress', '已经在更新了，请稍候');
+      if (busy() || state.scheduleRunning || prev?.startedAt) throw new HttpError(409, 'update_in_progress', '正在更新，请稍候');
       const s = {
         at: iso(at),
         targetVersion: target,
@@ -585,7 +585,7 @@ export function createUpdateService(ctx, { version, githubApiUrl, now = Date.now
       const s = readSchedule();
       if (s) {
         if (s.startedAt || state.scheduleRunning) {
-          throw new HttpError(409, 'update_in_progress', '已经开始按预约更新了，不能取消');
+          throw new HttpError(409, 'update_in_progress', '预约更新已开始，无法取消');
         }
         writeSchedule(null);
         log.info(`[update] ${who(user)} 取消了预约（原定 ${s.at} 更新到 v${s.targetVersion}，${who(s.scheduledBy)} 预约的）`);

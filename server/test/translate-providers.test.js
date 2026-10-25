@@ -294,7 +294,7 @@ describe('翻译接口：每家服务对着本地假服务', () => {
       fake.on((req) => [503, { code: 503, message: `Translation failed for ${req.url}` }]);
       const err = await rejectsKind(deeplx.translate({ url, token: '' }, { text: 'x', source: 'auto', target: 'es' }, { timeoutMs: 2000 }), 'server');
       assert.ok(!err.message.includes('SECRET-PATH-TOKEN'), err.message);
-      assert.match(err.message, /自己部署/);
+      assert.match(err.message, /自行部署/);
       fake.on(() => [429, { code: 429, message: 'Too many requests' }]);
       await rejectsKind(deeplx.translate({ url, token: '' }, { text: 'x', source: 'auto', target: 'es' }, { timeoutMs: 2000 }), 'rate_limit');
       fake.on(() => [401, { code: 401, message: 'Invalid access token' }]);
@@ -416,7 +416,7 @@ describe('翻译接口：每家服务对着本地假服务', () => {
       fake.on(fail('ActionOffline'));
       assert.match((await rejectsKind(t(), 'config')).message, /下线/);
       fake.on(fail('FailedOperation.UserNotRegistered'));
-      assert.match((await rejectsKind(t(), 'auth')).message, /不再接受/);
+      assert.match((await rejectsKind(t(), 'auth')).message, /停止受理/);
     });
   });
 

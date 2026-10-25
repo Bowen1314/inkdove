@@ -114,7 +114,7 @@ export function checkOutreach(current, p) {
   for (const field of ['windowStart', 'windowEnd']) {
     if (p[field] === undefined) continue;
     const v = typeof p[field] === 'string' ? p[field].trim() : p[field];
-    if (typeof v !== 'string' || !OUTREACH_HHMM.test(v)) throw badRequest(`outreach.${field} 格式是 HH:MM，例如 09:00`);
+    if (typeof v !== 'string' || !OUTREACH_HHMM.test(v)) throw badRequest(`outreach.${field} 格式为 HH:MM，如 09:00`);
     o[field] = v;
   }
   if (o.minIntervalSeconds > o.maxIntervalSeconds) throw badRequest('outreach.maxIntervalSeconds 不能小于最短间隔（minIntervalSeconds）');
@@ -137,7 +137,7 @@ export function checkPricing(v) {
     if (!isPlainObject(row)) throw badRequest(`${at}必须是对象`);
     const model = str(row.model, `${at}的 model`, 200).trim();
     if (!model) throw badRequest(`${at}的 model 不能为空`);
-    if (seen.has(model)) throw badRequest(`${at}的 model 重复了：${model}`);
+    if (seen.has(model)) throw badRequest(`${at}的 model 重复：${model}`);
     seen.add(model);
     const price = (field) => {
       const n = row[field];
@@ -186,7 +186,7 @@ export function normalizeEmails(input, field = 'to') {
     if (typeof item !== 'string') continue;
     const v = item.trim();
     if (!v) continue;
-    if (!/^[^\s@]+@[^\s@]+$/.test(v)) throw badRequest(`邮箱格式不对：${v}`);
+    if (!/^[^\s@]+@[^\s@]+$/.test(v)) throw badRequest(`邮箱格式错误：${v}`);
     if (!out.includes(v)) out.push(v);
   }
   return out;
@@ -382,7 +382,7 @@ export function publicSettings(s, config) {
 
 export const str = (v, field, max = 20000) => {
   if (typeof v !== 'string') throw badRequest(`${field} 必须是字符串`);
-  if (v.length > max) throw badRequest(`${field} 太长`);
+  if (v.length > max) throw badRequest(`${field} 超出长度限制`);
   return v;
 };
 export const boolField = (v, field) => {
@@ -418,7 +418,7 @@ export function checkEmbeddingPatch(current, p) {
   const e = { ...current };
   if (p.enabled !== undefined) e.enabled = boolField(p.enabled, 'embedding.enabled');
   if (p.source !== undefined) {
-    if (!EMBEDDING_SOURCES.includes(p.source)) throw badRequest('embedding.source 只能是 llm（和回复模型同一个）或 custom（单独配置）');
+    if (!EMBEDDING_SOURCES.includes(p.source)) throw badRequest('embedding.source 只能是 llm（与回复模型相同）或 custom（单独配置）');
     e.source = p.source;
   }
   if (p.format !== undefined) {
@@ -444,15 +444,15 @@ export function resolveEmbeddingConfig(s) {
   let cfg;
   if (e.source === 'custom') {
     cfg = { format: e.format, baseUrl: String(e.baseUrl || '').trim(), apiKey: e.apiKey || '' };
-    if (!cfg.baseUrl) return { ok: false, error: '还没有填写向量接口的地址', field: 'baseUrl' };
+    if (!cfg.baseUrl) return { ok: false, error: '未填写向量接口地址', field: 'baseUrl' };
   } else {
     if (!EMBEDDING_FORMATS.includes(s.llm.format)) {
-      return { ok: false, error: '回复模型是 Anthropic 格式，Anthropic 没有向量接口，请选「单独配置」', field: 'source' };
+      return { ok: false, error: '回复模型为 Anthropic 格式，不提供向量接口，请选择「单独配置」', field: 'source' };
     }
     cfg = { format: s.llm.format, baseUrl: String(s.llm.baseUrl || '').trim(), apiKey: s.llm.apiKey || '' };
-    if (!cfg.baseUrl) return { ok: false, error: '回复模型还没有填接口地址，请先填好或选「单独配置」', field: 'source' };
+    if (!cfg.baseUrl) return { ok: false, error: '回复模型未填写接口地址，请先填写或选择「单独配置」', field: 'source' };
   }
-  if (!model) return { ok: false, error: '还没有填写向量模型', field: 'model' };
+  if (!model) return { ok: false, error: '未填写向量模型', field: 'model' };
   return { ok: true, ...cfg, model };
 }
 
@@ -482,8 +482,8 @@ export function resolveRerankConfig(s) {
   const r = s.rerank || {};
   const baseUrl = String(r.baseUrl || '').trim();
   const model = String(r.model || '').trim();
-  if (!baseUrl) return { ok: false, error: '还没有填写重排接口的地址', field: 'baseUrl' };
-  if (!model) return { ok: false, error: '还没有填写重排模型', field: 'model' };
+  if (!baseUrl) return { ok: false, error: '未填写重排接口地址', field: 'baseUrl' };
+  if (!model) return { ok: false, error: '未填写重排模型', field: 'model' };
   return { ok: true, baseUrl, apiKey: r.apiKey || '', model };
 }
 
@@ -501,7 +501,7 @@ export function resolveRerankConfig(s) {
  */
 export function checkTranslationProviderPatch(id, current, p) {
   const provider = getTranslationProvider(id);
-  if (!provider) throw badRequest(`translation.provider 不认识：${String(id).slice(0, 40)}`);
+  if (!provider) throw badRequest(`translation.provider 无效：${String(id).slice(0, 40)}`);
   const at = `translation.providers.${id}`;
   if (!isPlainObject(p)) throw badRequest(`${at} 必须是对象`);
   const out = { ...current };
@@ -521,8 +521,8 @@ export function checkTranslationProviderPatch(id, current, p) {
     }
     if (f.type === 'url' || f.type === 'secretUrl') out[f.key] = checkBaseUrl(s, field);
     else {
-      if (f.type === 'secret' && !/^[\x21-\x7e]+$/.test(s)) throw badRequest(`${field} 里有空格、中文或其他特殊字符，请检查后重新填写`);
-      if (f.pattern && !f.pattern.test(s)) throw badRequest(`${field} 格式不对`);
+      if (f.type === 'secret' && !/^[\x21-\x7e]+$/.test(s)) throw badRequest(`${field} 含空格、中文或其他特殊字符，请检查后重新填写`);
+      if (f.pattern && !f.pattern.test(s)) throw badRequest(`${field} 格式错误`);
       out[f.key] = s;
     }
   }
@@ -562,10 +562,10 @@ export function checkTranslationPatch(current, p) {
  */
 export function translationProviderProblem(translation) {
   const provider = getTranslationProvider(translation.provider);
-  if (!provider) return { field: 'provider', message: '还没有选翻译服务' };
+  if (!provider) return { field: 'provider', message: '未选择翻译服务' };
   const field = missingField(provider.id, translation.providers[provider.id]);
   if (!field) return null;
-  return { field, message: `还没有填 ${provider.label} 的 ${FIELD_LABELS[field] || field}` };
+  return { field, message: `未填写 ${provider.label} 的 ${FIELD_LABELS[field] || field}` };
 }
 
 /**
@@ -596,7 +596,7 @@ export function checkProxyPatch(current, p) {
       } catch {
         /* 下面报错 */
       }
-      if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw badRequest('proxy.subscriptionUrl 必须是 http:// 或 https:// 开头的网址');
+      if (!u || (u.protocol !== 'http:' && u.protocol !== 'https:')) throw badRequest('proxy.subscriptionUrl 必须以 http:// 或 https:// 开头');
       out.subscriptionUrl = v;
     }
   }
@@ -614,8 +614,8 @@ export const BRAND_TITLE_MAX = 40;
 /** 网站名称：去掉首尾空白后最多 40 个字符，不能有换行和控制字符。错误信息以 branding.title 开头，前端靠它把错误放到字段下面 */
 function brandTitle(v) {
   const s = str(v, 'branding.title', 1000).trim();
-  if ([...s].length > BRAND_TITLE_MAX) throw badRequest(`branding.title 太长，最多 ${BRAND_TITLE_MAX} 个字符`);
-  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(s)) throw badRequest('branding.title 不能有换行或控制字符');
+  if ([...s].length > BRAND_TITLE_MAX) throw badRequest(`branding.title 最多 ${BRAND_TITLE_MAX} 个字符`);
+  if (/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(s)) throw badRequest('branding.title 不能包含换行或控制字符');
   return s;
 }
 
@@ -644,8 +644,8 @@ export function applySettingsPatch(current, patch) {
     if (s.embedding.source === 'llm' && !EMBEDDING_FORMATS.includes(s.llm.format)) {
       throw badRequest(
         patch.embedding !== undefined
-          ? '回复模型是 Anthropic 格式，Anthropic 没有向量接口：向量检索请选「单独配置」'
-          : '向量检索在用回复模型的服务，Anthropic 没有向量接口：请先把向量检索改成「单独配置」或关掉，再换接口格式',
+          ? '回复模型为 Anthropic 格式，不提供向量接口，向量检索请选择「单独配置」'
+          : '向量检索正在使用回复模型的服务，Anthropic 不提供向量接口，请先将向量检索改为「单独配置」或关闭，再更换接口格式',
         'embedding_unsupported_for_format',
       );
     }
@@ -691,10 +691,10 @@ export function applySettingsPatch(current, patch) {
   // F4：语音识别按接口格式的限制。只在这次改动涉及 media 或接口格式时检查（不影响只改别的设置）
   if ((patch.media !== undefined || patch.llm?.format !== undefined) && s.media.voice) {
     if (s.llm.format === 'anthropic') {
-      throw badRequest('Anthropic 格式不支持语音识别，请关闭语音识别或换成 OpenAI / Gemini 格式', 'voice_unsupported_for_format');
+      throw badRequest('Anthropic 格式不支持语音识别，请关闭语音识别或改用 OpenAI / Gemini 格式', 'voice_unsupported_for_format');
     }
     if (s.llm.format === 'openai' && !s.media.transcribeModel) {
-      throw badRequest('OpenAI 格式开启语音识别时要填转写模型（transcribeModel，例如 whisper-1）', 'transcribe_model_required');
+      throw badRequest('OpenAI 格式开启语音识别时须填写转写模型（transcribeModel，如 whisper-1）', 'transcribe_model_required');
     }
   }
   if (patch.leads !== undefined) {
@@ -753,7 +753,7 @@ export function applySettingsPatch(current, patch) {
       const problem = translationProviderProblem(s.translation);
       if (problem) {
         const at = problem.field === 'provider' ? 'translation.provider' : `translation.providers.${s.translation.provider}.${problem.field}`;
-        throw badRequest(`${at} 选「翻译 API」时要先填好：${problem.message}`, 'translation_provider_not_configured');
+        throw badRequest(`${at} 选择「翻译 API」时须先完成配置：${problem.message}`, 'translation_provider_not_configured');
       }
     }
   }
