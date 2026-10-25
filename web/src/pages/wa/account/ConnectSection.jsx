@@ -397,6 +397,20 @@ function ProxySection({ account, setAccount, connected, onApplied }) {
 
 /* ---------- 扫码连接（WAHA） ---------- */
 
+const TGU_LOGIN_METHODS = [
+  { value: 'qr', label: '扫码' },
+  { value: 'phone', label: '验证码' },
+];
+
+/** 验证码登录：验证码发到哪 → 输入框下的说明 */
+const TGU_CODE_VIA = {
+  app: '验证码已发送至该帐号的 Telegram App（发件人：Telegram 官方），',
+  sms: '验证码已通过短信发送，',
+  email: '验证码已发送至该帐号绑定的登录邮箱，',
+  call: 'Telegram 将通过来电告知验证码，',
+  fragment: '验证码已发送至 Fragment，',
+};
+
 const LINK_MODES = [
   { value: 'qr', label: '扫码' },
   { value: 'code', label: '手机号配对码' },
@@ -1361,9 +1375,8 @@ const TGUSER_LIMITS =
  * 从 my.telegram.org 自动取 api_id、api_hash：填手机号 → my.telegram.org 往这个帐号的 Telegram 里发验证码 → 填验证码 → 服务端登录、
  * 读出（没有就新建）应用并存进号。验证码填错可以再填，别的错回到填手机号这一步。这块在外层表单里，回车只做这一步，不提交外层
  */
-function TgApiFetch({ account, onGot }) {
+function TgApiFetch({ account, onGot, phone, setPhone }) {
   const [stage, setStage] = useState('phone'); // phone | code
-  const [phone, setPhone] = useState(() => ({ iso: defaultCountry(), digits: '' }));
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(null); // 'send' | 'apply'
   const [error, setError] = useState(null);
@@ -1500,8 +1513,9 @@ function TgApiFetch({ account, onGot }) {
 }
 
 /**
- * Telegram 扫码登录的「连接」：api_id、api_hash（可以从 my.telegram.org 自动获取）；扫码登录（二维码约 30 秒换一次，按 qrVersion 换图），开了两步验证的接着输密码；
- * 登录的帐号和退出登录。等扫码、等密码时每 2 秒刷新一次状态，其余每 15 秒（看登录有没有失效）。业务员只看状态和登录的帐号
+ * Telegram 扫码登录的「连接」：api_id、api_hash（可以从 my.telegram.org 自动获取）；登录方式二选一：扫码（二维码约 30 秒换一次，
+ * 按 qrVersion 换图）或手机号验证码（手机号沿用自动获取时填的），开了两步验证的接着输密码；登录的帐号和退出登录。
+ * 等扫码、验证码、密码时每 2 秒刷新一次状态，其余每 15 秒（看登录有没有失效）。业务员只看状态和登录的帐号
  */
 function TgUserPanel({ account, setAccount, isAdmin }) {
   const confirm = useConfirm();
@@ -1514,7 +1528,12 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   const [apiHash, setApiHash] = useState('');
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [busy, setBusy] = useState(null); // 'login' | 'logout' | 'cancel' | 'password'
+  const [busy, setBusy] = useState(null); // 'login' | 'logout' | 'cancel' | 'code' | 'password'
+  const [method, setMethod] = useState('qr'); // qr | phone
+  const [phone, setPhone] = useState(() => ({ iso: defaultCountry(), digits: '' }));
+  const [phoneError, setPhoneError] = useState(null);
+  const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState(null);
   const [password, setPassword] = useState('');
   const [pwError, setPwError] = useState(null);
   const [qrState, setQrState] = useState('loading'); // loading | ok | error
@@ -1522,7 +1541,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   // 点「扫码登录」后 10 秒内也按等扫码的频率刷新（服务端先回 starting，二维码随后才有）
   const [kickUntil, setKickUntil] = useState(0);
 
-  const pending = state === 'starting' || state === 'scan_qr' || state === 'password';
+  const pending = state === 'starting' || state === 'scan_qr' || state === 'code' || state === 'password';
   usePolling(
     async () => {
       try {
@@ -1539,6 +1558,10 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
 
   useEffect(() => {
     if (state === 'scan_qr') setQrState('loading');
+    if (state !== 'code') {
+      setCode('');
+      setCodeError(null);
+    }
     if (state !== 'password') {
       setPassword('');
       setPwError(null);
@@ -1613,6 +1636,56 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
     }
   };
 
+  // 验证码登录：服务端等验证码发出后才返回；手机号被拒等错误显示在输入框下
+  const sendCode = async (e) => {
+    e?.preventDefault();
+    if (busy) return;
+    if (!phone.digits) {
+      setPhoneError('请输入手机号');
+      return;
+    }
+    setBusy('login');
+    setPhoneError(null);
+    setCodeError(null);
+    try {
+      const res = await api.tgUserLogin(account.id, toE164(phone), { silent: true });
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+      setKickUntil(Date.now() + 10000);
+    } catch (err) {
+      if (err?.status === 401) return;
+      setPhoneError(err?.message || '发送失败');
+      api
+        .getAccount(account.id, { silent: true })
+        .then((a) => a && setAccount((prev) => ({ ...prev, ...a })))
+        .catch(() => {});
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const submitCode = async (e) => {
+    e?.preventDefault();
+    if (busy === 'code') return;
+    if (!code.trim()) {
+      setCodeError('请输入验证码');
+      return;
+    }
+    setBusy('code');
+    setCodeError(null);
+    try {
+      const res = await api.tgUserCode(account.id, code, { silent: true });
+      setCode('');
+      if (res && res.id) setAccount((prev) => ({ ...prev, ...res }));
+      if (res?.status?.state === 'working') toast.success('已登录 Telegram');
+    } catch (err) {
+      if (err?.status === 401) return;
+      if (err?.code === 'wrong_code') setCodeError(err.message);
+      else toast.error(err?.message || '登录失败');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   // 正在扫码、等密码时停下：服务端按退出登录处理（还没登录上，不用通知 Telegram）
   const cancel = async () => {
     setBusy('cancel');
@@ -1629,7 +1702,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
   const logout = async () => {
     const ok = await confirm({
       title: '退出 Telegram 登录？',
-      message: `退出后「${account.name}」停止收发 Telegram 消息，墨鸽将从帐号设备列表中移除，需重新扫码恢复。手机上的聊天记录不受影响。`,
+      message: `退出后「${account.name}」停止收发 Telegram 消息，墨鸽将从帐号设备列表中移除，需重新登录恢复。手机上的聊天记录不受影响。`,
       confirmText: '退出登录',
       danger: true,
     });
@@ -1691,7 +1764,7 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
             <TgUserMe me={tg.me} />
           </SettingsRow>
         ) : (
-          <div className="numbers-block muted">该号码未登录 Telegram。扫码登录由管理员操作，如有问题请联系管理员。</div>
+          <div className="numbers-block muted">该号码未登录 Telegram。登录由管理员操作，如有问题请联系管理员。</div>
         )}
         {limits}
       </SettingsSection>
@@ -1709,6 +1782,55 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
             退出登录
           </button>
         </TgUserMe>
+      </SettingsRow>
+    );
+  } else if (state === 'starting' && tg.loginMethod === 'phone') {
+    loginBlock = (
+      <div className="numbers-block muted" role="status">
+        <Spinner /> 正在发送验证码…
+      </div>
+    );
+  } else if (state === 'code') {
+    loginBlock = (
+      <SettingsRow label="验证码" htmlFor={`tgu-code-${account.id}`} hint={`${TGU_CODE_VIA[tg.codeVia] || TGU_CODE_VIA.sms}仅用于本次登录，不保存、不记录。`}>
+        <div className="numbers-phone">
+          <input
+            id={`tgu-code-${account.id}`}
+            className="input input--mono"
+            autoComplete="one-time-code"
+            spellCheck={false}
+            maxLength={64}
+            placeholder={tg.codeLength ? `${tg.codeLength} 位` : undefined}
+            value={code}
+            onChange={(e) => {
+              setCodeError(null);
+              setCode(e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submitCode(e);
+            }}
+            aria-invalid={codeError ? true : undefined}
+            aria-describedby={codeError ? `tgu-code-${account.id}-err` : undefined}
+          />
+          <button type="button" className="btn btn--primary" onClick={submitCode} disabled={busy === 'code'}>
+            {busy === 'code' ? <Spinner /> : <KeyRound />}
+            登录
+          </button>
+          {phone.digits && (
+            <button type="button" className="btn" onClick={sendCode} disabled={!!busy}>
+              {busy === 'login' ? <Spinner /> : null}
+              重新发送
+            </button>
+          )}
+          <button type="button" className="btn" onClick={cancel} disabled={busy === 'cancel'}>
+            取消
+          </button>
+        </div>
+        {codeError && (
+          <div className="field__error" id={`tgu-code-${account.id}-err`}>
+            {codeError}
+          </div>
+        )}
       </SettingsRow>
     );
   } else if (state === 'scan_qr' || state === 'starting') {
@@ -1797,16 +1919,52 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
     );
   } else if (configured) {
     loginBlock = (
-      <SettingsRow
-        inline
-        label="扫码登录"
-        hint={state === 'failed' ? '连接异常，正在自动重试；也可重新扫码登录。' : '点击按钮生成二维码，使用手机 Telegram 扫码登录该帐号。'}
-      >
-        <button type="button" className="btn btn--primary" onClick={login} disabled={busy === 'login'}>
-          {busy === 'login' ? <Spinner /> : <PlayCircle />}
-          {state === 'failed' ? '重新扫码登录' : '扫码登录'}
-        </button>
-      </SettingsRow>
+      <>
+        <SettingsRow inline label="登录方式">
+          <Segmented label="登录方式" options={TGU_LOGIN_METHODS} value={method} onChange={setMethod} />
+        </SettingsRow>
+        {method === 'phone' ? (
+          <SettingsRow
+            label="手机号"
+            htmlFor={`tgu-phone-${account.id}`}
+            hint={state === 'failed' ? '连接异常，正在自动重试；也可重新登录。' : 'Telegram 将向该帐号已登录的 App 发送验证码，无 App 时发送短信。'}
+          >
+            <div className="numbers-phone">
+              <PhoneInput
+                id={`tgu-phone-${account.id}`}
+                value={phone}
+                onChange={(v) => {
+                  setPhoneError(null);
+                  setPhone(v);
+                }}
+                onEnter={sendCode}
+                invalid={!!phoneError}
+                describedBy={phoneError ? `tgu-phone-${account.id}-err` : undefined}
+              />
+              <button type="button" className="btn btn--primary" onClick={sendCode} disabled={!!busy}>
+                {busy === 'login' ? <Spinner /> : <Send />}
+                {busy === 'login' ? '发送中…' : '发送验证码'}
+              </button>
+            </div>
+            {phoneError && (
+              <div className="field__error" id={`tgu-phone-${account.id}-err`}>
+                {phoneError}
+              </div>
+            )}
+          </SettingsRow>
+        ) : (
+          <SettingsRow
+            inline
+            label="扫码登录"
+            hint={state === 'failed' ? '连接异常，正在自动重试；也可重新登录。' : '点击按钮生成二维码，使用手机 Telegram 扫码登录该帐号。'}
+          >
+            <button type="button" className="btn btn--primary" onClick={login} disabled={busy === 'login'}>
+              {busy === 'login' ? <Spinner /> : <PlayCircle />}
+              {state === 'failed' ? '重新扫码登录' : '扫码登录'}
+            </button>
+          </SettingsRow>
+        )}
+      </>
     );
   }
 
@@ -1827,10 +1985,10 @@ function TgUserPanel({ account, setAccount, isAdmin }) {
               <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">
                 my.telegram.org
               </a>{' '}
-              → API development tools 创建应用后手动填入。2. 点击「扫码登录」，用手机 Telegram 扫码。
+              → API development tools 创建应用后手动填入。2. 扫码或通过验证码登录该帐号。
             </Callout>
           </div>
-          <TgApiFetch account={account} onGot={onGot} />
+          <TgApiFetch account={account} onGot={onGot} phone={phone} setPhone={setPhone} />
         </>
       )}
       {loginBlock}

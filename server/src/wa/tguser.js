@@ -1,8 +1,9 @@
 // Telegram 扫码登录（tguser）：墨鸽用 MTProto 直接登录用户自己的 Telegram 帐号（和 Telegram 桌面版一样是一个「设备」），
 // 代收代发这个帐号的私聊。用的是 mtcute（MIT，https://mtcute.dev），api_id / api_hash 是用户自己在 my.telegram.org 申请的。
 //
-// - 登录只用扫码（auth.exportLoginToken，二维码里是 tg://login?token=…，30 秒左右换一次）：手机 Telegram 里
-//   「设置 → 设备 → 连接桌面设备」扫。开了两步验证的，扫完再输一次密码（只拿来登录，不存）。
+// - 登录两种：扫码（auth.exportLoginToken，二维码里是 tg://login?token=…，30 秒左右换一次）：手机 Telegram 里
+//   「设置 → 设备 → 连接桌面设备」扫；或手机号 + 验证码（auth.sendCode / auth.signIn，验证码发到帐号已登录的 Telegram App，
+//   没有 App 时发短信）。开了两步验证的，再输一次密码。手机号、验证码、密码只拿来登录，不存、不进日志。
 //   二维码地址就是登录凭证：只经管理员的二维码接口给出去，不进状态、日志、kv。
 // - 登录态（auth key、见过的用户的 access hash、收消息的 pts）存在 <数据目录>/telegram/<号 id>.session（SQLite），
 //   和扫码号的 WhatsApp 登录态一样不单独加密；退出登录、删号时先断开再删文件。
@@ -28,6 +29,9 @@ export const TGU_HEALTH_MS = 5 * 60 * 1000;
 /** 私聊删除没有时限：撤回的 revocableUntil 给一个很远的时间 */
 export const TGU_NO_LIMIT_MS = 100 * 365 * 24 * 3600 * 1000;
 
+/** 验证码发到哪：mtcute 的 SentCode.type → 页面上的说法（其余都按短信） */
+const CODE_VIA = { app: 'app', email: 'email', fragment: 'fragment', call: 'call', flash_call: 'call', missed_call: 'call' };
+
 /** 登录失效（被手机上结束会话、帐号注销、被封） */
 const AUTH_LOST = new Set(['AUTH_KEY_UNREGISTERED', 'SESSION_REVOKED', 'SESSION_EXPIRED', 'USER_DEACTIVATED', 'USER_DEACTIVATED_BAN', 'AUTH_KEY_DUPLICATED']);
 
@@ -48,10 +52,16 @@ export const isAuthLost = (err) => err instanceof TgUserError ? err.authLost : A
 export function explainTgUser(err) {
   if (err instanceof TgUserError) return err;
   const t = rpcText(err);
-  if (!t) return new TgUserError(`无法连接 Telegram：${String(err?.message || err).slice(0, 200)}`);
+  if (!t) {
+    // mtcute 自己抛的（不是 Telegram 的错误）：手机号未注册（第三方客户端不能注册）、要付费才能注册
+    const m = String(err?.message || err);
+    if (/Signup is no longer supported/i.test(m)) return new TgUserError('该手机号未注册 Telegram，请先在手机 App 上注册');
+    if (/Payment is required/i.test(m)) return new TgUserError('Telegram 要求该帐号先在官方 App 中登录，请改用扫码登录');
+    return new TgUserError(`无法连接 Telegram：${m.slice(0, 200)}`);
+  }
   const wait = /^(?:FLOOD|SLOWMODE)_WAIT_(\d+)$/.exec(t);
   let msg;
-  if (AUTH_LOST.has(t)) msg = 'Telegram 登录状态已失效（设备已在手机上移除，或帐号已注销、封禁），请重新扫码登录';
+  if (AUTH_LOST.has(t)) msg = 'Telegram 登录状态已失效（设备已在手机上移除，或帐号已注销、封禁），请重新登录';
   else if (t === 'API_ID_INVALID' || t === 'API_ID_PUBLISHED_FLOOD') msg = 'api_id 或 api_hash 错误，请在 my.telegram.org 的 API development tools 中核对';
   else if (wait) msg = `操作过于频繁，请 ${wait[1]} 秒后重试`;
   else if (t === 'PEER_ID_INVALID' || t === 'USER_ID_INVALID') msg = '客户不存在（尚未收到该客户的消息）';
@@ -64,6 +74,13 @@ export function explainTgUser(err) {
   else if (t === 'MESSAGE_DELETE_FORBIDDEN' || t === 'MESSAGE_ID_INVALID') msg = '无法删除该消息（已删除或 Telegram 不允许删除）';
   else if (t === 'PASSWORD_HASH_INVALID') msg = '两步验证密码错误';
   else if (t === 'AUTH_TOKEN_EXPIRED' || t === 'AUTH_TOKEN_INVALID') msg = '二维码已过期，请重新扫码';
+  else if (t === 'PHONE_NUMBER_INVALID') msg = '手机号无效，请填写该 Telegram 帐号绑定的手机号（含国家区号）';
+  else if (t === 'PHONE_NUMBER_UNOCCUPIED') msg = '该手机号未注册 Telegram';
+  else if (t === 'PHONE_NUMBER_BANNED') msg = '该手机号已被 Telegram 封禁';
+  else if (t === 'PHONE_NUMBER_FLOOD' || t === 'PHONE_PASSWORD_FLOOD') msg = '该手机号请求验证码过于频繁，请稍后重试';
+  else if (t === 'PHONE_CODE_INVALID' || t === 'PHONE_CODE_EMPTY') msg = '验证码错误';
+  else if (t === 'PHONE_CODE_EXPIRED') msg = '验证码已过期，请重新获取';
+  else if (t === 'AUTH_RESTART') msg = 'Telegram 要求重新开始登录，请重试';
   else msg = `Telegram 返回 ${t}`;
   return new TgUserError(msg, { code: t, authLost: AUTH_LOST.has(t) });
 }
@@ -282,6 +299,26 @@ export async function createMtcuteClient(o) {
 
   const peer = (chatId) => Number(chatId);
 
+  /** 两步验证：password() 给密码（用户在页面上输了才 resolve），不对时调 onPasswordInvalid 再要 */
+  async function checkPassword({ password, onPasswordInvalid, signal }) {
+    for (;;) {
+      const pw = await password();
+      try {
+        const me = await client.checkPassword({ password: pw, abortSignal: signal });
+        lost = false;
+        startHealth();
+        return meOf(me);
+      } catch (err) {
+        if (rpcText(err) === 'PASSWORD_HASH_INVALID') {
+          await onPasswordInvalid();
+          continue;
+        }
+        if (signal?.aborted) throw signal.reason ?? err;
+        throw explainTgUser(err);
+      }
+    }
+  }
+
   return {
     /** 用存着的登录态登录：返回自己；没登录过或登录态失效了返回 null（失效的顺便从 Telegram 退出、清掉） */
     async restore() {
@@ -323,23 +360,44 @@ export async function createMtcuteClient(o) {
         throw explainTgUser(err);
       }
     },
-    /** 扫完码、重启后接着输两步验证密码 */
-    async checkPassword({ password, onPasswordInvalid, signal }) {
-      for (;;) {
-        const pw = await password();
-        try {
-          const me = await client.checkPassword({ password: pw, abortSignal: signal });
+    /**
+     * 手机号验证码登录，登录成功返回自己。发出验证码后调 onCodeSent({via, length})（via：app 或 sms）；
+     * code 是要验证码时调的函数（同 password），验证码不对时调 onCodeInvalid 再要；开了两步验证的接着要密码（同扫码）
+     */
+    async loginPhone({ phone, onCodeSent, code, onCodeInvalid, password, onPasswordInvalid, signal }) {
+      try {
+        const sent = await client.sendCode({ phone, abortSignal: signal });
+        // 这个登录态已经登录过（不会出现：开始登录前登录态已删掉）
+        if (!sent.phoneCodeHash) {
           startHealth();
-          return meOf(me);
-        } catch (err) {
-          if (rpcText(err) === 'PASSWORD_HASH_INVALID') {
-            await onPasswordInvalid();
-            continue;
-          }
-          throw explainTgUser(err);
+          return meOf(sent);
         }
+        if (sent.type === 'email_required') throw new TgUserError('该帐号需先在官方 App 中设置登录邮箱，请改用扫码登录');
+        onCodeSent({ via: CODE_VIA[sent.type] || 'sms', length: sent.length || null });
+        for (;;) {
+          const c = await code();
+          try {
+            const me = await client.signIn({ phone, phoneCodeHash: sent.phoneCodeHash, phoneCode: c, abortSignal: signal });
+            lost = false;
+            startHealth();
+            return meOf(me);
+          } catch (err) {
+            const t = rpcText(err);
+            if (t === 'PHONE_CODE_INVALID' || t === 'PHONE_CODE_EMPTY') {
+              await onCodeInvalid();
+              continue;
+            }
+            if (t === 'SESSION_PASSWORD_NEEDED') return await checkPassword({ password, onPasswordInvalid, signal });
+            throw err;
+          }
+        }
+      } catch (err) {
+        if (signal?.aborted) throw signal.reason ?? err;
+        throw explainTgUser(err);
       }
     },
+    /** 扫完码、重启后接着输两步验证密码 */
+    checkPassword,
     async sendText(chatId, text) {
       const msg = await call(() => client.sendText(peer(chatId), text));
       return String(msg.id);

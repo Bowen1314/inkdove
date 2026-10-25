@@ -484,8 +484,9 @@ export const RULES = [
     ['proxy/test', 'account.proxy_test', (n) => `测试{了}号码${n}的 IP 代理`],
     ['notify/test', 'account.notify_test', (n) => `为号码${n}发送{了}测试通知`],
     ['telegram/rebind', 'account.telegram_rebind', (n) => `解除{了}号码${n}绑定的 Telegram 号主`],
-    ['telegram/login', 'account.telegram_login', (n) => `启动{了}号码${n}的 Telegram 扫码登录`],
-    // 只记有人输过密码，密码本身不进审计
+    ['telegram/login', 'account.telegram_login', (n, x) => `启动{了}号码${n}的 Telegram ${x.req.body?.phone ? '验证码' : '扫码'}登录`],
+    // 只记有人输过验证码、密码，手机号、验证码、密码本身不进审计
+    ['telegram/code', 'account.telegram_code', (n) => `为号码${n}输入{了} Telegram 登录验证码`],
     ['telegram/password', 'account.telegram_password', (n) => `为号码${n}输入{了} Telegram 两步验证密码`],
     ['telegram/logout', 'account.telegram_logout', (n) => `号码${n}退出{了} Telegram 登录`],
     // 手机号、验证码不进审计
@@ -497,7 +498,7 @@ export const RULES = [
     a,
     run: (x) => {
       const acc = x.ctx.accounts.get(x.params.id);
-      return { summary: `${say(q(acc?.name ?? x.params.id))}${testResult(x)}`, target: accountTarget(acc, x.params.id) };
+      return { summary: `${say(q(acc?.name ?? x.params.id), x)}${testResult(x)}`, target: accountTarget(acc, x.params.id) };
     },
   })),
 

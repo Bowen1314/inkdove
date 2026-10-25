@@ -3953,8 +3953,9 @@ export function createWaService(ctx, opts = {}) {
 
   // ---------------- Telegram 扫码登录（tguser） ----------------
   // 每个号一个 mtcute 客户端（tguser.js）。有登录态文件的号在启动时、改号以后（syncTelegram）自动用登录态连上；
-  // 没有的停在 logged_out，等管理员点「扫码登录」（tgUserLogin）：scan_qr（二维码 30 秒左右换一次）→ 扫了以后开了两步验证的
-  // 进 password（管理员在页面上输密码，只拿来登录，不存）→ working。二维码、两步验证超过 5 分钟没完成就停下、删掉半截的登录态。
+  // 没有的停在 logged_out，等管理员登录（tgUserLogin）：扫码是 scan_qr（二维码 30 秒左右换一次），验证码是 code（发到帐号的
+  // Telegram App 或短信，管理员在页面上输，tgUserCode）→ 开了两步验证的进 password（管理员在页面上输密码）→ working。
+  // 手机号、验证码、密码只拿来登录，不存、不进日志。二维码、验证码、两步验证超过 5 分钟没完成就停下、删掉半截的登录态。
   // 登录态文件在：没登录完的、退出登录的、登录失效的都删掉，所以有文件就是登录过的。
 
   const tgUserFactory = opts.tgUserClientFactory ?? createMtcuteClient;
@@ -3965,14 +3966,16 @@ export function createWaService(ctx, opts = {}) {
   const tgUserHasSession = (accountId) => fs.existsSync(tgUserSessionPath(accountId));
   /** api_id、api_hash 改了就要换客户端 */
   const tgUserKey = (acc) => `${acc.telegram?.apiId}|${acc.telegram?.apiHash}`;
-  const TGU_LOST_TEXT = '墨鸽在该 Telegram 帐号上的登录已失效（可能已在手机「设置 → 设备」中被终止），请重新扫码登录';
+  const TGU_LOST_TEXT = '墨鸽在该 Telegram 帐号上的登录已失效（可能已在手机「设置 → 设备」中被终止），请重新登录';
   /**
    * @type {Map<string, {
    *   key: string, client: any, state: string, me: {id:string, name:string, username:string}|null, error: string|null,
    *   qr: {url: string, expiresAt: number}|null, qrVersion: number, ac: AbortController, timer: NodeJS.Timeout|null,
+   *   method: 'qr'|'phone'|null, phone: string|null, codeSent: {via: string, length: number|null}|null, code: {resolve: (c: string) => void}|null,
    *   password: {resolve: (pw: string) => void}|null, attempt: {resolve: (r: string) => void}|null, run: Promise<void>|null,
    * }>}
-   * 号 id → 扫码登录的客户端和登录状态。state：starting、scan_qr、password、working、logged_out、failed
+   * 号 id → 客户端和登录状态。state：starting、scan_qr、code、password、working、logged_out、failed。
+   * phone 是验证码登录用的手机号（只在内存里，登录完就清掉）
    */
   const tgUsers = new Map();
 
@@ -3995,16 +3998,16 @@ export function createWaService(ctx, opts = {}) {
   function tgUserClient(acc) {
     const e = tgUsers.get(acc.id);
     if (e?.state === 'working' && e.client) return e.client;
-    throw new TgUserError('该 Telegram 帐号未登录或登录已失效，请先在号码的「连接」中扫码登录', { code: 'NOT_LOGGED_IN' });
+    throw new TgUserError('该 Telegram 帐号未登录或登录已失效，请先在号码的「连接」中登录', { code: 'NOT_LOGGED_IN' });
   }
 
   /**
-   * 给号起一个客户端。login=false：用存着的登录态；login=true：扫码登录（之前的登录态先删掉）。
+   * 给号起一个客户端。login=false：用存着的登录态；login=true：登录（之前的登录态先删掉），带 phone 时用验证码登录，否则扫码。
    * retry：用登录态重连失败后第几次自动重试
    * @param {any} acc
-   * @param {{login: boolean, retry?: number}} o
+   * @param {{login: boolean, phone?: string|null, retry?: number}} o
    */
-  function tgUserStart(acc, { login, retry = 0 }) {
+  function tgUserStart(acc, { login, phone = null, retry = 0 }) {
     const entry = {
       key: tgUserKey(acc),
       client: null,
@@ -4015,6 +4018,10 @@ export function createWaService(ctx, opts = {}) {
       qrVersion: 0,
       ac: new AbortController(),
       timer: null,
+      method: login ? (phone ? 'phone' : 'qr') : null,
+      phone: login ? phone : null,
+      codeSent: null,
+      code: null,
       password: null,
       attempt: null,
       run: null,
@@ -4027,25 +4034,37 @@ export function createWaService(ctx, opts = {}) {
       const st = accState.get(acc.id);
       if (st) st.statusCache = null;
     };
-    /** 二维码、两步验证等太久就停下 */
+    /** 二维码、验证码、两步验证等太久就停下 */
     const armTimeout = () => {
       clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
-        if (!live() || (entry.state !== 'scan_qr' && entry.state !== 'password')) return;
-        log.info(`[tguser] 号 ${acc.id} 的扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，停下了`);
+        if (!live() || !['scan_qr', 'code', 'password'].includes(entry.state)) return;
+        log.info(`[tguser] 号 ${acc.id} 的登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟没有完成，停下了`);
         entry.ac.abort(new TgUserError('timeout', { code: 'LOGIN_TIMEOUT' }));
       }, tgUserLoginTimeoutMs);
       entry.timer.unref?.();
     };
-    /** 两步验证密码：等管理员在页面上输（tgUserPassword）；中止时一起放弃 */
-    const askPassword = () =>
+    /** 等管理员在页面上输（验证码 tgUserCode、密码 tgUserPassword）；中止时一起放弃 */
+    const ask = (state, field) =>
       new Promise((resolve, reject) => {
         if (signal.aborted) return reject(signal.reason);
         signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-        if (entry.state !== 'password') armTimeout();
-        set({ state: 'password', qr: null, password: { resolve } });
+        if (entry.state !== state) armTimeout();
+        set({ state, qr: null, [field]: { resolve } });
       });
-    const onPasswordInvalid = () => {
+    // 验证码发出去了：告诉正在等的「获取验证码」请求
+    const askCode = () => {
+      entry.attempt?.resolve('code');
+      entry.attempt = null;
+      return ask('code', 'code');
+    };
+    // 验证码对了、接着要两步验证密码：告诉正在等验证码结果的请求
+    const askPassword = () => {
+      entry.attempt?.resolve('password');
+      entry.attempt = null;
+      return ask('password', 'password');
+    };
+    const onInvalid = () => {
       entry.attempt?.resolve('invalid');
       entry.attempt = null;
     };
@@ -4066,7 +4085,7 @@ export function createWaService(ctx, opts = {}) {
       clearTimeout(entry.timer);
       entry.attempt?.resolve('ok');
       entry.attempt = null;
-      set({ state: 'working', me, error: null, qr: null, password: null });
+      set({ state: 'working', me, error: null, qr: null, phone: null, codeSent: null, code: null, password: null });
       log.info(`[tguser] 号 ${acc.id} 已登录 Telegram`);
     };
     entry.run = (async () => {
@@ -4100,25 +4119,37 @@ export function createWaService(ctx, opts = {}) {
             return;
           }
           if (r.needPassword) {
-            loggedIn(await client.checkPassword({ password: askPassword, onPasswordInvalid, signal }));
+            loggedIn(await client.checkPassword({ password: askPassword, onPasswordInvalid: onInvalid, signal }));
             return;
           }
           loggedIn(r);
           return;
         }
-        const me = await client.loginQr({
-          onQr: (url, expiresAt) => {
-            if (!live()) return;
-            if (entry.state !== 'scan_qr') armTimeout();
-            set({ state: 'scan_qr', qr: { url, expiresAt }, qrVersion: entry.qrVersion + 1 });
-          },
-          onScanned: () => {
-            if (live()) set({ state: 'starting', qr: null });
-          },
-          password: askPassword,
-          onPasswordInvalid,
-          signal,
-        });
+        const me = entry.phone
+          ? await client.loginPhone({
+              phone: entry.phone,
+              onCodeSent: (sent) => {
+                if (live()) set({ codeSent: sent });
+              },
+              code: askCode,
+              onCodeInvalid: onInvalid,
+              password: askPassword,
+              onPasswordInvalid: onInvalid,
+              signal,
+            })
+          : await client.loginQr({
+              onQr: (url, expiresAt) => {
+                if (!live()) return;
+                if (entry.state !== 'scan_qr') armTimeout();
+                set({ state: 'scan_qr', qr: { url, expiresAt }, qrVersion: entry.qrVersion + 1 });
+              },
+              onScanned: () => {
+                if (live()) set({ state: 'starting', qr: null });
+              },
+              password: askPassword,
+              onPasswordInvalid: onInvalid,
+              signal,
+            });
         if (live()) loggedIn(me);
       } catch (err) {
         clearTimeout(entry.timer);
@@ -4131,15 +4162,18 @@ export function createWaService(ctx, opts = {}) {
         // 用登录态重连失败（比如刚启动时代理还没好、连不上 Telegram）：过一会儿自己再试，间隔逐次加倍，最长 10 分钟
         const again = !login && !err?.authLost ? Math.min(tgUserRetryMs * 2 ** retry, 10 * 60_000) : 0;
         const msg = timedOut
-          ? `扫码登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟内未完成，已停止；如需登录，请重新点击「扫码登录」`
+          ? `登录 ${Math.round(tgUserLoginTimeoutMs / 60000)} 分钟内未完成，已停止；如需登录，请重新开始`
           : err instanceof TgUserError
             ? err.message
             : `连接 Telegram 失败：${err?.message || err}`;
-        if (!timedOut) log.warn(`[tguser] 号 ${acc.id} ${login ? '扫码登录' : '连接'}失败：${msg}`);
+        if (!timedOut) log.warn(`[tguser] 号 ${acc.id} ${login ? (entry.phone ? '验证码登录' : '扫码登录') : '连接'}失败：${msg}`);
         set({
           state: login || err?.authLost ? 'logged_out' : 'failed',
           error: again ? `${msg}（${Math.max(1, Math.round(again / 1000))} 秒后自动重试）` : msg,
           qr: null,
+          phone: null,
+          codeSent: null,
+          code: null,
           password: null,
           me: null,
         });
@@ -4193,16 +4227,40 @@ export function createWaService(ctx, opts = {}) {
     for (const [id, acc] of want) if (!tgUsers.has(id) && tgUserHasSession(id) && !closed) tgUserStart(acc, { login: false });
   }
 
-  /** 开始扫码登录（管理员点「扫码登录」）。已经在登录的原样返回；已经登录好的不重来 */
-  async function tgUserLogin(acc) {
+  /**
+   * 开始登录（管理员点「扫码登录」或「获取验证码」）。phone 为空时扫码，否则用验证码登录（Telegram 往这个帐号发验证码）。
+   * 同一种方式已经在登录的原样返回（验证码登录换了手机号、或已经在等验证码时重新发一次）；已经登录好的不重来
+   * @param {any} acc
+   * @param {{phone?: unknown}} [o]
+   */
+  async function tgUserLogin(acc, { phone } = {}) {
     if (acc.channel !== 'tguser') throw badRequest('该号码不是 Telegram 扫码登录', 'wrong_channel');
     if (!tgUserConfigured(acc)) throw badRequest('请先填写 api_id 和 api_hash（在 my.telegram.org 申请）', 'not_configured');
+    let p = null;
+    if (phone != null && phone !== '') {
+      p = typeof phone === 'string' ? phone.replace(/[\s\-().]/g, '').replace(/^00/, '+') : '';
+      if (!/^\+\d{6,15}$/.test(p)) throw badRequest('手机号格式错误，需包含国家区号', 'bad_phone');
+    }
     const e = tgUsers.get(acc.id);
-    if (e && e.key === tgUserKey(acc) && ['starting', 'scan_qr', 'password'].includes(e.state)) return;
-    if (e?.state === 'working' && e.key === tgUserKey(acc)) throw new HttpError(409, 'already_logged_in', '该号码已登录；如需更换帐号，请先退出登录');
+    if (e && e.key === tgUserKey(acc)) {
+      if (e.state === 'working') throw new HttpError(409, 'already_logged_in', '该号码已登录；如需更换帐号，请先退出登录');
+      const busy = p ? e.state === 'starting' && e.phone === p : ['starting', 'scan_qr', 'password'].includes(e.state) && !e.phone;
+      if (busy) return;
+    }
     await tgUserStop(acc.id);
-    tgUserStart(acc, { login: true });
-    log.info(`[tguser] 号 ${acc.id} 开始扫码登录`);
+    const entry = tgUserStart(acc, { login: true, phone: p });
+    log.info(`[tguser] 号 ${acc.id} 开始${p ? '验证码' : '扫码'}登录`);
+    if (!p) return;
+    // 验证码登录等到验证码发出去（或手机号被拒）再返回，页面直接显示结果
+    const r = await tgUserWithin(
+      new Promise((resolve) => {
+        entry.attempt = { resolve };
+      }),
+      60_000,
+      () => 'timeout',
+    );
+    if (r === 'failed') throw new HttpError(400, 'login_failed', entry.error || '登录失败');
+    if (r === 'timeout') throw new HttpError(504, 'telegram_timeout', 'Telegram 响应超时，请稍后查看号码状态');
   }
 
   /** 扫码登录的二维码（SVG）。现在不在等扫码时 404 */
@@ -4210,6 +4268,34 @@ export function createWaService(ctx, opts = {}) {
     const e = tgUsers.get(acc.id);
     if (acc.channel !== 'tguser' || e?.state !== 'scan_qr' || !e.qr) throw new HttpError(404, 'no_qr', '当前无待扫描的二维码');
     return renderSVG(e.qr.url, { border: 2 });
+  }
+
+  /**
+   * 登录验证码：交给正在登录的客户端，等 Telegram 的结果。验证码不对 400（还停在 code，可以再输）；
+   * 对了而帐号开了两步验证时进 password。只拿来登录，不存、不进日志
+   */
+  async function tgUserCode(acc, code) {
+    if (typeof code !== 'string' || !code.trim()) throw badRequest('请输入验证码');
+    let c = code.trim();
+    if (/^[\d\s-]+$/.test(c)) c = c.replace(/[\s-]/g, '');
+    if (c.length > 64) throw badRequest('验证码过长');
+    let e = tgUsers.get(acc.id);
+    // 上一次输错后，客户端要稍等一下才会再来要验证码
+    for (let i = 0; i < 40 && e?.state === 'code' && !e.code; i++) {
+      await sleep(50);
+      e = tgUsers.get(acc.id);
+    }
+    if (e?.state !== 'code' || !e.code) throw new HttpError(409, 'not_waiting_code', '当前无需输入验证码');
+    const waiter = e.code;
+    e.code = null;
+    const result = new Promise((resolve) => {
+      e.attempt = { resolve };
+    });
+    waiter.resolve(c);
+    const r = await tgUserWithin(result, 60_000, () => 'timeout');
+    if (r === 'invalid') throw new HttpError(400, 'wrong_code', '验证码错误，请重新输入');
+    if (r === 'timeout') throw new HttpError(504, 'telegram_timeout', 'Telegram 响应超时，请稍后查看号码状态');
+    if (r === 'failed') throw new HttpError(502, 'telegram_error', tgUsers.get(acc.id)?.error || '登录失败');
   }
 
   /**
@@ -4276,7 +4362,8 @@ export function createWaService(ctx, opts = {}) {
 
   /**
    * 号的连接状态：没填 api_id / api_hash 是 not_configured；没登录是 logged_out（error 里是为什么，比如登录失效了）；
-   * 其余是 starting、scan_qr、password、working、failed。telegram 里给连接页面看：登录的是谁（名字、用户名）、二维码的版本和过期时间
+   * 其余是 starting、scan_qr、code、password、working、failed。telegram 里给连接页面看：登录的是谁（名字、用户名）、二维码的版本和过期时间、
+   * 验证码发到哪
    * （二维码本身只经 tgUserQr 给）
    */
   function tgUserStatus(acc, base) {
@@ -4286,6 +4373,10 @@ export function createWaService(ctx, opts = {}) {
       me: e?.state === 'working' && e.me ? { name: e.me.name, username: e.me.username || null } : null,
       qrVersion: e?.state === 'scan_qr' && e.qr ? e.qrVersion : null,
       qrExpiresAt: e?.state === 'scan_qr' && e.qr ? new Date(e.qr.expiresAt).toISOString() : null,
+      // 正在登录时用的哪种方式（qr、phone）；验证码登录：验证码发到哪（app、sms、email、call、fragment）、几位；手机号不给
+      loginMethod: e && ['starting', 'scan_qr', 'code', 'password'].includes(e.state) ? e.method : null,
+      codeVia: e?.state === 'code' && e.codeSent ? e.codeSent.via : null,
+      codeLength: e?.state === 'code' && e.codeSent ? e.codeSent.length : null,
     };
     if (!e) return { ...base, state: tgUserHasSession(acc.id) ? 'starting' : 'logged_out', telegram };
     return { ...base, state: e.state, error: e.error, telegram };
@@ -4370,6 +4461,7 @@ export function createWaService(ctx, opts = {}) {
     telegramRebind,
     tgUserLogin,
     tgUserQr,
+    tgUserCode,
     tgUserPassword,
     tgUserLogout,
     tgUserProxyChanged,

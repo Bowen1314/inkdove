@@ -63,7 +63,8 @@ export const WA_STATE = {
   configured: { label: '已配置', tone: 'green' },
   // Telegram 私人号：还没绑定号主，或者号主还没在「聊天自动化」里连上机器人
   waiting: { label: '等待连接', tone: 'amber' },
-  // Telegram 扫码登录：扫完码要输两步验证密码；没登录（还没扫码、退出了、登录失效了）
+  // Telegram 扫码登录：验证码登录要输验证码；扫码或验证码之后要输两步验证密码；没登录（还没登录、退出了、登录失效了）
+  code: { label: '等待输入验证码', tone: 'amber', pulse: true },
   password: { label: '等待输入密码', tone: 'amber', pulse: true },
   logged_out: { label: '未登录', tone: 'gray' },
 };

@@ -195,12 +195,21 @@ export function accountsRouter(ctx, auth) {
     res.json(await view(accounts.get(acc.id)));
   });
 
-  // Telegram 扫码登录（只有 admin）：开始登录 → 取二维码（SVG，30 秒左右换一次）→ 开了两步验证的输密码；退出登录。
-  // 二维码就是登录凭证，只从这里给，不进状态和日志；两步验证密码只拿来登录，不存
+  // Telegram 扫码登录（只有 admin）：开始登录（不带手机号扫码：取二维码，SVG，30 秒左右换一次；带手机号 {phone} 用验证码：
+  // 等验证码发出后返回，再交验证码）→ 开了两步验证的输密码；退出登录。
+  // 二维码就是登录凭证，只从这里给，不进状态和日志；手机号、验证码、两步验证密码只拿来登录，不存
   router.post('/:id/telegram/login', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
-    await wa.tgUserLogin(acc);
-    ctx.log.info(`[accounts] ${req.user.email} 开始给号 ${acc.id} 扫码登录 Telegram`);
+    if (req.body != null && !isPlainObject(req.body)) throw badRequest('请求体必须是对象');
+    const phone = req.body?.phone;
+    await wa.tgUserLogin(acc, { phone });
+    ctx.log.info(`[accounts] ${req.user.email} 开始给号 ${acc.id} ${phone ? '验证码' : '扫码'}登录 Telegram`);
+    res.json(await view(accounts.get(acc.id)));
+  });
+  router.post('/:id/telegram/code', auth.requireAdmin, async (req, res) => {
+    const acc = load(req);
+    if (!isPlainObject(req.body)) throw badRequest('请求体必须是对象');
+    await wa.tgUserCode(acc, req.body.code);
     res.json(await view(accounts.get(acc.id)));
   });
   router.get('/:id/telegram/qr', auth.requireAdmin, (req, res) => {

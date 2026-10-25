@@ -1,7 +1,9 @@
 // Telegram 扫码登录（tguser，个人帐号经 mtcute 登录）：api_id / api_hash 的校验、页面上不露 api_hash；扫码登录（二维码会换、
-// 扫了以后 working、第一次登录不拉以前的消息）；两步验证（输错还能再输，密码不存）；登录超时；收消息（客户的、在手机上发的、
+// 扫了以后 working、第一次登录不拉以前的消息）；验证码登录（手机号校验、验证码输错还能再输、接着两步验证）；
+// 两步验证（输错还能再输，密码不存）；登录超时；收消息（客户的、在手机上发的、
 // 墨鸽发出去推回来的、群和机器人等不收）；改消息；删除通知（只有消息 id）；撤回（没有时限）；媒体；人工发文字和文件；
-// 用登录态重连（补收停机期间的）；登录失效；退出登录；删号；外联；导出导入；操作日志和日志里不带 api_hash、二维码、密码和用户 id。
+// 用登录态重连（补收停机期间的）；登录失效；退出登录；删号；外联；导出导入；
+// 操作日志和日志里不带 api_hash、二维码、手机号、验证码、密码和用户 id。
 // 全部对着假的客户端（和 tguser.js 的 createMtcuteClient 一样的接口），不连 Telegram
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -17,12 +19,19 @@ import { convIdOf, convPath, getConv, getMessages, startApp, TINY_PNG, waitDecid
 const API_HASH = ['0123456789abcdef', 'fedcba9876543210'].join('');
 const QR_TOKEN = 'QRTOKENFAKE';
 const ME = { id: '5000000001', name: 'Bowen Rui', username: 'bowen_r' };
+/** 验证码登录用的手机号（页面上那种带空格、括号的写法）和规范化以后的 */
+const PHONE = '+1 (415) 555-0134';
+const PHONE_E164 = '+14155550134';
+const LOGIN_CODE = '864209';
+const WRONG_CODE = '135797';
 
 /**
  * 假的扫码登录客户端。
  * - 登录态：sessions 里记着登录过的登录态文件 → 自己（{needPassword: true} 表示扫完码还没输两步验证密码）；restore 时按这个返回
  * - loginQr：先给一个二维码（login.refresh() 再换一个），等测试调 login.scan()；state.twoFa 设了时要输对密码；
  *   signal 中止时抛 signal.reason。登录成功时像真客户端一样写登录态文件（主文件和 -wal）
+ * - loginPhone：state.phoneError 设了时直接抛（手机号被拒）；否则说验证码发到了 App（5 位），等输对 LOGIN_CODE，
+ *   state.twoFa 设了时再要密码；收到的手机号记在 c.phone
  * - sendText、sendFile 从 5001 开始编消息 id（用户帐号的消息 id 在所有私聊里是同一个序列）；deleteFail 时删除报错
  * - openFile、download：files 里登记的；已知大小超过上限的抛 TooLargeError，不记 openFile
  * - logOut：logOutFail 时报错（连不上 Telegram）；restore：restoreFails 大于 0 时报连不上（每次减一）
@@ -33,6 +42,7 @@ function fakeTgUser() {
     sessions: new Map(),
     files: new Map(),
     twoFa: '',
+    phoneError: null,
     nextId: 5000,
     qrSeq: 0,
     deleteFail: false,
@@ -84,6 +94,27 @@ function fakeTgUser() {
             },
           };
           refresh();
+        });
+      },
+      loginPhone({ phone, onCodeSent, code, onCodeInvalid, password, onPasswordInvalid, signal }) {
+        call('loginPhone');
+        c.phone = phone;
+        return new Promise((resolve, reject) => {
+          if (signal.aborted) return reject(signal.reason);
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          (async () => {
+            await new Promise((r) => setTimeout(r, 10));
+            if (state.phoneError) throw state.phoneError;
+            onCodeSent({ via: 'app', length: 5 });
+            for (;;) {
+              const got = await code();
+              call('codeAttempt', got);
+              if (got === LOGIN_CODE) break;
+              await onCodeInvalid();
+            }
+            if (state.twoFa) await askPassword(password, onPasswordInvalid);
+            return loggedIn();
+          })().then(resolve, reject);
         });
       },
       async checkPassword({ password, onPasswordInvalid }) {
@@ -281,7 +312,14 @@ describe('Telegram 扫码登录', () => {
 
     await client.login.scan();
     const ok = await waitState('working');
-    assert.deepEqual(ok.telegram, { me: { name: 'Bowen Rui', username: 'bowen_r' }, qrVersion: null, qrExpiresAt: null });
+    assert.deepEqual(ok.telegram, {
+      me: { name: 'Bowen Rui', username: 'bowen_r' },
+      qrVersion: null,
+      qrExpiresAt: null,
+      loginMethod: null,
+      codeVia: null,
+      codeLength: null,
+    });
     assert.equal(ok.error, null);
     assert.equal((await t.req('GET', api('qr'))).status, 404);
     const again = await t.req('POST', api('login'));
@@ -517,6 +555,80 @@ describe('Telegram 扫码登录', () => {
     for (const pw of PASSWORDS) assert.equal(dataDirHas(t.dataDir, pw), null, `密码存进了文件`);
   });
 
+  it('验证码登录：已登录的 409；手机号格式错误、被 Telegram 拒了 400；验证码发出后 code，输错 400 还能再输，输对了 working', async () => {
+    const byPhone = (body, cookie) => t.req('POST', api('login'), { body, ...(cookie ? { cookie } : {}) });
+    const sendCode = (code, cookie) => t.req('POST', api('code'), { body: { code }, ...(cookie ? { cookie } : {}) });
+    const already = await byPhone({ phone: PHONE });
+    assert.equal(already.status, 409);
+    assert.equal(already.body.code, 'already_logged_in');
+    await t.req('POST', api('logout'));
+    for (const phone of ['12345', '+1 415', 14155550134, '+1 415 555 0134 ext 9']) {
+      assert.equal((await byPhone({ phone })).body.code, 'bad_phone', String(phone));
+    }
+    assert.equal((await byPhone({ phone: PHONE }, agent.cookie)).status, 403, '业务员不能登录');
+    assert.equal((await sendCode(LOGIN_CODE)).body.code, 'not_waiting_code');
+
+    fake.state.phoneError = new TgUserError('该手机号未注册 Telegram', { code: 'PHONE_NUMBER_UNOCCUPIED' });
+    const rejected = await byPhone({ phone: PHONE });
+    fake.state.phoneError = null;
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.body.code, 'login_failed');
+    assert.match(rejected.body.error, /未注册/);
+    assert.equal((await status()).state, 'logged_out');
+    assert.ok(sessionGone());
+
+    // 等验证码发出去才返回：返回时已经在 code，说明发到了哪；手机号不给页面
+    const r = await byPhone({ phone: PHONE });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    client = fake.of(acc);
+    assert.equal(client.phone, PHONE_E164);
+    assert.equal(client.o.catchUp, false);
+    const st = await status();
+    assert.equal(st.state, 'code');
+    assert.deepEqual(st.telegram, { me: null, qrVersion: null, qrExpiresAt: null, loginMethod: 'phone', codeVia: 'app', codeLength: 5 });
+    assert.ok(!JSON.stringify(st).includes('4155550134'));
+    assert.equal((await t.req('GET', api('qr'))).status, 404);
+
+    assert.equal((await sendCode('')).status, 400);
+    assert.equal((await sendCode('x'.repeat(65))).status, 400);
+    assert.equal((await sendCode(LOGIN_CODE, agent.cookie)).status, 403);
+    const wrong = await sendCode(WRONG_CODE);
+    assert.equal(wrong.status, 400);
+    assert.equal(wrong.body.code, 'wrong_code');
+    assert.equal((await status()).state, 'code');
+    // 带空格、短横线的照样认
+    const right = await sendCode(LOGIN_CODE.replace(/(\d{3})/, '$1 - '));
+    assert.equal(right.status, 200, JSON.stringify(right.body));
+    await waitState('working');
+    assert.deepEqual(
+      fake.named(client, 'codeAttempt').map((x) => x.args[0]),
+      [WRONG_CODE, LOGIN_CODE],
+    );
+    assert.equal((await status()).telegram.loginMethod, null);
+    const late = await sendCode(LOGIN_CODE);
+    assert.equal(late.status, 409);
+    assert.equal(late.body.code, 'not_waiting_code');
+  });
+
+  it('验证码登录：重新获取换新的客户端；开了两步验证时验证码对了进 password，输对密码 working', async () => {
+    await t.req('POST', api('logout'));
+    fake.state.twoFa = 'correct-horse-9';
+    assert.equal((await t.req('POST', api('login'), { body: { phone: PHONE } })).status, 200);
+    const first = fake.of(acc);
+    assert.equal((await t.req('POST', api('login'), { body: { phone: PHONE } })).status, 200);
+    client = fake.of(acc);
+    assert.notEqual(client, first, '重新获取验证码重新开始');
+    assert.ok(first.closed);
+    assert.equal((await status()).state, 'code');
+    const code = await t.req('POST', api('code'), { body: { code: LOGIN_CODE } });
+    assert.equal(code.status, 200, JSON.stringify(code.body));
+    assert.equal((await status()).state, 'password');
+    const pw = await t.req('POST', api('password'), { body: { password: 'correct-horse-9' } });
+    assert.equal(pw.status, 200, JSON.stringify(pw.body));
+    await waitState('working');
+    fake.state.twoFa = '';
+  });
+
   it('退出登录：从 Telegram 退出、删掉登录态；退出时连不上 Telegram 也删掉，提示去手机上结束；正在扫码的直接停下', async () => {
     assert.equal((await t.req('POST', api('logout'), { cookie: agent.cookie })).status, 403, '业务员不能退出登录');
     assert.ok(fs.existsSync(sessionPath()));
@@ -566,17 +678,21 @@ describe('Telegram 扫码登录', () => {
     await t.req('DELETE', `/api/accounts/${created.id}`);
   });
 
-  it('操作日志：扫码登录、两步验证、退出登录都记，api_hash 只记已设置；api_hash、二维码、密码、用户 id 不出现在接口和日志里', async () => {
+  it('操作日志：扫码登录、验证码登录、两步验证、退出登录都记，api_hash 只记已设置；api_hash、二维码、手机号、验证码、密码、用户 id 不出现在接口和日志里', async () => {
     const rows = t.ctx.db.prepare("SELECT action, summary FROM audit_logs WHERE action LIKE 'account.telegram_%'").all();
     assert.ok(rows.some((a) => a.action === 'account.telegram_login' && /Telegram 扫码登录/.test(a.summary)));
+    assert.ok(rows.some((a) => a.action === 'account.telegram_login' && /Telegram 验证码登录/.test(a.summary)));
+    assert.ok(rows.some((a) => a.action === 'account.telegram_code' && /登录验证码/.test(a.summary)));
     assert.ok(rows.some((a) => a.action === 'account.telegram_password' && /两步验证密码/.test(a.summary)));
     assert.ok(rows.some((a) => a.action === 'account.telegram_logout' && /退出了 Telegram 登录/.test(a.summary)));
     const row = t.ctx.db.prepare("SELECT * FROM audit_logs WHERE action = 'account.update' AND changes LIKE '%telegram.apiHash%' ORDER BY seq DESC LIMIT 1").get();
     const change = JSON.parse(row.changes).find((c) => c.field === 'telegram.apiHash');
     assert.deepEqual(change, { field: 'telegram.apiHash', label: 'Telegram api_hash', secret: true, note: '已设置' });
     const audit = JSON.stringify(t.ctx.db.prepare("SELECT * FROM audit_logs WHERE action <> 'account.export'").all());
-    for (const s of [API_HASH, QR_TOKEN, ...PASSWORDS]) assert.ok(!audit.includes(s), `操作日志里出现了 ${s === API_HASH ? 'api_hash' : s}`);
-    for (const s of [API_HASH, QR_TOKEN, ...PASSWORDS, MARIA.id, LENA.id, ME.id]) {
+    const secrets = [API_HASH, QR_TOKEN, '4155550134', LOGIN_CODE, WRONG_CODE, ...PASSWORDS];
+    for (const s of secrets) assert.ok(!audit.includes(s), `操作日志里出现了 ${s === API_HASH ? 'api_hash' : s}`);
+    assert.equal(dataDirHas(t.dataDir, '4155550134'), null, '手机号存进了文件');
+    for (const s of [...secrets, MARIA.id, LENA.id, ME.id]) {
       assert.ok(!t.log.lines.some((l) => l.includes(s)), `日志里出现了 ${s === API_HASH ? 'api_hash' : s}`);
     }
   });
@@ -592,7 +708,7 @@ describe('Telegram 扫码登录', () => {
 });
 
 describe('Telegram 扫码登录：太久没完成', () => {
-  it('二维码、两步验证太久没完成：停下、删掉半截的登录态，状态里说明，要登录时再点', async () => {
+  it('二维码、验证码、两步验证太久没完成：停下、删掉半截的登录态，状态里说明，要登录时再点', async () => {
     const fake = fakeTgUser();
     const t = await startApp({ options: { tgUserClientFactory: fake.factory, tgUserLoginTimeoutMs: 400 } });
     try {
@@ -626,6 +742,17 @@ describe('Telegram 扫码登录：太久没完成', () => {
       assert.ok(!fs.existsSync(sessionPath));
       const late = await t.req('POST', `/api/accounts/${acc.id}/telegram/password`, { body: { password: 'never-typed-1' } });
       assert.equal(late.status, 409);
+
+      // 验证码发出去了、一直不输
+      fake.state.twoFa = '';
+      const sent = await t.req('POST', `/api/accounts/${acc.id}/telegram/login`, { body: { phone: PHONE } });
+      assert.equal(sent.status, 200, JSON.stringify(sent.body));
+      assert.equal((await status()).state, 'code');
+      assert.match((await timedOut()).error, /未完成/);
+      assert.ok(fake.of(acc).closed);
+      assert.ok(!fs.existsSync(sessionPath));
+      const lateCode = await t.req('POST', `/api/accounts/${acc.id}/telegram/code`, { body: { code: LOGIN_CODE } });
+      assert.equal(lateCode.status, 409);
     } finally {
       await t.close();
     }

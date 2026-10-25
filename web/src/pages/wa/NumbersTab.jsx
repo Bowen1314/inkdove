@@ -45,7 +45,7 @@ export const CHANNEL_OPTIONS = [
   {
     value: 'tguser',
     title: 'Telegram 扫码登录',
-    desc: '以桌面端方式扫码登录个人帐号，收发全部私聊。需 my.telegram.org 的 api_id 和 api_hash（支持自动获取）。',
+    desc: '以桌面端方式登录个人帐号（扫码或验证码），收发全部私聊。需 my.telegram.org 的 api_id 和 api_hash（支持自动获取）。',
   },
 ];
 
@@ -90,7 +90,7 @@ const STATE_FILTERS = [
 function stateGroup(account) {
   const s = account?.status?.state;
   if (isConnected(account)) return 'connected';
-  if (s === 'starting' || s === 'scan_qr' || s === 'waiting' || s === 'password') return 'pending';
+  if (s === 'starting' || s === 'scan_qr' || s === 'waiting' || s === 'code' || s === 'password') return 'pending';
   if (s === 'failed') return 'failed';
   return 'off';
 }
@@ -460,7 +460,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
           <div className="field__hint">WhatsApp 扫码登录的号码尚未连接，请在各号码的「连接」中扫码或使用配对码连接。</div>
         )}
         {result.created.length > 0 && hasTgUser && (
-          <div className="field__hint">Telegram 扫码登录的号码尚未登录，请在各号码的「连接」中扫码登录。</div>
+          <div className="field__hint">Telegram 扫码登录的号码尚未登录，请在各号码的「连接」中登录。</div>
         )}
       </div>
     );
@@ -523,7 +523,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
             {hasTgBiz && 'Telegram Business 号码导入后需重新绑定号主，并在「聊天自动化」中重新添加机器人。'}
           </div>
         )}
-        {hasTgUser && <div className="field__hint">Telegram 扫码登录的号码导入后需重新扫码登录：文件仅包含 api_id 和 api_hash，不含登录状态。</div>}
+        {hasTgUser && <div className="field__hint">Telegram 扫码登录的号码导入后需重新登录：文件仅包含 api_id 和 api_hash，不含登录状态。</div>}
       </div>
     );
     footer = (

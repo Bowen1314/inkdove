@@ -43,6 +43,7 @@ const STATE_LABEL = {
   stopped: '已停止',
   starting: '正在启动',
   scan_qr: '等待扫码',
+  code: '等待输入验证码',
   password: '等待输入两步验证密码',
   logged_out: '未登录',
   working: '已连接',
