@@ -51,7 +51,7 @@ export default function KnowledgePage() {
         { key: 'entries', to: '/kb/entries', label: '条目', count: stats?.entries },
         { key: 'profile', to: '/kb/profile', label: '企业画像' },
         { key: 'gaps', to: '/kb/gaps', label: '缺口', count: stats?.openGaps, alert: true },
-        { key: 'distill', to: '/kb/distill', label: '整理' },
+        { key: 'distill', to: '/kb/distill', label: '蒸馏' },
         { key: 'redteam', to: '/kb/redteam', label: '红线体检' },
       ]
     : [

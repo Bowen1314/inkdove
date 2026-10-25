@@ -6,7 +6,7 @@ export const MOCK_MODELS = [
   { id: 'mock-fast', label: '演示 · 快速' },
   { id: 'mock-smart', label: '演示 · 高质量' },
   { id: 'mock-vision', label: '演示 · 识图' },
-  { id: 'mock-distill', label: '演示 · 整理资料' },
+  { id: 'mock-distill', label: '演示 · 蒸馏资料' },
 ];
 
 // gemini 最多翻 5 页（每页 1000 个，足够了）

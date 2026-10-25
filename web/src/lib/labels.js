@@ -14,7 +14,7 @@ export const ENTRY_STATUS = {
 };
 
 export const ENTRY_ORIGIN = {
-  distill: '自动整理',
+  distill: '自动蒸馏',
   manual: '手动添加',
   gap: '补充回答',
   conversation: '来自会话',
@@ -40,7 +40,7 @@ export const JOB_STATUS = {
 };
 
 export const JOB_MODE = {
-  incremental: '整理新资料',
+  incremental: '蒸馏新资料',
   rebuild: '全部重建',
 };
 
@@ -70,11 +70,11 @@ export const WA_STATE = {
 export const waState = (s) => WA_STATE[s] || { label: s || '未知', tone: 'gray' };
 
 export const CHANNEL_LABEL = {
-  waha: '扫码连接',
+  waha: 'WhatsApp 扫码登录',
   meta: 'Meta 官方接口',
   line: 'LINE 官方帐号',
   tgbot: 'Telegram 机器人',
-  tgbiz: 'Telegram 私人号',
+  tgbiz: 'Telegram Business',
   tguser: 'Telegram 扫码登录',
 };
 
@@ -335,7 +335,7 @@ export const LLM_PURPOSES = {
   review: '审核回复',
   draft: '起草人工回复',
   kb_draft: '人工回复存入知识库',
-  distill: '整理知识库',
+  distill: '蒸馏知识库',
   media: '语音和图片识别',
   file_describe: '产品资料描述',
   leads: '客户线索',

@@ -2877,7 +2877,7 @@ export function createWaService(ctx, opts = {}) {
   };
 
   const assertWaha = (acc) => {
-    if (acc.channel !== 'waha') throw badRequest('该号码不是扫码接入', 'wrong_channel');
+    if (acc.channel !== 'waha') throw badRequest('该号码的接入方式不是 WhatsApp 扫码登录', 'wrong_channel');
   };
 
   /**
@@ -3607,7 +3607,7 @@ export function createWaService(ctx, opts = {}) {
     if (!token) throw new Error('未填写 Telegram 机器人 token');
     if (acc.channel !== 'tgbiz') return { token, businessConnectionId: undefined };
     const t = tgKv(acc);
-    if (!tgLinked(t)) throw new Error('未发送：Telegram 私人号尚未连接机器人，请先绑定号主，再在「聊天自动化」中添加机器人');
+    if (!tgLinked(t)) throw new Error('未发送：Telegram Business 号码尚未连接机器人，请先绑定号主，再在「聊天自动化」中添加机器人');
     if (!t.connection.canReply) throw new Error('机器人无回复消息权限，请在 Telegram「聊天自动化」中开启');
     return { token, businessConnectionId: t.connection.id };
   }
@@ -3946,7 +3946,7 @@ export function createWaService(ctx, opts = {}) {
 
   /** 私人号换号主：清掉绑定，换一个新的绑定链接（连接留着，同一个人重新绑定后直接生效） */
   function telegramRebind(acc) {
-    if (acc.channel !== 'tgbiz') throw badRequest('仅 Telegram 私人号需绑定号主', 'wrong_channel');
+    if (acc.channel !== 'tgbiz') throw badRequest('仅 Telegram Business 号码需绑定号主', 'wrong_channel');
     tgKvUpdate(acc, { owner: null, bindCode: crypto.randomBytes(12).toString('base64url') });
     log.info(`[telegram] 号 ${acc.id} 清掉了绑定的号主`);
   }

@@ -54,7 +54,7 @@ function explain(status, description) {
   if (status === 403 && /blocked/i.test(d)) return '客户已拉黑机器人，无法发送';
   if (status === 403 && /deactivated/i.test(d)) return '客户的 Telegram 帐号已注销';
   if (/BUSINESS_PEER_USAGE_MISSING|BUSINESS_PEER_INVALID/i.test(d)) return '客户 24 小时内未发送消息，Telegram 不允许机器人代为回复，请在手机上回复';
-  if (/BUSINESS_CONNECTION_INVALID|business connection not found/i.test(d)) return '机器人与该私人帐号的连接已断开，请在 Telegram「设置 → 聊天自动化」中重新连接';
+  if (/BUSINESS_CONNECTION_INVALID|business connection not found/i.test(d)) return '机器人与号主帐号的连接已断开，请在 Telegram「设置 → 聊天自动化」中重新连接';
   if (/message can't be deleted|message to delete not found/i.test(d)) return '无法删除该消息（超过 48 小时或已删除）';
   if (/chat not found/i.test(d)) return '会话不存在（客户尚未与机器人对话）';
   return `Telegram 返回 ${status}：${d.slice(0, 200)}`;

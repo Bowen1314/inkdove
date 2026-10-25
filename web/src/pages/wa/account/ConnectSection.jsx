@@ -680,7 +680,7 @@ function WahaPanel({ account, setAccount }) {
           inline
           label={
             <span className="hstack" style={{ gap: 'var(--sp-1)' }}>
-              扫码连接
+              WhatsApp 扫码登录
               <HintIcon label="扫码说明">{`${PRIVATE_OK}${PRIVATE_TIP}`}</HintIcon>
             </span>
           }
@@ -692,7 +692,7 @@ function WahaPanel({ account, setAccount }) {
         >
           <button type="button" className="btn btn--primary" onClick={start} disabled={busy === 'start'}>
             {busy === 'start' ? <Spinner /> : state === 'failed' ? <RefreshCw /> : <PlayCircle />}
-            {state === 'failed' ? '重新连接' : '开始扫码连接'}
+            {state === 'failed' ? '重新连接' : '开始扫码登录'}
           </button>
         </SettingsRow>
       )}
@@ -729,7 +729,7 @@ function WahaReadOnly({ account }) {
               <Callout tone="danger">{status.error}</Callout>
             </div>
           )}
-          <div className="numbers-block muted">该号码未连接。扫码连接由管理员操作，如有问题请联系管理员。</div>
+          <div className="numbers-block muted">该号码未连接。扫码登录由管理员操作，如有问题请联系管理员。</div>
         </>
       )}
     </SettingsSection>
@@ -1222,7 +1222,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
           tg.owner
             ? '仅接收号主本人在「聊天自动化」中关联的消息。'
             : isAdmin
-              ? '使用该私人号本人的 Telegram 打开链接，点击「开始」（Start），机器人回复「已绑定到墨鸽」即完成。链接仅限使用一次，请勿转发。'
+              ? '由号主本人在 Telegram 中打开链接，点击「开始」（Start），机器人回复「已绑定到墨鸽」即完成。链接仅限使用一次，请勿转发。'
               : null
         }
       >
@@ -1306,7 +1306,7 @@ function TelegramPanel({ account, setAccount, isAdmin }) {
         <div className="numbers-block">
           <Callout tone="info">
             {isBiz
-              ? '1. 在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，在 Bot Settings → Business Mode 中开启 Business Mode，将 token 填入下方。2. 保存后显示绑定链接，使用该私人号本人的 Telegram 打开。3. 在 Telegram「设置 → 聊天自动化」中添加该机器人，并开启回复消息权限。'
+              ? '1. 在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，在 Bot Settings → Business Mode 中开启 Business Mode，将 token 填入下方。2. 保存后显示绑定链接，由号主本人在 Telegram 中打开。3. 在 Telegram「设置 → 聊天自动化」中添加该机器人，并开启回复消息权限。'
               : '在 Telegram 打开 @BotFather，发送 /newbot 创建机器人，将返回的 token 填入下方。墨鸽主动拉取消息，无需公网地址。'}
           </Callout>
         </div>

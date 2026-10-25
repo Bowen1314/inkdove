@@ -179,7 +179,7 @@ export function accountsRouter(ctx, auth) {
   // 代理测试仍从 inkdove 直连上游代理，不经过中继（F13）；用全局代理的号测全局代理（经 mihomo）
   router.post('/:id/proxy/test', auth.requireAdmin, async (req, res) => {
     const acc = load(req);
-    if (acc.channel !== 'waha') throw badRequest('该号码不是扫码接入', 'wrong_channel');
+    if (acc.channel !== 'waha') throw badRequest('该号码的接入方式不是 WhatsApp 扫码登录', 'wrong_channel');
     const px = acc.waha.proxy;
     if (!px.enabled) throw new HttpError(400, 'proxy_disabled', '代理未启用');
     res.json(px.useGlobal ? await ctx.globalProxy.test() : await testProxy(px, { url: ctx.proxyTestUrl }));

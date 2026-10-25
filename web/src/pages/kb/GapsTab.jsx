@@ -10,11 +10,11 @@ import { EmptyState, ErrorState, Field, Spinner } from '../../ui/common.jsx';
 import { clearEntryCache } from '../../lib/entryCache.js';
 import { TimeText } from '../../ui/TimeText.jsx';
 
-const ORIGIN_LABEL = { conversation: '来自会话', distill: '整理时发现' };
+const ORIGIN_LABEL = { conversation: '来自会话', distill: '蒸馏时发现' };
 const ORIGIN_OPTIONS = [
   { value: '', label: '全部来源' },
   { value: 'conversation', label: '来自会话' },
-  { value: 'distill', label: '整理时发现' },
+  { value: 'distill', label: '蒸馏时发现' },
 ];
 
 /** F2c：来自会话的缺口带次数；整理时发现的缺口只有被客户再问到（count>1）才显示次数 */
@@ -238,7 +238,7 @@ export default function GapsTab({ onChanged }) {
             <EmptyState
               icon={CheckCircle2}
               title="暂无待补充的问题"
-              desc="此处列出整理时发现的缺口，以及客户提问但资料中无答案的问题。"
+              desc="此处列出蒸馏时发现的缺口，以及客户提问但资料中无答案的问题。"
             />
           )
         }

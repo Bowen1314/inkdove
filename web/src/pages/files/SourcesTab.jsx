@@ -118,7 +118,7 @@ function SourceDrawer({ source, onClose, onDelete, deleting }) {
               <StatusDot tone={st.tone}>{st.label}</StatusDot>
             </dd>
             <dt>知识库</dt>
-            <dd>{s.distilledAt ? `已整理（${fmtTime(s.distilledAt)}）` : '未整理'}</dd>
+            <dd>{s.distilledAt ? `已蒸馏（${fmtTime(s.distilledAt)}）` : '未蒸馏'}</dd>
             <dt>添加时间</dt>
             <dd className="num">{fullTime(s.createdAt) || '—'}</dd>
           </dl>
@@ -161,8 +161,8 @@ const KIND_OPTIONS = [
 ];
 const STATE_OPTIONS = [
   { value: '', label: '全部状态' },
-  { value: 'distilled', label: '已整理' },
-  { value: 'pending', label: '待整理' },
+  { value: 'distilled', label: '已蒸馏' },
+  { value: 'pending', label: '待蒸馏' },
   { value: 'error', label: '读取失败' },
 ];
 
@@ -211,7 +211,7 @@ export default function SourcesTab({ header, onChanged }) {
       title: `删除资料「${s.name}」？`,
       message: (
         <>
-          已整理出的条目<strong>保留</strong>，如需删除请前往「条目」。
+          已蒸馏出的条目<strong>保留</strong>，如需删除请前往「条目」。
         </>
       ),
       confirmText: '删除',
@@ -245,7 +245,7 @@ export default function SourcesTab({ header, onChanged }) {
       title: `删除 ${ids.length} 份资料？`,
       message: (
         <>
-          已整理出的条目<strong>保留</strong>，如需删除请前往「条目」。
+          已蒸馏出的条目<strong>保留</strong>，如需删除请前往「条目」。
         </>
       ),
       confirmText: '删除',
@@ -339,11 +339,11 @@ export default function SourcesTab({ header, onChanged }) {
       sortValue: distillState,
       render: (s) =>
         s.distilledAt ? (
-          <span title={`整理于 ${fmtTime(s.distilledAt)}`}>
-            <StatusDot tone="success">已整理</StatusDot>
+          <span title={`蒸馏于 ${fmtTime(s.distilledAt)}`}>
+            <StatusDot tone="success">已蒸馏</StatusDot>
           </span>
         ) : s.status === 'ready' ? (
-          <StatusDot tone="warning">待整理</StatusDot>
+          <StatusDot tone="warning">待蒸馏</StatusDot>
         ) : (
           <span className="muted">—</span>
         ),

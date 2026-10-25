@@ -614,7 +614,7 @@ describe('号码配置导出 / 导入（admin）', () => {
       [{ name: '坏号', channel: 'waha', waha: { proxy: { enabled: true, host: '', port: null } } }, /^第 2 个号码（坏号）：启用代理时必须填写 host 和 port$/],
       [{ name: '坏号', channel: 'waha', waha: { proxy: { port: 70000 } } }, /^第 2 个号码（坏号）：proxy\.port /],
       [{ name: '坏号', channel: 'waha', meta: { phoneNumberId: '1' } }, /^第 2 个号码（坏号）：meta 仅适用于 Meta 官方接口/],
-      [{ name: '坏号', channel: 'meta', waha: { proxy: {} } }, /^第 2 个号码（坏号）：waha 仅适用于扫码接入/],
+      [{ name: '坏号', channel: 'meta', waha: { proxy: {} } }, /^第 2 个号码（坏号）：waha 仅适用于 WhatsApp 扫码登录/],
       [{ name: '坏号', channel: 'meta', meta: { phoneNumberId: 'abc' } }, /^第 2 个号码（坏号）：phoneNumberId 只能是数字$/],
       [{ name: '坏号', channel: 'meta', meta: { accessToken: 123 } }, /^第 2 个号码（坏号）：meta\.accessToken 必须是字符串$/],
       [{ name: '坏号', channel: 'waha', notify: { email: { to: ['not-an-email'] } } }, /^第 2 个号码（坏号）：/],

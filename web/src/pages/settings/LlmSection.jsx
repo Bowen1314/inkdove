@@ -50,7 +50,7 @@ const LABELS = {
   format: '接口格式',
   baseUrl: '接口地址',
   model: '回复模型',
-  distillModel: '知识库整理模型',
+  distillModel: '知识库蒸馏模型',
   apiKey: 'API 密钥',
 };
 
@@ -314,9 +314,9 @@ export default function LlmSection({ settings, onSaved, health, refreshHealth })
 
         <Advanced>
           <SettingsRow
-            label="知识库整理模型"
+            label="知识库蒸馏模型"
             htmlFor="llm-distill"
-            hint="留空则与回复模型相同。选用更强的模型可提升整理质量。"
+            hint="留空则与回复模型相同。选用更强的模型可提升蒸馏质量。"
           >
             <Combobox
               id="llm-distill"

@@ -19,7 +19,7 @@ import { fmtDay, fmtHm } from '../../lib/format.js';
 export const CHANNEL_OPTIONS = [
   {
     value: 'waha',
-    title: '扫码连接',
+    title: 'WhatsApp 扫码登录',
     desc: '使用手机 WhatsApp 扫码关联，支持个人号与 WhatsApp Business 号。',
   },
   {
@@ -39,7 +39,7 @@ export const CHANNEL_OPTIONS = [
   },
   {
     value: 'tgbiz',
-    title: 'Telegram 私人号',
+    title: 'Telegram Business',
     desc: '以本人 Telegram 帐号回复私聊：通过 Telegram「聊天自动化」将机器人关联到该帐号。',
   },
   {
@@ -457,7 +457,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
           </ul>
         )}
         {result.created.length > 0 && hasWaha && (
-          <div className="field__hint">扫码接入的号码尚未连接，请在各号码的「连接」中扫码或使用配对码连接。</div>
+          <div className="field__hint">WhatsApp 扫码登录的号码尚未连接，请在各号码的「连接」中扫码或使用配对码连接。</div>
         )}
         {result.created.length > 0 && hasTgUser && (
           <div className="field__hint">Telegram 扫码登录的号码尚未登录，请在各号码的「连接」中扫码登录。</div>
@@ -506,10 +506,10 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
             </li>
           ))}
         </ul>
-        {hasWaha && <div className="field__hint">扫码接入的号码导入后需重新扫码或使用配对码连接。</div>}
+        {hasWaha && <div className="field__hint">WhatsApp 扫码登录的号码导入后需重新扫码或使用配对码连接。</div>}
         {hasMeta && (
           <div className="field__hint">
-            Meta 号码导入后回调地址将变更，需在 Meta 开发者后台更新；phoneNumberId 与现有号码重复的将跳过。
+            Meta 官方接口号码导入后回调地址将变更，需在 Meta 开发者后台更新；phoneNumberId 与现有号码重复的将跳过。
           </div>
         )}
         {hasLine && (
@@ -520,7 +520,7 @@ function ImportModal({ pick, onClose, onPickAgain, onImported }) {
         {(hasTgBot || hasTgBiz) && (
           <div className="field__hint">
             Telegram 号码导入后立即开始接收消息。同一机器人仅可在一处接收消息，请先在原墨鸽中删除或停用该号码；机器人已被其他号码使用的将跳过。
-            {hasTgBiz && '私人号导入后需重新绑定号主，并在「聊天自动化」中重新添加机器人。'}
+            {hasTgBiz && 'Telegram Business 号码导入后需重新绑定号主，并在「聊天自动化」中重新添加机器人。'}
           </div>
         )}
         {hasTgUser && <div className="field__hint">Telegram 扫码登录的号码导入后需重新扫码登录：文件仅包含 api_id 和 api_hash，不含登录状态。</div>}

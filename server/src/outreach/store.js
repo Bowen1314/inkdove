@@ -241,7 +241,7 @@ export function createOutreach(ctx, opts = {}) {
     const tplName = hasMeta ? textField(b.metaTemplateName, 'metaTemplateName', 512) : '';
     const tplLang = hasMeta ? textField(b.metaTemplateLanguage, 'metaTemplateLanguage', 20) : '';
     if (hasMeta && (!tplName || !tplLang)) {
-      throw badRequest('所选号码包含 Meta 号码：Meta 主动发起会话须使用已审核的模板消息，请填写模板名和语言', 'template_required');
+      throw badRequest('所选号码包含 Meta 官方接口号码：Meta 主动发起会话须使用已审核的模板消息，请填写模板名和语言', 'template_required');
     }
     if (accs.some((a) => a.channel !== 'meta') && !message) throw badRequest('请填写开场消息', 'message_required');
     // 屏蔽词：开场消息里有就不建任务（400），管理员会收到提醒。只选了 Meta 号时发的是模板，这段消息不发出去，不查

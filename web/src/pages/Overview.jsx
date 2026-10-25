@@ -224,7 +224,7 @@ function TypesCard({ stats, loading }) {
   if (!stats && loading) body = <SkeletonRows rows={4} />;
   else if (!stats) body = <EmptyState compact title="暂时无法获取统计数据" />;
   else if (typeTotal === 0) {
-    body = <EmptyState compact title="知识库为空" desc="上传并整理资料后，显示各类条目数量。" />;
+    body = <EmptyState compact title="知识库为空" desc="上传并蒸馏资料后，显示各类条目数量。" />;
   } else {
     body = (
       <ul className="ov-types__list">
@@ -262,9 +262,9 @@ function TypesCard({ stats, loading }) {
           </Link>
           <span aria-hidden="true">·</span>
           <span>
-            上次整理：
+            上次蒸馏：
             <Link to="/kb/distill" className="link">
-              {stats.lastDistilledAt ? fmtTime(stats.lastDistilledAt) : '未整理'}
+              {stats.lastDistilledAt ? fmtTime(stats.lastDistilledAt) : '未蒸馏'}
             </Link>
           </span>
         </div>
@@ -325,7 +325,7 @@ export default function Overview() {
   const waReady = accountList.some(isConnected);
   const steps = [
     { key: 'llm', title: '配置 AI 模型', done: llmReady, to: '/settings', action: '前往设置' },
-    { key: 'kb', title: '上传资料并整理知识库', done: kbReady, to: '/files/sources', action: '上传资料' },
+    { key: 'kb', title: '上传资料并蒸馏知识库', done: kbReady, to: '/files/sources', action: '上传资料' },
     { key: 'wa', title: '添加一个号码', done: waReady, to: '/whatsapp/numbers', action: '添加号码' },
   ];
 

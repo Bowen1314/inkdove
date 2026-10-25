@@ -288,7 +288,7 @@ export default function ProxySection({ settings, onSaved }) {
       <SettingsSection
         as="form"
         title="代理"
-        desc="全局代理：墨鸽的外网请求（AI 模型、向量检索、重排、翻译接口、发信、网页抓取、检查更新、Meta 接口）经代理节点发出。扫码接入的号码默认不使用，可在号码的「IP 代理」中选择「用全局代理」。"
+        desc="全局代理：墨鸽的外网请求（AI 模型、向量检索、重排、翻译接口、发信、网页抓取、检查更新、Meta 接口）经代理节点发出。WhatsApp 扫码登录的号码默认不使用，可在号码的「IP 代理」中选择「用全局代理」。"
         onSubmit={onSubmit}
       >
         {unavailable && <Callout tone="warning">{MIHOMO_MISSING}</Callout>}

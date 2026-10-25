@@ -152,7 +152,7 @@ export function ProfileTab({ readOnly }) {
             compact
             icon={Building2}
             title="暂无企业画像"
-            desc={readOnly ? null : '整理知识库时自动生成，也可点击「编辑」手动填写。'}
+            desc={readOnly ? null : '蒸馏知识库时自动生成，也可点击「编辑」手动填写。'}
           />
         ) : (
           PROFILE_FIELDS.map((f) => (
@@ -565,7 +565,7 @@ export default function EntriesTab({ onChanged, readOnly = false, actionsSlot })
     <EmptyState
       icon={FileText}
       title="知识库暂无条目"
-      desc={readOnly ? '管理员整理知识库后，此处显示机器人回复所依据的条目。' : '上传资料并整理后自动生成条目，也可手动新建。'}
+      desc={readOnly ? '管理员蒸馏知识库后，此处显示机器人回复所依据的条目。' : '上传资料并蒸馏后自动生成条目，也可手动新建。'}
       action={
         !readOnly && (
           <div className="hstack">

@@ -22,7 +22,7 @@ export const isTgBotApi = (channel) => channel === 'tgbot' || channel === 'tgbiz
 export const isWhatsapp = (channel) => channel === 'waha' || channel === 'meta';
 /** 客户没有手机号的接入方式，没名字时这样称呼客户（不露 LINE 的 userId、Telegram 的用户 id） */
 export const NO_NUMBER_NAMES = { line: 'LINE 用户', tgbot: 'Telegram 用户', tgbiz: 'Telegram 用户', tguser: 'Telegram 用户' };
-export const CHANNEL_NAMES = { line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram 私人号', tguser: 'Telegram 扫码登录' };
+export const CHANNEL_NAMES = { line: 'LINE 官方帐号', tgbot: 'Telegram 机器人', tgbiz: 'Telegram Business', tguser: 'Telegram 扫码登录' };
 /** my.telegram.org 给的 api_id（数字）、api_hash（32 位十六进制） */
 export const TG_API_ID_RE = /^\d{1,12}$/;
 export const TG_API_HASH_RE = /^[0-9a-f]{32}$/;
@@ -297,7 +297,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     if (!isPlainObject(patch.waha)) throw badRequest('waha 必须是对象');
     if (patch.waha.proxy !== undefined) {
       adminOnly();
-      if (a.channel !== 'waha') throw badRequest('仅扫码接入的号码支持 IP 代理');
+      if (a.channel !== 'waha') throw badRequest('仅 WhatsApp 扫码登录的号码支持 IP 代理');
       applyProxyPatch(a.waha.proxy, patch.waha.proxy, globalProxyReady);
     }
   }
@@ -305,7 +305,7 @@ export function applyAccountPatch(current, patch, { isAdmin, emailReady, globalP
     const m = patch.meta;
     if (!isPlainObject(m)) throw badRequest('meta 必须是对象');
     adminOnly();
-    if (a.channel !== 'meta') throw badRequest('仅 Meta 官方接口的号码有这些字段');
+    if (a.channel !== 'meta') throw badRequest('仅 Meta 官方接口号码有这些字段');
     if (m.phoneNumberId !== undefined) {
       const v = str(m.phoneNumberId, 'meta.phoneNumberId', 100).trim();
       if (v && !/^\d+$/.test(v)) throw badRequest('phoneNumberId 只能是数字');
@@ -471,7 +471,7 @@ export function parseAccountsExport(doc, { emailReady, globalProxyReady = false 
       label += `（${name}）`;
       if (!CHANNELS.includes(item.channel)) throw badRequest(`channel 只能是 ${CHANNELS.join('、')}`);
       // applyAccountPatch 在这几种情况下的提示不带字段名，先拦下来
-      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 仅适用于扫码接入，其他接入方式应为 null');
+      if (item.channel !== 'waha' && item.waha != null) throw badRequest('waha 仅适用于 WhatsApp 扫码登录，其他接入方式应为 null');
       if (item.channel !== 'meta' && item.meta != null) throw badRequest('meta 仅适用于 Meta 官方接口，其他接入方式应为 null');
       if (item.channel !== 'line' && item.line != null) throw badRequest('line 仅适用于 LINE 官方帐号，其他接入方式应为 null');
       if (!isTelegram(item.channel) && item.telegram != null) throw badRequest('telegram 仅适用于 Telegram 接入方式，其他接入方式应为 null');
@@ -577,7 +577,7 @@ export function createAccountStore(db, config) {
               it.channel === 'line'
                 ? [`Channel ID ${it.config.line.channelId}`, '个 LINE 官方帐号']
                 : it.channel === 'meta'
-                  ? [`phoneNumberId ${it.config.meta.phoneNumberId}`, '个 Meta 号码']
+                  ? [`phoneNumberId ${it.config.meta.phoneNumberId}`, '个 Meta 官方接口号码']
                   : ['机器人 token', '个 Telegram 机器人'];
             skipped.push({
               name: it.name,

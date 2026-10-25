@@ -29,7 +29,7 @@ function PhaseSteps({ job }) {
   const idx = Math.max(0, PHASES.findIndex((p) => p.value === job.phase));
   const finished = job.status === 'done';
   return (
-    <ol className="steps kb-distill__steps" aria-label="整理阶段">
+    <ol className="steps kb-distill__steps" aria-label="蒸馏阶段">
       {PHASES.map((p, i) => {
         let state = 'todo';
         if (finished || i < idx) state = 'done';
@@ -133,8 +133,8 @@ const JOB_COLUMNS = [
 ];
 
 /**
- * actionsSlot：页面头部右侧的位置，"上传文件""全部重建""开始整理"放在那里。
- * 可以直接上传资料（存到「文件 → 知识库资料」）；传完刷新上面的整理状态，不自动开始整理（整理要调模型）。
+ * actionsSlot：页面头部右侧的位置，"上传文件""全部重建""开始蒸馏"放在那里。
+ * 可以直接上传资料（存到「文件 → 知识库资料」）；传完刷新上面的整理状态，不自动开始蒸馏（整理要调模型）。
  */
 export default function DistillTab({ onChanged, actionsSlot }) {
   const confirm = useConfirm();
@@ -223,8 +223,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
       onChanged?.();
       loadJobs();
       reloadSources();
-      if (job.status === 'done') toast.success('知识库整理完成');
-      else if (job.status === 'failed') toast.error(job.error || '整理未完成，请查看日志');
+      if (job.status === 'done') toast.success('知识库蒸馏完成');
+      else if (job.status === 'failed') toast.error(job.error || '蒸馏未完成，请查看日志');
     }
   }, [active, job, onChanged, loadJobs, reloadSources]);
 
@@ -236,10 +236,10 @@ export default function DistillTab({ onChanged, actionsSlot }) {
 
   const cancel = async () => {
     const ok = await confirm({
-      title: '取消本次整理？',
+      title: '取消本次蒸馏？',
       message: '取消后任务停止，可在此处或「文件 → 知识库资料」重新开始。',
-      confirmText: '取消整理',
-      cancelText: '继续整理',
+      confirmText: '取消蒸馏',
+      cancelText: '继续蒸馏',
       danger: true,
     });
     if (!ok || !job) return;
@@ -280,7 +280,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
               disabled={!!distill.distilling || active || distill.pending === 0}
             >
               {distill.distilling === 'incremental' ? <Spinner /> : <Sparkles />}
-              开始整理
+              开始蒸馏
             </button>
           </>
         )}
@@ -323,8 +323,8 @@ export default function DistillTab({ onChanged, actionsSlot }) {
         <EmptyState
           fill
           icon={ListChecks}
-          title="暂无整理记录"
-          desc="添加资料（文件、网址或文本）后点击「开始整理」，系统将资料整理为条目。支持拖拽上传文件。"
+          title="暂无蒸馏记录"
+          desc="添加资料（文件、网址或文本）后点击「开始蒸馏」，系统将资料蒸馏为条目。支持拖拽上传文件。"
           action={<SourceUploadButton upload={upload} primary label="上传资料" />}
         />
       </>
@@ -350,7 +350,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
           <div className="kb-distill__head">
             <div className="kb-distill__title">
               <div className="hstack">
-                <h2>{JOB_MODE[job.mode] || '整理知识库'}</h2>
+                <h2>{JOB_MODE[job.mode] || '蒸馏知识库'}</h2>
                 <StatusDot tone={st.tone} pulse={st.pulse}>
                   {st.label}
                 </StatusDot>
@@ -384,7 +384,7 @@ export default function DistillTab({ onChanged, actionsSlot }) {
             <div
               className={`progress${indeterminate ? ' kb-distill__progress--indeterminate' : ''}`}
               role="progressbar"
-              aria-label="整理进度"
+              aria-label="蒸馏进度"
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={indeterminate ? undefined : pct}
@@ -436,9 +436,9 @@ export default function DistillTab({ onChanged, actionsSlot }) {
         </div>
 
         {others.length > 0 && (
-          <section className="kb-distill__history" aria-label="最近的整理记录">
-            <h3 className="kb-distill__history-title">最近的整理记录</h3>
-            <DataTable label="最近的整理记录" columns={JOB_COLUMNS} rows={others} onRowClick={(j) => selectJob(j.id)} />
+          <section className="kb-distill__history" aria-label="最近的蒸馏记录">
+            <h3 className="kb-distill__history-title">最近的蒸馏记录</h3>
+            <DataTable label="最近的蒸馏记录" columns={JOB_COLUMNS} rows={others} onRowClick={(j) => selectJob(j.id)} />
           </section>
         )}
       </>

@@ -45,7 +45,7 @@ export const TARGET_TYPES = {
   gap: '知识缺口',
   profile: '企业画像',
   source: '知识库资料',
-  job: '整理任务',
+  job: '蒸馏任务',
   run: '红线体检',
   file: '产品资料',
   lead: '客户线索',
@@ -58,11 +58,11 @@ export const TARGET_TYPES = {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_LABELS = { admin: '管理员', agent: '业务员' };
 const CHANNEL_LABELS = {
-  waha: '扫码连接',
+  waha: 'WhatsApp 扫码登录',
   meta: 'Meta 官方接口',
   line: 'LINE 官方帐号',
   tgbot: 'Telegram 机器人',
-  tgbiz: 'Telegram 私人号',
+  tgbiz: 'Telegram Business',
   tguser: 'Telegram 扫码登录',
 };
 const STATUS_VALUES = { active: '启用中', disabled: '已停用' };
@@ -153,7 +153,7 @@ const SETTINGS_SPECS = {
   'llm.baseUrl': { label: '回复模型 · 接口地址' },
   'llm.apiKey': { label: '回复模型 · API 密钥', kind: 'secret' },
   'llm.model': { label: '回复模型' },
-  'llm.distillModel': { label: '知识库整理模型' },
+  'llm.distillModel': { label: '知识库蒸馏模型' },
   'embedding.enabled': { label: '语义检索' },
   'embedding.source': { label: '向量服务' },
   'embedding.format': { label: '向量服务 · 接口格式', values: { openai: 'OpenAI 兼容', gemini: 'Gemini 原生' } },
@@ -478,7 +478,7 @@ export const RULES = [
     run: (x) => ({ summary: `删除{了}号码${q(x.before?.name ?? x.params.id)}`, target: accountTarget(x.before, x.params.id) }),
   },
   ...[
-    ['waha/start', 'account.waha_start', (n) => `启动{了}号码${n}的扫码连接`],
+    ['waha/start', 'account.waha_start', (n) => `启动{了}号码${n}的扫码登录`],
     ['waha/logout', 'account.waha_logout', (n) => `号码${n}退出{了} WhatsApp 登录`],
     ['waha/request-code', 'account.waha_code', (n) => `为号码${n}获取{了}手机号配对码`],
     ['proxy/test', 'account.proxy_test', (n) => `测试{了}号码${n}的 IP 代理`],
@@ -629,17 +629,17 @@ export const RULES = [
     p: '/distill',
     a: 'kb.distill',
     run: (x) => {
-      const mode = x.req.body?.mode === 'rebuild' ? '全部重建' : '增量整理';
+      const mode = x.req.body?.mode === 'rebuild' ? '全部重建' : '增量蒸馏';
       const ids = x.req.body?.sourceIds;
       const n = Array.isArray(ids) ? `，${ids.length} 份资料` : '';
-      return { summary: `开始{了}整理知识库（${mode}${n}）`, target: x.body?.jobId ? { type: 'job', id: x.body.jobId, name: null } : null };
+      return { summary: `开始{了}蒸馏知识库（${mode}${n}）`, target: x.body?.jobId ? { type: 'job', id: x.body.jobId, name: null } : null };
     },
   },
   {
     m: 'POST',
     p: '/distill/jobs/:id/cancel',
     a: 'kb.distill_cancel',
-    run: (x) => ({ summary: '取消{了}知识库整理任务', target: { type: 'job', id: x.params.id, name: null } }),
+    run: (x) => ({ summary: '取消{了}知识库蒸馏任务', target: { type: 'job', id: x.params.id, name: null } }),
   },
   {
     m: 'POST',

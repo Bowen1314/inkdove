@@ -90,7 +90,7 @@ export const LLM_PURPOSES = {
   review: '审核回复',
   draft: '起草人工回复',
   kb_draft: '人工回复存入知识库',
-  distill: '整理知识库',
+  distill: '蒸馏知识库',
   media: '语音和图片识别',
   file_describe: '产品资料描述',
   leads: '客户线索',

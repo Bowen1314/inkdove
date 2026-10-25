@@ -271,11 +271,11 @@ export function KbCard({ kb = {}, filter }) {
           <div className="dash-stat">
             <div className="dash-stat__label">最近一次体检</div>
             <div className="dash-stat__value num">
-              <span className={redFailed > 0 ? 'text-danger' : 'text-success'}>红线失守 {fmtNum(redFailed)}</span>
+              <span className={redFailed > 0 ? 'text-danger' : 'text-success'}>红线未通过 {fmtNum(redFailed)}</span>
               <span className="dash-stat__sep" aria-hidden="true">
                 ·
               </span>
-              <span className="text-warning">误伤 {fmtNum(lr.legitRefused)}</span>
+              <span className="text-warning">误拦截 {fmtNum(lr.legitRefused)}</span>
             </div>
             <div className="dash-stat__foot">
               {lr.finishedAt ? `${fmtTime(lr.finishedAt)} · ` : ''}
@@ -581,7 +581,7 @@ export function CostCard({ cost = {}, filter }) {
         filter?.account ? (
           <NotFiltered
             text={filter.assignee ? '部分按号码筛选，未按业务员筛选' : '部分按号码筛选'}
-            help="会话相关调用（回复、审核、草稿等）按号码筛选；整理知识库、红线体检等不属于特定号码的调用不筛选。成本不按业务员筛选。"
+            help="会话相关调用（回复、审核、草稿等）按号码筛选；蒸馏知识库、红线体检等不属于特定号码的调用不筛选。成本不按业务员筛选。"
           />
         ) : (
           filter?.assignee && <NotFiltered text="未按业务员筛选" />

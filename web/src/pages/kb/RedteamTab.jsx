@@ -23,8 +23,8 @@ import { fmtNum, fmtTime } from '../../lib/format.js';
  */
 
 const HINT =
-  '以约 35 道题模拟客户（议价、报价、下单付款、询问是否为 AI、越权请求、指令注入），机器人未自行回复即为守住。' +
-  '另从知识库抽取正常问题，未能回答计为误伤。';
+  '以约 35 道题模拟客户（议价、报价、下单付款、询问是否为 AI、越权请求、指令注入），机器人未自行回复即为通过。' +
+  '另从知识库抽取正常问题，未能回答计为误拦截。';
 
 const isRunning = (r) => r?.status === 'running';
 /** GET /runs 直接给数组；也兼容包一层 {runs} */
@@ -41,8 +41,8 @@ function passOf(r) {
 
 /** 结果分四种，rank 也是默认排序：失守 → 误伤 → 期望不一致但通过 → 通过 */
 const OUTCOME = {
-  failed: { rank: 0, label: '失守', tone: 'danger' },
-  refused: { rank: 1, label: '误伤', tone: 'warning' },
+  failed: { rank: 0, label: '未通过', tone: 'danger' },
+  refused: { rank: 1, label: '误拦截', tone: 'warning' },
   mismatch: { rank: 2, label: '通过', tone: 'success', note: '与期望不一致' },
   passed: { rank: 3, label: '通过', tone: 'success' },
 };
@@ -168,7 +168,7 @@ function SummaryCards({ summary, counts }) {
       <div className="span-3 kb-redteam__metric">
         {/* SPEC：红线失守为 0 用绿色，大于 0 用红色 */}
         <Metric
-          label="红线失守"
+          label="红线未通过"
           value={fmtNum(redlineFailed)}
           unit="条"
           tone={redlineFailed > 0 ? 'danger' : 'success'}
@@ -180,7 +180,7 @@ function SummaryCards({ summary, counts }) {
       </div>
       <div className="span-3 kb-redteam__metric">
         {/* SPEC：误伤用琥珀色 */}
-        <Metric label="误伤" value={fmtNum(legitRefused)} unit="条" tone="warning" />
+        <Metric label="误拦截" value={fmtNum(legitRefused)} unit="条" tone="warning" />
       </div>
     </div>
   );
@@ -305,7 +305,7 @@ const RUN_COLUMNS = [
   },
   {
     key: 'redlineFailed',
-    header: '红线失守',
+    header: '红线未通过',
     align: 'num',
     shrink: true,
     render: (r) => {
@@ -316,7 +316,7 @@ const RUN_COLUMNS = [
   },
   {
     key: 'legitRefused',
-    header: '误伤',
+    header: '误拦截',
     align: 'num',
     shrink: true,
     hide: 'sm',
@@ -444,7 +444,7 @@ export default function RedteamTab({ actionsSlot }) {
         const n = isNum(run.summary?.redlineFailed)
           ? run.summary.redlineFailed
           : resultsOf(run).filter((r) => !r.isLegit && !passOf(r)).length;
-        toast.success(n > 0 ? `体检完成，红线失守 ${n} 条` : '体检完成，红线全部守住');
+        toast.success(n > 0 ? `体检完成，红线未通过 ${n} 条` : '体检完成，红线全部通过');
       } else if (run.status === 'failed') {
         toast.error(run.error || '体检未完成');
       }
@@ -544,8 +544,8 @@ export default function RedteamTab({ actionsSlot }) {
   const shown = filter ? rows.filter((r) => r._outcome === filter) : rows;
   const filterOptions = [
     { value: '', label: `全部结果（${rows.length}）` },
-    { value: 'failed', label: `仅失守（${counts.failed}）` },
-    { value: 'refused', label: `仅误伤（${counts.refused}）` },
+    { value: 'failed', label: `仅未通过（${counts.failed}）` },
+    { value: 'refused', label: `仅误拦截（${counts.refused}）` },
     { value: 'mismatch', label: `通过但与期望不一致（${counts.mismatch}）` },
   ];
 
@@ -623,7 +623,7 @@ export default function RedteamTab({ actionsSlot }) {
         fill
         icon={ShieldCheck}
         title="暂无红线体检记录"
-        desc="以约 35 道题模拟客户议价、报价、下单、询问是否为 AI、越权请求和指令注入，检查机器人是否越界自行回复；另抽取知识库正常问题检查误伤。体检不向客户发送消息。"
+        desc="以约 35 道题模拟客户议价、报价、下单、询问是否为 AI、越权请求和指令注入，检查机器人是否越界自行回复；另抽取知识库正常问题检查误拦截。体检不向客户发送消息。"
       />
     );
   } else {
