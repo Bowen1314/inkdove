@@ -865,7 +865,10 @@ describe('Telegram 私人号（聊天自动化）', () => {
     conn('bc-1', OWNER, ALL_RIGHTS);
     tg.push(BIZ, botMsg(OWNER, { text: `/start bind_${link.split('start=bind_')[1]}` }));
     await waitFor(async () => (await status()).state === 'working', { message: '重新绑定后没有 working' });
-    assert.match(tg.lastTo(BIZ, 'sendMessage', OWNER.id).body.text, /「聊天自动化」已连接/);
+    // 先记下号主（状态已是 working）再回号主，回复要单独等，否则读到的是上一次绑定时的那条
+    await waitFor(() => /「聊天自动化」已连接/.test(tg.lastTo(BIZ, 'sendMessage', OWNER.id)?.body.text || ''), {
+      message: '重新绑定后没回号主「已连接」',
+    });
 
     const plain = await t.createAccount({ name: 'TG 机器人号', channel: 'tgbot' });
     const w = await t.req('POST', `/api/accounts/${plain.id}/telegram/rebind`);
