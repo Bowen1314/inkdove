@@ -1,6 +1,6 @@
 # 已核实的外部接口
 
-代码里用到的 WAHA、Meta、LINE、Resend、SMTP、三种 LLM 接口、向量接口、重排接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
+代码里用到的 WAHA、Meta、LINE、Telegram（Bot API、MTProto、my.telegram.org）、Resend、SMTP、三种 LLM 接口、向量接口、重排接口、翻译接口和全局代理用的 mihomo，这里记下依据的文档和实测结果。
 
 - **WAHA**：
   - session 的创建、更新、启动、停止、登出和删除，见 [sessions](https://waha.devlike.pro/docs/how-to/sessions/)；
@@ -67,6 +67,24 @@
   - 撤回：没有撤回已发消息的接口。客户撤回时推 `unsend` 事件（`unsend.messageId`），LINE 建议尊重用户撤回的意图，被撤回的消息以后不让人看到、不再使用。见 [unsend event](https://developers.line.biz/en/reference/messaging-api/#unsend-event)；
   - 没核实的：在 LINE Official Account Manager 里人工直接回的消息会不会推到 webhook、推成什么样，没查到文档也没实测，代码不处理（只收客户发来的）；
   - 仅测试用的 `INKDOVE_LINE_API_URL`、`INKDOVE_LINE_DATA_API_URL` 覆盖 `https://api.line.me` 和 `https://api-data.line.me`。
+- **Telegram Bot API**（Telegram 机器人和 Telegram Business；按文档写的，2026-10 查的，测试只用了本地假服务（`server/test/telegram.test.js` 等），还没用真机器人完整试过。代码在 `server/src/wa/telegram.js`、`telegram-poll.js`）：
+  - 请求：`POST https://api.telegram.org/bot<token>/<方法>`，返回 `{ok: true, result}` 或 `{ok: false, error_code, description, parameters: {retry_after}}`，见 [making requests](https://core.telegram.org/bots/api#making-requests)。token 在地址里，报错和日志里不带地址。token 不对时 401（格式对但不存在时 404）。
+  - 收消息：长轮询 [`getUpdates`](https://core.telegram.org/bots/api#getupdates)，`offset` 存在 kv 里，重启后接着取（Telegram 保留未确认的 update 24 小时）。同一个 token 同时只能有一个取的人，别处也在取、或者设了 webhook 时返回 409，所以开始前先 [`deleteWebhook`](https://core.telegram.org/bots/api#deletewebhook)。`allowed_updates`：机器人 `message`、`edited_message`、`my_chat_member`；Business `message`、`business_connection`、`business_message`、`edited_business_message`、`deleted_business_messages`。
+  - Business：见 [BusinessConnection](https://core.telegram.org/bots/api#businessconnection)。连接、断开、改权限时推 `business_connection`（`rights.can_reply`、`can_read_messages`、`can_delete_sent_messages`、`can_delete_all_messages` 等）；代发消息带 `business_connection_id`，只能回 24 小时内客户发过消息的私聊；标已读 `readBusinessMessage`，撤回 `deleteBusinessMessages`。墨鸽经机器人代发的消息推回来时带 `sender_business_bot`，按回声剔除。「聊天自动化」自 Bot API 10.0（2026-05-08）起不需要 Telegram Premium，见 [changelog](https://core.telegram.org/bots/api-changelog)。
+  - 发送：文字 1–4096 字；`sendPhoto` 上传最大 10MB，其他文件最大 50MB，说明文字最多 1024 字。下载客户发来的文件用 [`getFile`](https://core.telegram.org/bots/api#getfile)，最大 20MB，超过时报 `file is too big`。
+  - 撤回：[`deleteMessage`](https://core.telegram.org/bots/api#deletemessage) 能删机器人自己在私聊里发的消息，48 小时以内。私聊里客户删除消息时机器人收不到通知。
+  - 正在输入：[`sendChatAction`](https://core.telegram.org/bots/api#sendchataction) 最多显示 5 秒，机器人发出消息时消失。机器人不能把消息标成已读。
+  - 仅测试用的 `INKDOVE_TELEGRAM_API_URL` 覆盖 `https://api.telegram.org`。
+- **Telegram MTProto（Telegram 扫码登录）**（用 [mtcute](https://mtcute.dev) 0.32.7，MIT 许可；按 mtcute 的文档和源码写的，测试用的是假客户端（`server/test/tguser.test.js`），还没在真机上完整试过。代码在 `server/src/wa/tguser.js`）：
+  - 扫码登录：`auth.exportLoginToken`，二维码内容是 `tg://login?token=…`，约 30 秒过期，过期后重新生成；手机扫码后如果帐号开了两步验证，再 `checkPassword`。见 [QR code login](https://core.telegram.org/api/qr-login)。
+  - 验证码登录：`auth.sendCode` 返回验证码的发送方式（App、短信、来电、邮件、Fragment 等）和位数，`auth.signIn` 校验验证码，开了两步验证时报 `SESSION_PASSWORD_NEEDED`，再 `checkPassword`。见 [user authorization](https://core.telegram.org/api/auth)。常见错误 `PHONE_NUMBER_INVALID`、`PHONE_NUMBER_UNOCCUPIED`（未注册）、`PHONE_NUMBER_BANNED`、`PHONE_CODE_INVALID`、`PHONE_CODE_EXPIRED`、`FLOOD_WAIT_X` 换成中文原因；未注册的号不在墨鸽里注册。
+  - 登录态：mtcute 的 SQLite 存储，存 auth key、见过的用户的 access hash 和收消息的状态（pts）。重启时 catch up 补收停机期间的更新。
+  - 删除通知（`updateDeleteMessages`）只给消息 id、不给聊天；用户帐号的消息 id 在所有私聊里是同一个序列。
+  - 在手机上「结束会话」后，mtcute 不报错，只是不再收到更新：墨鸽每 5 分钟调一次 `getMe`，报 `AUTH_KEY_UNREGISTERED` 等登录失效的错误时按登录失效处理。
+- **my.telegram.org**（Telegram 扫码登录自动获取 api_id / api_hash；没有正式接口，按 2026-10 改版后的网页表单写的，代码在 `server/src/wa/mytelegram.js`）：
+  - `POST /auth/send_password`（手机号）→ 返回 `random_hash`，验证码由 Telegram 官方帐号发到该帐号的 Telegram App；`POST /auth/login`（手机号、`random_hash`、验证码）→ 登录 cookie；`GET /apps` 读出已有应用的 App api_id 和 App api_hash，没有时 `POST /apps/create` 新建一个名为 Inkdove 的应用。
+  - 2026-10-25 在本机临时实例上用真实帐号实测通过（取到了已有应用的 api_id 和 api_hash）。网页改版后可能失效，失效时可以自己去网页上复制。
+  - 仅测试用的 `INKDOVE_MY_TELEGRAM_URL` 覆盖 `https://my.telegram.org`。
 - **Resend**：
   - `POST https://api.resend.com/emails`，`Authorization: Bearer <key>`，体 `{from, to[], subject, text, html?}`，返回 `{id}`，见 [send email](https://resend.com/docs/api-reference/emails/send-email)；
   - 错误（422 参数错误、403 域名未验证）和限流（429，带 `retry-after`，这里重试 1 次），见 [errors](https://resend.com/docs/api-reference/errors)、[rate limit](https://resend.com/docs/api-reference/rate-limit)。

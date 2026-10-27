@@ -21,7 +21,7 @@ docker compose up -d --build
 - `inkdove` 只监听宿主的 `127.0.0.1:8794`，对外请用 nginx 之类反代到 HTTPS，并在 `.env` 里设 `INKDOVE_PUBLIC_BASE_URL=https://kb.example.com`、`INKDOVE_COOKIE_SECURE=1`。Meta 和 LINE 的回调必须是公网 HTTPS 地址，LINE 还要从这个地址取墨鸽发出的图片（见[LINE 官方帐号要的公网 HTTPS](#line-官方帐号要的公网-https)）。
 - `waha` 用 `devlikeapro/waha:gows`，不映射宿主端口，只有 inkdove 能访问。登录态存在 `./waha-sessions`，重建容器不用重新扫码。
 - `inkdove` 的主机名固定为 `inkdove`，WAHA 经 `inkdove:<端口>` 连代理中继（见[代理中继](channels-and-security.md#代理中继f13)），选了「用全局代理」的号经 `inkdove:17890` 连全局代理。这些端口都不映射到宿主。
-- 数据在 `./data`，备份这个目录即可：SQLite 数据库、上传的文件（`files/`）、客户发来的图片视频语音文件（`media/`，单个最大 64MB，不自动清理，客户发得多时留意磁盘）。
+- 数据在 `./data`，备份这个目录即可：SQLite 数据库、上传的文件（`files/`）、客户发来的图片视频语音文件（`media/`，单个最大 64MB，不自动清理，客户发得多时留意磁盘）、Telegram 扫码登录的登录态（`telegram/`，目录 700、文件 600，持有它就能操作对应的 Telegram 帐号）。
 - 两个容器都配了 `host.docker.internal:host-gateway`。要用宿主机上的代理时，代理地址填 `host.docker.internal`。
 - `waha` 设了 `WAHA_EVENTS_DOWNLOAD_MEDIA=true` 和 `WAHA_BASE_URL=http://waha:3000`：客户发来的图片、视频、语音、文件由 WAHA 先下载，inkdove 收到消息后马上带 `X-Api-Key` 从 `waha:3000/api/files/...` 取一份存进 `./data/media`（WAHA 自己只留 `WHATSAPP_FILES_LIFETIME` 秒，默认 180 秒）。发给客户的文件超过 15MB 时，WAHA 反过来从 `http://inkdove:<INKDOVE_PORT>/internal/files/<id>?token=…` 拉取（签名地址，10 分钟有效），所以两个容器要在同一个网络里（compose 默认就是）。
 
@@ -119,4 +119,4 @@ LINE 号和 WhatsApp 号的区别、费用和限制见[LINE 官方帐号](channe
 | `INKDOVE_UPDATER_URL` | | 更新助手的地址，默认 `http://updater:8080`（compose 内网） |
 | `INKDOVE_IMAGE_TAG` | | 应用镜像的标签，默认 `latest`；compose 用它拼镜像名，也传给应用判断能不能一键升级 |
 | `INKDOVE_AUDIT_RETENTION_DAYS` | | 操作日志保留多少天，默认 365（1–36500 的整数），过期的每天自动清掉 |
-| `INKDOVE_META_GRAPH_URL`、`INKDOVE_LINE_API_URL`、`INKDOVE_LINE_DATA_API_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |
+| `INKDOVE_META_GRAPH_URL`、`INKDOVE_LINE_API_URL`、`INKDOVE_LINE_DATA_API_URL`、`INKDOVE_TELEGRAM_API_URL`、`INKDOVE_MY_TELEGRAM_URL`、`INKDOVE_RESEND_API_URL` | | 仅测试用，生产不要设 |
