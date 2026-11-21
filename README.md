@@ -223,3 +223,7 @@ v0.1.0 及更早的版本仍采用 MIT 协议。
 如需闭源商用、不希望受 AGPL 约束，可另行洽谈商业授权，请在 GitHub [提交 Issue](https://github.com/Bowen1314/inkdove/issues) 联系。
 
 <p align="center">如果本项目对您有帮助，欢迎 Star 支持。</p>
+
+---
+
+本项目积极参与并认可 [LINUX DO 社区](https://linux.do)
